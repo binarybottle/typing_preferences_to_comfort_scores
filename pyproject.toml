@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "engram3"
+version = "0.1.0"
+description = ""
+authors = ["Arno Klein <binarybottle@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pandas = "^2.2.3"
+numpy = "^2.1.2"
+scikit-learn = "^1.5.2"
+
+[tool.poetry.group.dev.dependencies]
+scipy = "^1.14.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
