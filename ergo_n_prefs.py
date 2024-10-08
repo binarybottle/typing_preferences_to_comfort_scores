@@ -1,14 +1,17 @@
 import numpy as np
 import pandas as pd
+from itertools import permutations
+import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import LeaveOneOut
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import cross_val_score
 from scipy.optimize import differential_evolution
+import ast
 
 #=====================================#
 # Keyboard layout and finger mappings #
 #=====================================#
-qwerty = {
+qwerty_map = {
     'left': ['q', 'w', 'e', 'r', 't', 
              'a', 's', 'd', 'f', 'g', 
              'z', 'x', 'c', 'v', 'b'],
@@ -53,235 +56,569 @@ position_map = {
     'n': (1, 6), 'm': (1, 7), ',': (1, 8), '.': (1, 9), '/': (1, 10)
 }
 
-#====================#
-# Feature Extraction #
-#====================#
-def same_finger(char1, char2, finger_map):
-    # Check if the characters are typed with the same finger.
-    return finger_map[char1] == finger_map[char2]
-
-def lateral_stretch(char1, char2, column_map):
-    # Check if the first finger is stretched laterally.
-    if column_map[char1] in [5, 6] or column_map[char2] in [5, 6]:
-        return True
+#==================#
+# Extract features #
+#==================#
+def same_hand(char1, char2, column_map):
+    """
+    Check if the same hand is used to type both keys.
+      1: same hand
+      0: both hands
+    """
+    if (column_map[char1] < 6 and column_map[char2] < 6) or \
+       (column_map[char1] > 5 and column_map[char2] > 5):
+        return 1
     else:
-        return False
+        return 0
 
-def off_home(char1, char2, row_map):
-    # Return True if either character is not on the home row.
-    y1 = row_map[char1]
-    y2 = row_map[char2]
-    if y1 != 2 or y2 != 2:
-        return True
-    else:
-        return False
-
-def row_change(char1, char2, row_map):
-    # Check if the characters are on different rows.
-    return row_map[char1] != row_map[char2]
-
-def nrows_change(char1, char2, row_map):
-    # Measure how many rows apart are the characters.
-    return abs(row_map[char1] - row_map[char2])
-
-def ncolumns_change(char1, char2, column_map):
-    # Measure how many columns apart are the characters.
-    return abs(column_map[char1] - column_map[char2])
-
-def hand_alternation(char1, char2, qwerty):
-    # Check if characters are typed with different hands.
-    return (char1 in qwerty['left'] and char2 in qwerty['rite']) or \
-           (char1 in qwerty['rite'] and char2 in qwerty['left'])
-
-def outward_roll(char1, char2, qwerty, finger_map):
-    # Return True if outward roll. 
-    #   - outward:  right-to-left for the left hand, left-to-right for the right hand
-    #   - inward:   left-to-right for the left hand, right-to-left for the right hand
-    if hand_alternation(char1, char2, qwerty) or lateral_stretch(char1, char2, column_map):
-        return False
-    else:
-        f1 = finger_map[char1]
-        f2 = finger_map[char2]
-        if f2 > f1:
-            return True
+def same_finger(char1, char2, column_map, finger_map):
+    """
+    Check if the same finger on the same hand types both keys.
+      1: same finger
+      0: different fingers or different hands
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger_map[char1] == finger_map[char2]:
+            return 1
         else:
-            return False
+            return 0
+    else:
+        return 0
 
-def key_distance(char1, char2, position_map):
-    # Measure the distance between two characters based on keyboard positions.
-    x1, y1 = position_map[char1]
-    x2, y2 = position_map[char2]
-    return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+def adjacent_fingers(char1, char2, column_map, finger_map):
+    """
+    Check if adjacent fingers on the same hand type the two keys.
+      1: adjacent fingers
+      0: non-adjacent fingers
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        finger_difference = abs(finger_map[char2] - finger_map[char1])
+        if finger_difference == 1:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
 
-def extract_features(char1, char2, qwerty, finger_map, row_map, column_map, position_map):
+def finger1(char1, char2, finger_map):
+    """
+    Check whether finger 1 is used to type either key.
+      1: Yes
+      0: No
+    """
+    if finger_map[char1] == 1 or finger_map[char2] == 1:
+        return 1
+    else:
+        return 0
+
+def finger2(char1, char2, finger_map):
+    """
+    Check whether finger 2 is used to type either key.
+      1: Yes
+      0: No
+    """
+    if finger_map[char1] == 2 or finger_map[char2] == 2:
+        return 1
+    else:
+        return 0
+
+def finger3(char1, char2, finger_map):
+    """
+    Check whether finger 3 is used to type either key.
+      1: Yes
+      0: No
+    """
+    if finger_map[char1] == 3 or finger_map[char2] == 3:
+        return 1
+    else:
+        return 0
+
+def finger4(char1, char2, finger_map):
+    """
+    Check whether finger 4 is used to type either key.
+      1: Yes
+      0: No
+    """
+    if finger_map[char1] == 4 or finger_map[char2] == 4:
+        return 1
+    else:
+        return 0
+
+def finger1_above(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger1 types a key on a row above the other key typed by another finger on the same hand.
+      1: finger1 above
+      0: finger1 not above
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger1(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 1 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 1 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger2_below(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger2 types a key on a row below the other key typed by another finger on the same hand.
+      1: finger2 below
+      0: finger2 not below
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if (finger_map[char1] == 2 or finger_map[char2] == 2) and (finger_map[char1] != finger_map[char2]):
+            if (finger_map[char1] == 2 and row_map[char1] < row_map[char2]) or \
+               (finger_map[char2] == 2 and row_map[char2] < row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger3_below(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger3 types a key on a row below the other key typed by another finger on the same hand.
+      1: finger3 below
+      0: finger3 not below
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if (finger_map[char1] == 3 or finger_map[char2] == 3) and (finger_map[char1] != finger_map[char2]):
+            if (finger_map[char1] == 3 and row_map[char1] < row_map[char2]) or \
+               (finger_map[char2] == 3 and row_map[char2] < row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger4_above(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger4 types a key on a row above the other key typed by another finger on the same hand.
+      1: finger4 above
+      0: finger4 not above
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if (finger_map[char1] == 4 or finger_map[char2] == 4) and (finger_map[char1] != finger_map[char2]):
+            if (finger_map[char1] == 4 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 4 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger_pairs(char1, char2, column_map, finger_map):
+    """
+    Check which finger pairs on the same hand are used to type the two keys.
+      12: finger4, finger3
+      11: finger3, finger4
+      10: finger4, finger2
+       9: finger2, finger4
+       8: finger3, finger2
+       7: finger2, finger3
+       6: finger4, finger1
+       5: finger1, finger4
+       4: finger3, finger1
+       3: finger1, finger3
+       2: finger2, finger1
+       1: finger1, finger2      
+       0: repeat keys or different hands
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger_map[char1] == 4 and finger_map[char2] == 3:
+            return 12
+        elif finger_map[char1] == 3 and finger_map[char2] == 4:
+            return 11
+        elif finger_map[char1] == 4 and finger_map[char2] == 2:
+            return 10
+        elif finger_map[char1] == 2 and finger_map[char2] == 4:
+            return 9
+        elif finger_map[char1] == 3 and finger_map[char2] == 2:
+            return 8
+        elif finger_map[char1] == 2 and finger_map[char2] == 3:
+            return 7
+        elif finger_map[char1] == 4 and finger_map[char2] == 1:
+            return 6
+        elif finger_map[char1] == 1 and finger_map[char2] == 4:
+            return 5
+        elif finger_map[char1] == 3 and finger_map[char2] == 1:
+            return 4
+        elif finger_map[char1] == 1 and finger_map[char2] == 3:
+            return 3
+        elif finger_map[char1] == 2 and finger_map[char2] == 1:
+            return 2
+        elif finger_map[char1] == 1 and finger_map[char2] == 2:
+            return 1
+        else: 
+            return 0
+    else:
+        return 0
+
+def rows_apart(char1, char2, column_map, row_map):
+    """
+    Measure how many rows apart the two characters are (typed by the same hand).
+      0: same row
+      1: 1 row apart
+      2: 2 rows apart
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        return abs(row_map[char2] - row_map[char1])
+    else:
+        return 0
+
+def columns_apart(char1, char2, column_map):
+    """
+    Measure how many columns apart the two characters are (typed by the same hand).
+      0: same column
+      1: 1 column apart
+      2: 2 columns apart
+      3: 3 columns apart
+      4: 4 columns apart
+    """
+    if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
+        return abs(column_map[char2] - column_map[char1])
+    else:
+        return 0
+
+def outward_roll(char1, char2, column_map, finger_map):
+    """
+    Check if the keys were typed in an outward rolling direction with the same hand.
+    outward:  right-to-left for the left hand, left-to-right for the right hand
+    inward:   left-to-right for the left hand, right-to-left for the right hand
+      1: outward
+      0: not outward
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if same_finger(char1, char2, column_map, finger_map) == 0 and \
+           middle_columns(char1, char2, column_map) == 0:
+            if finger_map[char1] < finger_map[char2]:
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+    
+def middle_columns(char1, char2, column_map):
+    """
+    Check if finger1 types a key in a middle column of the keyboard.
+      1: Yes
+      0: No
+    """
+    if column_map[char1] in [5, 6] or column_map[char2] in [5, 6]:
+        return 1
+    else:
+        return 0
+
+def extract_features(char1, char2, column_map, row_map, finger_map):
     return {
-        'same_finger': same_finger(char1, char2, finger_map),
-        'lateral_stretch': lateral_stretch(char1, char2, column_map),
-        'off_home': off_home(char1, char2, row_map),
-        'row_change': row_change(char1, char2, row_map),
-        'nrows_change': nrows_change(char1, char2, row_map),
-        'ncolumns_change': ncolumns_change(char1, char2, column_map),
-        'hand_alternation': hand_alternation(char1, char2, qwerty),
-        'outward_roll': outward_roll(char1, char2, qwerty, finger_map),
-        'key_distance': key_distance(char1, char2, position_map)
+        'same_hand': same_hand(char1, char2, column_map),
+        'same_finger': same_finger(char1, char2, column_map, finger_map),
+        'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
+        'finger1': finger1(char1, char2, finger_map),
+        'finger2': finger2(char1, char2, finger_map),
+        'finger3': finger3(char1, char2, finger_map),
+        'finger4': finger4(char1, char2, finger_map),
+        'finger1_above': finger1_above(char1, char2, column_map, row_map, finger_map),
+        'finger2_below': finger2_below(char1, char2, column_map, row_map, finger_map),
+        'finger3_below': finger3_below(char1, char2, column_map, row_map, finger_map),
+        'finger4_above': finger4_above(char1, char2, column_map, row_map, finger_map),
+        'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
+        'rows_apart': rows_apart(char1, char2, column_map, row_map),
+        'columns_apart': columns_apart(char1, char2, column_map),
+        'outward_roll': outward_roll(char1, char2, column_map, finger_map),
+        'middle_columns': middle_columns(char1, char2, column_map)
     }
 
-#=================#
-# Data processing #
-#=================#
-def prep_data(df, filter_inconsistent=True):
+#============================================================================#
+# Precompute features for all bigrams and their differences in feature space #
+#============================================================================#
+def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map):
     """
-    Prepare the consolidated data for analysis, splitting two-letter bigrams into individual characters.
-    - df: The dataframe containing consolidated bigram data per user.
-    - filter_inconsistent: If True, filter out rows where 'is_consistent' is False.
+    Precompute features for all possible bigrams based on the given layout characters.
+    
+    Parameters:
+    - layout_chars: List of all possible characters in the keyboard layout.
+    
+    Returns:
+    - bigram_features: Dictionary mapping bigrams to their feature vectors.
     """
-    # Optionally filter out inconsistent users
-    if filter_inconsistent:
-        df = df[df['is_consistent'] == True]
-    
-    X = []  # Feature matrix
-    y = []  # Target vector (preference scores)
+    bigram_features = {}
 
-    for _, row in df.iterrows():
-        char1_bigram = row['bigram1']
-        char2_bigram = row['bigram2']
+    # Generate all possible bigrams (permutations of 2 unique characters)
+    bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
+
+    # Extract features for each bigram
+    for char1, char2 in bigrams:
+        # Extract features for the bigram
+        features = extract_features(char1, char2, column_map, row_map, finger_map)
         
-        # Split the two-letter bigrams into individual characters
-        char1_1, char1_2 = char1_bigram[0], char1_bigram[1]
-        char2_1, char2_2 = char2_bigram[0], char2_bigram[1]
-
-        # Skip if characters are repeated or if either character is not valid
-        if char1_1 == char1_2 or char2_1 == char2_2 or char1_1 not in finger_map or char2_1 not in finger_map:
-            continue
+        # Convert features to a numpy array
+        feature_vector = np.array(list(features.values()))
         
-        # Extract features for valid bigram pairs
-        try:
-            features = extract_features(char1_1, char2_1, qwerty, finger_map, row_map, column_map, position_map)
-            X.append(list(features.values()))  # Convert feature dictionary to list
-            # Target: the consolidated score for this user and bigram pair
-            y.append(row['score'])
-
-        except KeyError as e:
-            print(f"Error extracting features for characters: {char1_1}, {char2_1}: {e}")
-            continue
+        bigram_features[(char1, char2)] = feature_vector
     
-    return np.array(X), np.array(y)
+    print(f"Extracted {len(feature_vector)} features from each of {len(bigrams)} possible bigrams constructed from {len(layout_chars)} characters.")
 
-# Train a Ridge regression model
-def train_ridge_regression(X, y, alpha=1.0):
+    return bigram_features
+
+def precompute_all_bigram_feature_differences(bigram_features):
+    """
+    Precompute and store all feature differences between bigram pairs.
+    
+    Parameters:
+    - bigram_features: Dictionary of precomputed features for each bigram.
+    
+    Returns:
+    - bigram_feature_differences: A dictionary where each key is a tuple of bigrams (bigram1, bigram2),
+                                  and the value is the precomputed feature differences.
+    """
+    bigram_feature_differences = {}
+    bigrams_list = list(bigram_features.keys())
+
+    # Loop over all pairs of bigrams
+    for i, bigram1 in enumerate(bigrams_list):
+        for j, bigram2 in enumerate(bigrams_list):
+            if i <= j:  # Only compute differences for unique pairs (skip symmetric pairs)
+                # Calculate the feature differences
+                abs_feature_diff = np.abs(np.array(bigram_features[bigram1]) - np.array(bigram_features[bigram2]))
+                bigram_feature_differences[(bigram1, bigram2)] = abs_feature_diff
+                bigram_feature_differences[(bigram2, bigram1)] = abs_feature_diff  # Symmetric pair
+
+    print(f"Calculated all {len(bigram_feature_differences)} bigram-bigram feature differences.")
+      
+    return bigram_feature_differences
+
+def prepare_feature_matrix_and_target_vector(bigram_data, bigram_feature_differences):
+    """
+    Prepare the feature matrix by looking up precomputed feature differences between bigram pairs.
+    
+    Parameters:
+    - bigram_data: DataFrame containing bigram pairs and their preference scores.
+    - feature_difference_dict: Dictionary of precomputed feature differences for each bigram pair.
+    
+    Returns:
+    - feature_matrix: Feature matrix (precomputed feature differences between bigram pairs).
+    - target_vector: Target vector of preference scores.
+    """
+    # Convert bigram_pair strings to actual tuples using ast.literal_eval
+    bigram_pairs = [ast.literal_eval(bigram) for bigram in bigram_data['bigram_pair']]
+
+    # Split each bigram in the pair into its individual characters
+    bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]
+
+    # Filter out bigram pairs where either bigram is not in the precomputed differences
+    filtered_bigram_pairs = [
+        bigram for bigram in bigram_pairs if bigram in bigram_feature_differences
+    ]
+
+    # Use the precomputed feature differences for the filtered bigram pairs
+    feature_matrix = np.array([bigram_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in filtered_bigram_pairs])
+
+    # Filter the target vector accordingly (only include scores for valid bigram pairs)
+    filtered_target_vector = [
+        bigram_data['score'].iloc[idx] for idx, bigram in enumerate(bigram_pairs)
+        if bigram in bigram_feature_differences
+    ]
+
+    return feature_matrix, np.array(filtered_target_vector)
+
+#==========================#
+# Train and validate model #
+#==========================#
+def train_ridge_regression(feature_matrix, target_vector, alpha=1.0):
     """
     Train a Ridge regression model on the given data.
     
     Parameters:
-    - X: The feature matrix.
-    - y: The target vector.
+    - feature_matrix: The feature matrix.
+    - target_vector: The target vector.
     - alpha: The regularization strength for Ridge regression (default is 1.0).
     
     Returns:
     - The trained Ridge regression model.
     """
-    # Split the data into training and test sets (80% training, 20% testing)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
     # Initialize the Ridge regression model
     ridge_model = Ridge(alpha=alpha)
 
-    # Train the model on the training data
-    ridge_model.fit(X_train, y_train)
+    # Train the model
+    ridge_model.fit(feature_matrix, target_vector)
 
-    # Evaluate the model on the training set
-    train_score = ridge_model.score(X_train, y_train)
-    print(f"Training R^2 score: {train_score}")
+    # Check if the model is valid
+    print(f"Trained model: {ridge_model}")
 
-    # Evaluate the model on the test set
-    test_score = ridge_model.score(X_test, y_test)
-    print(f"Test R^2 score: {test_score}")
+    return ridge_model
 
-# Objective function for layout optimization
-def objective_function(layout_indices, initial_layout, bigram_data, model, qwerty, finger_map, row_map, column_map, position_map):
-    layout_indices = np.round(layout_indices).astype(int)
-    layout_str = ''.join([initial_layout[i] for i in layout_indices])
-
-    total_score = 0
-    valid_pairs = 0
-
-    # Loop through all pairs of characters in the layout
-    for i in range(len(layout_str)):
-        for j in range(i + 1, len(layout_str)):
-            char1 = layout_str[i]
-            char2 = layout_str[j]
-            features = extract_features(char1, char2, qwerty, finger_map, row_map, column_map, position_map)
-            score = model.predict([list(features.values())])[0]
-
-            total_score += score
-            valid_pairs += 1
-
-    # Return the negative score (since we minimize by default)
-    return -total_score / valid_pairs if valid_pairs > 0 else 0
-
-def validate_model(model, X, y):
-    # 5-fold cross-validation
-    cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
+def validate_model(model, feature_matrix, target_vector, use_loo=False):
+    """
+    Perform cross-validation on the model.
+    
+    Parameters:
+    - model: The trained Ridge regression model.
+    - feature_matrix: Feature matrix.
+    - target_vector: Target vector.
+    - use_loo: If True, use Leave-One-Out Cross-Validation; otherwise, use 5-fold cross-validation.
+    
+    Returns:
+    - cv_scores: Cross-validation scores.
+    """
+    if use_loo:
+        # Perform Leave-One-Out Cross-Validation
+        loo = LeaveOneOut()
+        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=loo, scoring='r2')
+    else:
+        # Perform 5-fold Cross-Validation
+        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=5, scoring='r2')
+    
     print(f"Cross-validation scores: {cv_scores}")
     print(f"Mean cross-validation score: {np.mean(cv_scores)}")
 
-    # Leave-One-Out Cross-Validation (LOO-CV)
-    loo = LeaveOneOut()
-    cvloo_scores = cross_val_score(model, X, y, cv=loo, scoring='r2')
-    print(f"Leave-One-Out cross-validation scores: {cvloo_scores}")
-    print(f"Mean LOO cross-validation score: {np.mean(cvloo_scores)}")
+    return cv_scores
+
+def validate_model_with_mse(model, feature_matrix, target_vector, use_loo=False):
+    if use_loo:
+        loo = LeaveOneOut()
+        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=loo, scoring='neg_mean_squared_error')
+    else:
+        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=5, scoring='neg_mean_squared_error')
+    
+    print(f"Cross-validation MSE scores: {cv_scores}")
+    print(f"Mean MSE score: {np.mean(cv_scores)}")
+    return cv_scores
+
+#=================#
+# Optimize layout #
+#=================#
+def is_unique(layout):
+    """ Check if all characters in the layout are unique. """
+    return len(layout) == len(set(layout))
+
+def evaluate_layout(layout, bigram_data, model, bigram_features):
+    """
+    Evaluate the layout by calculating its score using precomputed bigram features.
+    
+    Parameters:
+    - layout: A string representing the keyboard layout.
+    - bigram_data: Data containing bigram preferences.
+    - model: Trained Ridge regression model.
+    - bigram_features: Dictionary of precomputed bigram features.
+    
+    Returns:
+    - score: The calculated score for the layout.
+    """
+    total_score = 0
+    layout_map = {char: idx for idx, char in enumerate(layout)}
+
+    # Iterate through each bigram in the data and calculate its score
+    for _, row in bigram_data.iterrows():
+        char1, char2 = row['bigram1'][0], row['bigram1'][1]  # Split the bigram into individual characters
+        
+        if char1 in layout_map and char2 in layout_map:
+            bigram = (char1, char2)
+
+            if bigram in bigram_features:
+                # Use precomputed features
+                feature_vector = bigram_features[bigram].reshape(1, -1)
+
+                # Predict the score for this bigram using the model
+                predicted_score = model.predict(feature_vector)
+
+                # Accumulate the score (e.g., sum predicted preferences)
+                total_score += predicted_score[0]
+    
+    return total_score
 
 # Optimize the layout using differential evolution
-def optimize_layout(initial_layout, bigram_data, model, qwerty, finger_map, row_map, column_map, position_map):
-    n = len(initial_layout)
-    bounds = [(0, n-1)] * n
+def optimize_layout(initial_layout, bigram_data, model, bigram_features):
+    """
+    Optimize the keyboard layout using differential evolution and precomputed bigram features.
+    
+    Parameters:
+    - initial_layout: The starting layout.
+    - bigram_data: Bigram preference data.
+    - model: Trained Ridge regression model.
+    - bigram_features: Dictionary of precomputed bigram features.
+    
+    Returns:
+    - optimized_layout: The optimized keyboard layout.
+    - improvement: The score improvement.
+    """
+    layout_chars = list(initial_layout)
 
-    initial_score = -objective_function(np.arange(n), initial_layout, bigram_data, model, qwerty, finger_map, row_map, column_map, position_map)
-    print(f"Initial layout score: {initial_score}")
+    def score_layout(layout):
+        layout_str = ''.join(layout.astype(str))  # Convert the array back to string format
+        
+        if not is_unique(layout_str):  # Check if layout has repeated characters
+            return np.inf  # Penalize layouts with repeated characters
+        
+        # Use the updated evaluate_layout function with precomputed features
+        layout_score = evaluate_layout(layout_str, bigram_data, model, bigram_features)
+        return -layout_score  # Minimize the negative score for differential evolution
 
-    result = differential_evolution(
-        lambda x: objective_function(x, initial_layout, bigram_data, model, qwerty, finger_map, row_map, column_map, position_map),
-        bounds,
-        maxiter=1000,
-        popsize=20,
-        mutation=(0.5, 1),
-        recombination=0.7
-    )
+    bounds = [(0, len(layout_chars) - 1)] * len(layout_chars)
+    
+    result = differential_evolution(score_layout, bounds, maxiter=1000, popsize=15, tol=1e-6)
+    
+    optimized_layout = ''.join([layout_chars[int(round(i))] for i in result.x])  # Round and convert to indices
+    improvement = -result.fun
+    
+    return optimized_layout, improvement
 
-    optimized_indices = np.round(result.x).astype(int)
-    final_layout = ''.join([initial_layout[i] for i in optimized_indices])
-    final_score = -objective_function(optimized_indices, initial_layout, bigram_data, model, qwerty, finger_map, row_map, column_map, position_map)
-
-    print(f"Final layout score: {final_score}")
-    return final_layout, final_score - initial_score
-
-# Main Execution
+#==============#
+# Run the code #
+#==============#
 if __name__ == "__main__":
+
+    layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
+
+    # Precompute all bigram features
+    bigram_features = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
+
+    # Compute distances between all bigrams in feature space
+    # distances is a matrix where distances[i, j] is the distance between bigrams_list[i] and bigrams_list[j]
+    bigram_feature_differences = precompute_all_bigram_feature_differences(bigram_features)
+    
     # Load the CSV file into a pandas DataFrame
     csv_file_path = "/Users/arno.klein/Downloads/osf/output/output_99filtered-users/tables/scored_bigram_data.csv" 
-    scored_bigram_data_df = pd.read_csv(csv_file_path)
+    bigram_data = pd.read_csv(csv_file_path)
 
-    # Prepare the data with filtering for repeated characters and inconsistent users
-    X_consolidated, y_consolidated = prep_data(scored_bigram_data_df, filter_inconsistent=True)
-
-    # Check the shape of the feature matrix and target vector
-    print(f"Feature matrix shape: {X_consolidated.shape}")
-    print(f"Target vector shape: {y_consolidated.shape}")
+    # Prepare the data
+    feature_matrix, target_vector = prepare_feature_matrix_and_target_vector(bigram_data, bigram_feature_differences)
+    
+    # Plot the distribution of the target
+    plot_target_distribution = False
+    if plot_target_distribution:
+        plt.hist(target_vector, bins=30)
+        plt.title('Distribution of Target (target_vector)')
+        plt.show()
 
     # Train the Ridge regression model using the prepared data
-    model = train_ridge_regression(X_consolidated, y_consolidated)
+    alphas = [1.0] #[0.01, 0.1, 1.0, 10.0, 100.0]
+    for alpha in alphas:
+        model = train_ridge_regression(feature_matrix, target_vector, alpha=alpha)
+        print(f"Cross-validation with alpha={alpha}:")
+        validate_model(model, feature_matrix, target_vector, use_loo=False)
 
-    # Validate modal with cross-validation
-    validate_model(model, X_consolidated, y_consolidated)
-
-    # Initial layout (replace with your own layout if needed)
-    initial_layout = 'qwertasdfgzxcvbyuiophjklmn,'
+    """
+    # Initial layout
+    initial_layout = layout_chars
 
     # Optimize the layout
-    optimized_layout, improvement = optimize_layout(initial_layout, scored_bigram_data_df, model, 
-                                                    qwerty, finger_map, row_map, column_map, position_map)
+    optimized_layout, improvement = optimize_layout(initial_layout, scored_bigram_data_df, model, bigram_features)
 
     # Print results
     print(f"Initial layout: {initial_layout}")
     print(f"Optimized layout: {optimized_layout}")
     print(f"Score improvement: {improvement}")
+    """
+    
