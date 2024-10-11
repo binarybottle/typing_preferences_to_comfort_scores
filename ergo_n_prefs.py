@@ -2,14 +2,16 @@ import numpy as np
 import pandas as pd
 from itertools import permutations, product
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import LeaveOneOut
-from sklearn.model_selection import cross_val_score
-from scipy.optimize import differential_evolution
 import ast
 import statsmodels.api as sm
 from statsmodels.regression.mixed_linear_model import MixedLM
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 import choix
+from sklearn.base import BaseEstimator
+import statsmodels.api as sm
+from sklearn.model_selection import LeaveOneOut, GroupKFold, cross_val_score, GridSearchCV
+from scipy.optimize import differential_evolution
+import networkx as nx
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -332,10 +334,10 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         'finger2': finger2(char1, char2, finger_map),
         'finger3': finger3(char1, char2, finger_map),
         'finger4': finger4(char1, char2, finger_map),
-        'finger1_above': finger1_above(char1, char2, column_map, row_map, finger_map),
-        'finger2_below': finger2_below(char1, char2, column_map, row_map, finger_map),
-        'finger3_below': finger3_below(char1, char2, column_map, row_map, finger_map),
-        'finger4_above': finger4_above(char1, char2, column_map, row_map, finger_map),
+        'finger1above': finger1_above(char1, char2, column_map, row_map, finger_map),
+        'finger2below': finger2_below(char1, char2, column_map, row_map, finger_map),
+        'finger3below': finger3_below(char1, char2, column_map, row_map, finger_map),
+        'finger4above': finger4_above(char1, char2, column_map, row_map, finger_map),
         #'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
         'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
         'columns_apart': columns_apart(char1, char2, column_map),
@@ -453,9 +455,93 @@ def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences
 
     return feature_matrix, np.array(filtered_target_vector), filtered_bigram_pairs
 
-#==========================#
-# Train and validate model #
-#==========================#
+def plot_bigram_graph(bigram_pairs):
+    """
+    Plot a graph of all bigrams as nodes with edges connecting bigrams that are in pairs.
+    
+    Parameters:
+    - bigram_pairs: List of bigram pairs (e.g., [(('a', 'r'), ('s', 't')), ...])
+    """
+    # Create a graph
+    G = nx.Graph()
+
+    # Create a mapping of tuple bigrams to string representations
+    for bigram1, bigram2 in bigram_pairs:
+        bigram1_str = ''.join(bigram1)  # Convert tuple ('a', 'r') to string "ar"
+        bigram2_str = ''.join(bigram2)  # Convert tuple ('s', 't') to string "st"
+        
+        # Add edges between bigram string representations
+        G.add_edge(bigram1_str, bigram2_str)
+
+    # Get all connected components (subgraphs)
+    components = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+    
+    # Initialize figure
+    plt.figure(figsize=(14, 14))
+    
+    # Layout positioning of all components
+    pos = {}
+    x_offset = 0  # Horizontal offset to space out components
+    y_offset = 0  # Vertical offset to space out components
+
+    # Iterate over each component and apply a layout
+    for component in components:
+        # Apply spring layout to the current component
+        component_pos = nx.spring_layout(component, k=1.0, seed=42)
+        
+        # Shift the component positions to avoid overlap
+        for node in component_pos:
+            component_pos[node][0] += x_offset
+            component_pos[node][1] += y_offset
+
+        # Update the global position dictionary
+        pos.update(component_pos)
+
+        # Increment the offsets for the next component
+        x_offset += 2.5  # Increase the horizontal distance for the next component
+        y_offset += 2.5  # Increase the vertical distance for the next component
+    
+    # Draw the entire graph with the adjusted positions
+    nx.draw(G, pos, with_labels=True, node_color='lightblue', font_weight='bold', 
+            node_size=500, font_size=14, edge_color='gray', linewidths=1.5, width=2.0)
+
+    # Display the graph
+    plt.title("Bigram Connectivity Graph", fontsize=20)
+    plt.show()
+
+def check_multicollinearity(feature_matrix):
+    """
+    Check for multicollinearity.
+    Multicollinearity occurs when two or more predictor variables are highly correlated, 
+    which can inflate standard errors and lead to unreliable p-values. 
+    You can check for multicollinearity using the Variance Inflation Factor (VIF), 
+    a common metric that quantifies how much the variance of a regression coefficient 
+    is inflated due to collinearity with other predictors.
+
+    VIF ≈ 1: No correlation between a feature and the other features.
+        •	1 < VIF < 5: Moderate correlation, but acceptable.
+        •	VIF > 5: High correlation; consider removing or transforming the feature.
+        •	VIF > 10: Serious multicollinearity issue.
+
+    Parameters:
+    - feature_matrix: DataFrame containing the features
+    """
+    print("\nVariance Inflation Factor to check for multicollinearity")
+    print("    1 < VIF < 5: moderate correlation, but acceptable")
+    # Add a constant column for intercept
+    X = sm.add_constant(feature_matrix)
+
+    # Calculate VIF for each feature
+    vif_data = pd.DataFrame()
+    vif_data["Feature"] = X.columns
+    vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+    # Display the VIF for each feature
+    print(vif_data)
+
+#==================================================#
+# Train and validate GLMM and Bradley-Terry models #
+#==================================================#
 def train_glmm(feature_matrix, target_vector, participants):
     """
     Train a GLMM model to handle continuous preference scores per participant per bigram pair.
@@ -464,10 +550,10 @@ def train_glmm(feature_matrix, target_vector, participants):
     - feature_matrix: The feature matrix (precomputed bigram pair feature differences).
     - target_vector: The target vector (continuous preference scores for each trial).
     - participants: Participant labels for random effects.
-    - study_groups: Labels for random effects per study group.
     
     Returns:
-    - cleaned_data: Cleaned preference data (fitted values from the GLMM).
+    - glmm_result: GLMM model
+    - fitted_values: Cleaned preference data (fitted values from the GLMM).
     """
     # Add constant (intercept) term to the feature matrix
     feature_matrix = sm.add_constant(feature_matrix)
@@ -477,12 +563,12 @@ def train_glmm(feature_matrix, target_vector, participants):
     glmm_result = model.fit()
 
     # Output the model summary for validation
-    print(glmm_result.summary())
+    print("\n", glmm_result.summary())
 
     # Extract the cleaned preferences (fitted values)
-    cleaned_data = glmm_result.fittedvalues
+    fitted_values = glmm_result.fittedvalues
 
-    return cleaned_data
+    return model, fitted_values
 
 def fit_bradley_terry_model(cleaned_data, bigram_pairs):
     """
@@ -493,7 +579,7 @@ def fit_bradley_terry_model(cleaned_data, bigram_pairs):
     - bigram_pairs: List of bigram pairs used in the comparisons.
     
     Returns:
-    - A dictionary mapping each bigram to its latent comfort score.
+    - bigram_comfort_scores: Dictionary mapping each bigram to its latent comfort score.
     """
     # Assign indices to unique bigrams for choix compatibility
     bigram_index = {}
@@ -509,46 +595,85 @@ def fit_bradley_terry_model(cleaned_data, bigram_pairs):
     # Create data for choix's pairwise fitting
     comparisons = []
     for idx, (bigram1, bigram2) in enumerate(bigram_pairs):
-        if cleaned_data[idx] > 0:
-            comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))  # bigram1 preferred over bigram2
-        else:
-            comparisons.append((bigram_index[bigram2], bigram_index[bigram1]))  # bigram2 preferred over bigram1
+        if abs(cleaned_data.iloc[idx]) > 1e-5:  # Ignore comparisons with very low cleaned data
+            if cleaned_data.iloc[idx] > 0:
+                comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))
+            else:
+                comparisons.append((bigram_index[bigram2], bigram_index[bigram1]))
+
+    if len(comparisons) < 2:  # Ensure there are enough comparisons
+        raise ValueError("Not enough valid comparisons for Bradley-Terry model.")
 
     # Fit Bradley-Terry model using choix
     num_bigrams = len(bigram_index)
-    scores = choix.ilsr_pairwise(num_bigrams, comparisons)
+    
+    try:
+        scores = choix.ilsr_pairwise(num_bigrams, comparisons)
+    except np.linalg.LinAlgError:
+        raise ValueError("The pairwise comparison matrix is singular. Ensure that all bigrams are compared sufficiently.")
 
     # Map latent comfort scores back to the bigrams
     bigram_comfort_scores = {bigram: scores[index] for bigram, index in bigram_index.items()}
 
     return bigram_comfort_scores
 
-def validate_model(model, feature_matrix, target_vector, use_loo=False):
+def scoring_function(y_true, y_pred):
     """
-    Perform cross-validation on the model.
+    Custom scoring function: R-squared.
+    """
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    return 1 - (ss_res / ss_tot)
+
+def nested_cv_full_pipeline(glmm_model_func, bradley_terry_model_func, feature_matrix, 
+                            target_vector, participants, bigram_pairs):
+    """
+    Perform nested cross-validation for both GLMM and Bradley-Terry models 
+    for model validation and tuning.
     
     Parameters:
-    - model: The trained Ridge regression model.
-    - feature_matrix: Feature matrix.
-    - target_vector: Target vector.
-    - use_loo: If True, use Leave-One-Out Cross-Validation; otherwise, use 5-fold cross-validation.
+    - glmm_model: GLMM model to clean the data.
+    - bradley_terry_model: Bradley-Terry model for pairwise comparisons.
+    - feature_matrix: Feature matrix (X).
+    - target_vector: Target vector (y).
+    - participants: Grouping variable for random effects.
     
     Returns:
-    - cv_scores: Cross-validation scores.
+    - nested_scores: Scores from nested cross-validation for the full pipeline.
     """
-    if use_loo:
-        # Perform Leave-One-Out Cross-Validation
-        loo = LeaveOneOut()
-        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=loo, scoring='r2')
-    else:
-        # Perform 5-fold Cross-Validation
-        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=5, scoring='r2')
+    # Outer loop for evaluating the full pipeline
+    outer_cv = GroupKFold(n_splits=5)
     
-    print(f"Cross-validation scores: {cv_scores}")
-    print(f"Mean cross-validation score: {np.mean(cv_scores)}")
-
-    return cv_scores
-
+    cv_scores = []
+    
+    for train_idx, test_idx in outer_cv.split(feature_matrix, target_vector, groups=participants):
+        X_train, X_test = feature_matrix.iloc[train_idx], feature_matrix.iloc[test_idx]
+        y_train, y_test = target_vector[train_idx], target_vector[test_idx]
+        groups_train = participants[train_idx]
+        
+        # Make sure bigram_pairs also align with the train/test split
+        bigram_pairs_train = [bigram_pairs[i] for i in train_idx]  # Ensure the bigram pairs are correctly split
+        
+        # Step 1: Fit the GLMM on the training set
+        glmm_result, cleaned_data_train = glmm_model_func(X_train, y_train, groups_train)
+        
+        # Step 2: Fit the Bradley-Terry model on the cleaned data and corresponding bigram pairs
+        bigram_comfort_scores_train = bradley_terry_model_func(cleaned_data_train, bigram_pairs_train)
+        
+        # Step 3: Predict latent scores for the test set
+        latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs]
+        
+        # Step 4: Evaluate performance (e.g., using custom scoring function)
+        score = scoring_function(y_test, latent_scores_test)
+        cv_scores.append(score)
+    
+        print(f"Nested CV Scores: {cv_scores}")
+        print(f"Mean CV Score: {np.mean(cv_scores)}")
+        
+        return cv_scores
+    
 #=================#
 # Optimize layout #
 #=================#
@@ -632,6 +757,9 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
+    run_nested_cross_validation = True
+    run_glmm_bradleyterry = False
+
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
@@ -639,28 +767,51 @@ if __name__ == "__main__":
     all_bigram_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
-    csv_file_path = "/Users/arno.klein/Downloads/osf/output/tables/processed_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_0improbable_17inconsistent/tables/filtered_bigram_data.csv"
+    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_0improbable/tables/filtered_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_no_filter/tables/filtered_bigram_data.csv"
     bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
     # Prepare the feature matrix and target vector
     feature_matrix, target_vector, bigram_pairs = prepare_feature_matrix_target_vector(bigram_data, 
                                                                                        all_bigram_feature_differences,
                                                                                        feature_names)
-    #feature_matrix = np.column_stack([feature_matrix, feature_matrix[:, 11] * feature_matrix[:, 12]])
-    #feature_matrix['bigram_finger1_above_2'] = feature_matrix['finger1_above'] * feature_matrix['finger2_below']
+    feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
 
     # Convert all columns in the feature matrix to numeric (coerce invalid values to NaN if any)
     feature_matrix = feature_matrix.apply(pd.to_numeric, errors='coerce')
 
-    # Train the GLMM
-    group_ids = bigram_data['group_id']  # Group labels for random effects
-    participant_ids = bigram_data['user_id']  # Participant labels for random effects
-    study_groups = pd.Categorical(group_ids).codes  # Convert labels to numeric codes
-    participants = pd.Categorical(participant_ids).codes  # Convert labels to numeric codes
-    cleaned_data = train_glmm(feature_matrix, target_vector, participants)
+    # Check Multicollinearity: Run VIF on the feature matrix to identify and remove highly correlated features.
+    check_multicollinearity(feature_matrix)
 
-    # Assuming cleaned_data and bigram_pairs are already defined from GLMM
-    #bigram_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs)
+    # Plot a graph of all bigrams as nodes with edges connecting bigrams
+    plot_bigram_graph(bigram_pairs)
+
+    if run_nested_cross_validation:
+        # 1. Train the GLMM to analyze fixed and random effects to clean and stabilize data.
+        # 2. Train Bradley-Terry model to estimate latent bigram typing comfort values.
+        # 3. Nested cross-validation for model validation and tuning:
+        participants = pd.Categorical(bigram_data['user_id']).codes  # Convert participant labels for random effects to numeric codes
+        cv_scores = nested_scores = nested_cv_full_pipeline(
+                        glmm_model_func=train_glmm,                     # The GLMM function to clean the data
+                        bradley_terry_model_func=fit_bradley_terry_model,  # The Bradley-Terry model function
+                        feature_matrix=feature_matrix,                   # Feature matrix (X)
+                        target_vector=target_vector,                     # Target vector (y)
+                        participants=participants,                       # Grouping variable (e.g., participants)
+                        bigram_pairs=bigram_pairs                        # Bigram pairs for pairwise comparisons
+                    )
+
+        if run_glmm_bradleyterry:
+            # Fit the GLMM on the entire dataset
+            glmm_result, cleaned_data = train_glmm(feature_matrix, target_vector, participants)
+            
+            # Fit the Bradley-Terry model on the cleaned data
+            final_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs)
+
+            # Output the final comfort scores
+            print("Final Latent Comfort Scores:")
+            print(final_comfort_scores)
+
 
     # Example: Print comfort score for a specific bigram
     #print(bigram_comfort_scores[('a', 'e')])

@@ -13,6 +13,7 @@ scikit-learn = "^1.5.2"
 matplotlib = "^3.9.2"
 statsmodels = "^0.14.4"
 choix = "^0.3.5"
+networkx = "^3.4"
 
 [tool.poetry.group.dev.dependencies]
 scipy = "^1.14.1"
