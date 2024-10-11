@@ -1,12 +1,15 @@
 import numpy as np
 import pandas as pd
-from itertools import permutations
+from itertools import permutations, product
 import matplotlib.pyplot as plt
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import LeaveOneOut
 from sklearn.model_selection import cross_val_score
 from scipy.optimize import differential_evolution
 import ast
+import statsmodels.api as sm
+from statsmodels.regression.mixed_linear_model import MixedLM
+import choix
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -322,7 +325,7 @@ def middle_columns(char1, char2, column_map):
 
 def extract_features(char1, char2, column_map, row_map, finger_map):
     return {
-        'same_hand': same_hand(char1, char2, column_map),
+        #'same_hand': same_hand(char1, char2, column_map),
         'same_finger': same_finger(char1, char2, column_map, finger_map),
         'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
         'finger1': finger1(char1, char2, finger_map),
@@ -333,11 +336,11 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         'finger2_below': finger2_below(char1, char2, column_map, row_map, finger_map),
         'finger3_below': finger3_below(char1, char2, column_map, row_map, finger_map),
         'finger4_above': finger4_above(char1, char2, column_map, row_map, finger_map),
-        'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
-        'rows_apart': rows_apart(char1, char2, column_map, row_map),
+        #'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
+        'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
         'columns_apart': columns_apart(char1, char2, column_map),
-        'outward_roll': outward_roll(char1, char2, column_map, finger_map),
-        'middle_columns': middle_columns(char1, char2, column_map)
+        'outward_roll': outward_roll(char1, char2, column_map, finger_map),  # x9
+        'middle_columns': middle_columns(char1, char2, column_map)  # x10
     }
 
 #============================================================================#
@@ -351,30 +354,34 @@ def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map
     - layout_chars: List of all possible characters in the keyboard layout.
     
     Returns:
-    - bigram_features: Dictionary mapping bigrams to their feature vectors.
+    - all_bigrams: All possible bigrams, including repetition.
+    - all_bigram_features: Dictionary mapping all bigrams to their feature vectors.
     """
-    bigram_features = {}
+    all_bigram_features = {}
 
     # Generate all possible bigrams (permutations of 2 unique characters)
-    bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
+    #bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
+
+    # Generate all possible bigrams, including repetition
+    all_bigrams = list(product(layout_chars, repeat=2))  # Product allows repetition (e.g., ('a', 'a'))
 
     # Extract features for each bigram
-    for char1, char2 in bigrams:
+    for char1, char2 in all_bigrams:
         # Extract features for the bigram
         features = extract_features(char1, char2, column_map, row_map, finger_map)
         
         # Convert features to a numpy array
         feature_vector = np.array(list(features.values()))
         
-        bigram_features[(char1, char2)] = feature_vector
+        all_bigram_features[(char1, char2)] = feature_vector
     
-    print(f"Extracted {len(feature_vector)} features from each of {len(bigrams)} possible bigrams constructed from {len(layout_chars)} characters.")
+    print(f"Extracted {len(feature_vector)} features from each of {len(all_bigrams)} possible bigrams constructed from {len(layout_chars)} characters.")
 
-    return bigram_features
+    return all_bigrams, all_bigram_features
 
-def precompute_all_bigram_feature_differences(bigram_features):
+def precompute_bigram_feature_differences(bigram_features):
     """
-    Precompute and store all feature differences between bigram pairs.
+    Precompute and store feature differences between bigram pairs.
     
     Parameters:
     - bigram_features: Dictionary of precomputed features for each bigram.
@@ -399,13 +406,13 @@ def precompute_all_bigram_feature_differences(bigram_features):
       
     return bigram_feature_differences
 
-def prepare_feature_matrix_and_target_vector(bigram_data, bigram_feature_differences):
+def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences):
     """
     Prepare the feature matrix by looking up precomputed feature differences between bigram pairs.
     
     Parameters:
     - bigram_data: DataFrame containing bigram pairs and their preference scores.
-    - feature_difference_dict: Dictionary of precomputed feature differences for each bigram pair.
+    - bigram_feature_differences: Dictionary of precomputed feature differences for each bigram pair.
     
     Returns:
     - feature_matrix: Feature matrix (precomputed feature differences between bigram pairs).
@@ -418,46 +425,88 @@ def prepare_feature_matrix_and_target_vector(bigram_data, bigram_feature_differe
     bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]
 
     # Filter out bigram pairs where either bigram is not in the precomputed differences
-    filtered_bigram_pairs = [
-        bigram for bigram in bigram_pairs if bigram in bigram_feature_differences
-    ]
+    filtered_bigram_pairs = [bigram for bigram in bigram_pairs if bigram in bigram_feature_differences]
 
     # Use the precomputed feature differences for the filtered bigram pairs
     feature_matrix = np.array([bigram_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in filtered_bigram_pairs])
 
     # Filter the target vector accordingly (only include scores for valid bigram pairs)
     filtered_target_vector = [
-        bigram_data['score'].iloc[idx] for idx, bigram in enumerate(bigram_pairs)
+        bigram_data['abs_sliderValue'].iloc[idx] for idx, bigram in enumerate(bigram_pairs)
         if bigram in bigram_feature_differences
     ]
 
-    return feature_matrix, np.array(filtered_target_vector)
+    return feature_matrix, np.array(filtered_target_vector), filtered_bigram_pairs
 
 #==========================#
 # Train and validate model #
 #==========================#
-def train_ridge_regression(feature_matrix, target_vector, alpha=1.0):
+def train_glmm(feature_matrix, target_vector, participants, study_groups):
     """
-    Train a Ridge regression model on the given data.
+    Train a GLMM model to handle continuous preference scores per participant per bigram pair.
     
     Parameters:
-    - feature_matrix: The feature matrix.
-    - target_vector: The target vector.
-    - alpha: The regularization strength for Ridge regression (default is 1.0).
+    - feature_matrix: The feature matrix (precomputed bigram pair feature differences).
+    - target_vector: The target vector (continuous preference scores for each trial).
+    - participants: Participant labels for random effects.
+    - study_groups: Labels for random effects per study group.
     
     Returns:
-    - The trained Ridge regression model.
+    - cleaned_data: Cleaned preference data (fitted values from the GLMM).
     """
-    # Initialize the Ridge regression model
-    ridge_model = Ridge(alpha=alpha)
+    # Add constant (intercept) term to the feature matrix
+    feature_matrix = sm.add_constant(feature_matrix)
 
-    # Train the model
-    ridge_model.fit(feature_matrix, target_vector)
+    # Fit a mixed linear model with random effects for participants and study groups
+    model = MixedLM(target_vector, feature_matrix, groups=participants) #, exog_re=study_groups)
+    glmm_result = model.fit()
 
-    # Check if the model is valid
-    print(f"Trained model: {ridge_model}")
+    # Output the model summary for validation
+    print(glmm_result.summary())
 
-    return ridge_model
+    # Extract the cleaned preferences (fitted values)
+    cleaned_data = glmm_result.fittedvalues
+
+    return cleaned_data
+
+def fit_bradley_terry_model(cleaned_data, bigram_pairs):
+    """
+    Fit a Bradley-Terry model using choix to assign latent comfort scores.
+    
+    Parameters:
+    - cleaned_data: Cleaned preference data from GLMM (continuous scores indicating strength of preference).
+    - bigram_pairs: List of bigram pairs used in the comparisons.
+    
+    Returns:
+    - A dictionary mapping each bigram to its latent comfort score.
+    """
+    # Assign indices to unique bigrams for choix compatibility
+    bigram_index = {}
+    current_index = 0
+    for bigram1, bigram2 in bigram_pairs:
+        if bigram1 not in bigram_index:
+            bigram_index[bigram1] = current_index
+            current_index += 1
+        if bigram2 not in bigram_index:
+            bigram_index[bigram2] = current_index
+            current_index += 1
+
+    # Create data for choix's pairwise fitting
+    comparisons = []
+    for idx, (bigram1, bigram2) in enumerate(bigram_pairs):
+        if cleaned_data[idx] > 0:
+            comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))  # bigram1 preferred over bigram2
+        else:
+            comparisons.append((bigram_index[bigram2], bigram_index[bigram1]))  # bigram2 preferred over bigram1
+
+    # Fit Bradley-Terry model using choix
+    num_bigrams = len(bigram_index)
+    scores = choix.ilsr_pairwise(num_bigrams, comparisons)
+
+    # Map latent comfort scores back to the bigrams
+    bigram_comfort_scores = {bigram: scores[index] for bigram, index in bigram_index.items()}
+
+    return bigram_comfort_scores
 
 def validate_model(model, feature_matrix, target_vector, use_loo=False):
     """
@@ -483,17 +532,6 @@ def validate_model(model, feature_matrix, target_vector, use_loo=False):
     print(f"Cross-validation scores: {cv_scores}")
     print(f"Mean cross-validation score: {np.mean(cv_scores)}")
 
-    return cv_scores
-
-def validate_model_with_mse(model, feature_matrix, target_vector, use_loo=False):
-    if use_loo:
-        loo = LeaveOneOut()
-        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=loo, scoring='neg_mean_squared_error')
-    else:
-        cv_scores = cross_val_score(model, feature_matrix, target_vector, cv=5, scoring='neg_mean_squared_error')
-    
-    print(f"Cross-validation MSE scores: {cv_scores}")
-    print(f"Mean MSE score: {np.mean(cv_scores)}")
     return cv_scores
 
 #=================#
@@ -581,33 +619,51 @@ if __name__ == "__main__":
 
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
-    # Precompute all bigram features
-    bigram_features = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
+    # Precompute all bigram features and differences between the features of every pair of bigrams
+    all_bigrams, all_bigram_features = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
+    all_bigram_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
-    # Compute distances between all bigrams in feature space
-    # distances is a matrix where distances[i, j] is the distance between bigrams_list[i] and bigrams_list[j]
-    bigram_feature_differences = precompute_all_bigram_feature_differences(bigram_features)
-    
     # Load the CSV file into a pandas DataFrame
-    csv_file_path = "/Users/arno.klein/Downloads/osf/output/output_99filtered-users/tables/scored_bigram_data.csv" 
-    bigram_data = pd.read_csv(csv_file_path)
+    csv_file_path = "/Users/arno.klein/Downloads/osf/output/tables/processed_bigram_data.csv"
+    bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
-    # Prepare the data
-    feature_matrix, target_vector = prepare_feature_matrix_and_target_vector(bigram_data, bigram_feature_differences)
-    
-    # Plot the distribution of the target
-    plot_target_distribution = False
-    if plot_target_distribution:
-        plt.hist(target_vector, bins=30)
-        plt.title('Distribution of Target (target_vector)')
-        plt.show()
+    # Prepare the feature matrix and target vector
+    feature_matrix, target_vector, bigram_pairs = prepare_feature_matrix_target_vector(bigram_data, 
+                                                                                       all_bigram_feature_differences)
+    feature_matrix = np.column_stack([feature_matrix, feature_matrix[:, 11] * feature_matrix[:, 12]])
+    """ 'same_finger': same_finger(char1, char2, column_map, finger_map),
+        'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
+        'finger1': finger1(char1, char2, finger_map),
+        'finger2': finger2(char1, char2, finger_map),
+        'finger3': finger3(char1, char2, finger_map),
+        'finger4': finger4(char1, char2, finger_map),
+        'finger1_above': finger1_above(char1, char2, column_map, row_map, finger_map),
+        'finger2_below': finger2_below(char1, char2, column_map, row_map, finger_map),
+        'finger3_below': finger3_below(char1, char2, column_map, row_map, finger_map),
+        'finger4_above': finger4_above(char1, char2, column_map, row_map, finger_map),
+        #'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
+        'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
+        'columns_apart': columns_apart(char1, char2, column_map),
+        'outward_roll': outward_roll(char1, char2, column_map, finger_map),  # x9
+        'middle_columns': middle_columns(char1, char2, column_map)  # x10
+    """
+    feature_matrix['bigram_finger1_above_2'] = feature_matrix['finger1_above'] * feature_matrix['finger2_below']
 
-    # Train the Ridge regression model using the prepared data
-    alphas = [1.0] #[0.01, 0.1, 1.0, 10.0, 100.0]
-    for alpha in alphas:
-        model = train_ridge_regression(feature_matrix, target_vector, alpha=alpha)
-        print(f"Cross-validation with alpha={alpha}:")
-        validate_model(model, feature_matrix, target_vector, use_loo=False)
+
+    # Train the GLMM
+    group_ids = bigram_data['group_id']  # Group labels for random effects
+    participant_ids = bigram_data['user_id']  # Participant labels for random effects
+    study_groups = pd.Categorical(group_ids).codes  # Convert labels to numeric codes
+    participants = pd.Categorical(participant_ids).codes  # Convert labels to numeric codes
+    cleaned_data = train_glmm(feature_matrix, target_vector, participants, study_groups)
+
+    # Assuming cleaned_data and bigram_pairs are already defined from GLMM
+    #bigram_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs)
+
+    # Example: Print comfort score for a specific bigram
+    #print(bigram_comfort_scores[('a', 'e')])
+
+    #validate_model(model, feature_matrix, target_vector, use_loo=False)
 
     """
     # Initial layout
@@ -622,3 +678,4 @@ if __name__ == "__main__":
     print(f"Score improvement: {improvement}")
     """
     
+
