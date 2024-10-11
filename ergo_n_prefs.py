@@ -324,7 +324,7 @@ def middle_columns(char1, char2, column_map):
         return 0
 
 def extract_features(char1, char2, column_map, row_map, finger_map):
-    return {
+    features = {
         #'same_hand': same_hand(char1, char2, column_map),
         'same_finger': same_finger(char1, char2, column_map, finger_map),
         'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
@@ -343,6 +343,12 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         'middle_columns': middle_columns(char1, char2, column_map)  # x10
     }
 
+    #print(f"Extracted features for {char1}, {char2}: {features}")
+
+    feature_names = list(features.keys())
+    
+    return features, feature_names
+
 #============================================================================#
 # Precompute features for all bigrams and their differences in feature space #
 #============================================================================#
@@ -355,10 +361,9 @@ def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map
     
     Returns:
     - all_bigrams: All possible bigrams, including repetition.
-    - all_bigram_features: Dictionary mapping all bigrams to their feature vectors.
+    - all_bigram_features: DataFrame mapping all bigrams to their feature vectors (with named columns).
+    - feature_names: List of feature names.   
     """
-    all_bigram_features = {}
-
     # Generate all possible bigrams (permutations of 2 unique characters)
     #bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
 
@@ -366,18 +371,24 @@ def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map
     all_bigrams = list(product(layout_chars, repeat=2))  # Product allows repetition (e.g., ('a', 'a'))
 
     # Extract features for each bigram
+    feature_vectors = []
+    feature_names = None
+
     for char1, char2 in all_bigrams:
         # Extract features for the bigram
-        features = extract_features(char1, char2, column_map, row_map, finger_map)
-        
-        # Convert features to a numpy array
-        feature_vector = np.array(list(features.values()))
-        
-        all_bigram_features[(char1, char2)] = feature_vector
-    
-    print(f"Extracted {len(feature_vector)} features from each of {len(all_bigrams)} possible bigrams constructed from {len(layout_chars)} characters.")
+        features, feature_names = extract_features(char1, char2, column_map, row_map, finger_map)
 
-    return all_bigrams, all_bigram_features
+        # Convert features to a list
+        feature_vector = list(features.values())
+        feature_vectors.append(feature_vector)
+    
+    # Convert to DataFrame with feature names
+    all_bigram_features = pd.DataFrame(feature_vectors, columns=feature_names, index=all_bigrams)
+    all_bigram_features.index = pd.MultiIndex.from_tuples(all_bigram_features.index)
+
+    print(f"Extracted {len(all_bigram_features.columns)} features from each of {len(all_bigrams)} possible bigrams.")
+
+    return all_bigrams, all_bigram_features, feature_names
 
 def precompute_bigram_feature_differences(bigram_features):
     """
@@ -391,14 +402,14 @@ def precompute_bigram_feature_differences(bigram_features):
                                   and the value is the precomputed feature differences.
     """
     bigram_feature_differences = {}
-    bigrams_list = list(bigram_features.keys())
+    bigrams_list = list(bigram_features.index)
 
     # Loop over all pairs of bigrams
     for i, bigram1 in enumerate(bigrams_list):
         for j, bigram2 in enumerate(bigrams_list):
             if i <= j:  # Only compute differences for unique pairs (skip symmetric pairs)
                 # Calculate the feature differences
-                abs_feature_diff = np.abs(np.array(bigram_features[bigram1]) - np.array(bigram_features[bigram2]))
+                abs_feature_diff = np.abs(bigram_features.loc[bigram1].values - bigram_features.loc[bigram2].values)
                 bigram_feature_differences[(bigram1, bigram2)] = abs_feature_diff
                 bigram_feature_differences[(bigram2, bigram1)] = abs_feature_diff  # Symmetric pair
 
@@ -406,16 +417,17 @@ def precompute_bigram_feature_differences(bigram_features):
       
     return bigram_feature_differences
 
-def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences):
+def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences, feature_names):
     """
     Prepare the feature matrix by looking up precomputed feature differences between bigram pairs.
     
     Parameters:
     - bigram_data: DataFrame containing bigram pairs and their preference scores.
     - bigram_feature_differences: Dictionary of precomputed feature differences for each bigram pair.
-    
+    - feature_names: List of feature names.
+
     Returns:
-    - feature_matrix: Feature matrix (precomputed feature differences between bigram pairs).
+    - feature_matrix: Feature matrix as a DataFrame (precomputed feature differences between bigram pairs).
     - target_vector: Target vector of preference scores.
     """
     # Convert bigram_pair strings to actual tuples using ast.literal_eval
@@ -428,7 +440,10 @@ def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences
     filtered_bigram_pairs = [bigram for bigram in bigram_pairs if bigram in bigram_feature_differences]
 
     # Use the precomputed feature differences for the filtered bigram pairs
-    feature_matrix = np.array([bigram_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in filtered_bigram_pairs])
+    feature_matrix_data = [bigram_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in filtered_bigram_pairs]
+    
+    # Create a DataFrame for the feature matrix
+    feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=filtered_bigram_pairs)
 
     # Filter the target vector accordingly (only include scores for valid bigram pairs)
     filtered_target_vector = [
@@ -441,7 +456,7 @@ def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences
 #==========================#
 # Train and validate model #
 #==========================#
-def train_glmm(feature_matrix, target_vector, participants, study_groups):
+def train_glmm(feature_matrix, target_vector, participants):
     """
     Train a GLMM model to handle continuous preference scores per participant per bigram pair.
     
@@ -620,7 +635,7 @@ if __name__ == "__main__":
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
-    all_bigrams, all_bigram_features = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
+    all_bigrams, all_bigram_features, feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
     all_bigram_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
@@ -629,33 +644,20 @@ if __name__ == "__main__":
 
     # Prepare the feature matrix and target vector
     feature_matrix, target_vector, bigram_pairs = prepare_feature_matrix_target_vector(bigram_data, 
-                                                                                       all_bigram_feature_differences)
-    feature_matrix = np.column_stack([feature_matrix, feature_matrix[:, 11] * feature_matrix[:, 12]])
-    """ 'same_finger': same_finger(char1, char2, column_map, finger_map),
-        'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
-        'finger1': finger1(char1, char2, finger_map),
-        'finger2': finger2(char1, char2, finger_map),
-        'finger3': finger3(char1, char2, finger_map),
-        'finger4': finger4(char1, char2, finger_map),
-        'finger1_above': finger1_above(char1, char2, column_map, row_map, finger_map),
-        'finger2_below': finger2_below(char1, char2, column_map, row_map, finger_map),
-        'finger3_below': finger3_below(char1, char2, column_map, row_map, finger_map),
-        'finger4_above': finger4_above(char1, char2, column_map, row_map, finger_map),
-        #'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
-        'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
-        'columns_apart': columns_apart(char1, char2, column_map),
-        'outward_roll': outward_roll(char1, char2, column_map, finger_map),  # x9
-        'middle_columns': middle_columns(char1, char2, column_map)  # x10
-    """
-    feature_matrix['bigram_finger1_above_2'] = feature_matrix['finger1_above'] * feature_matrix['finger2_below']
+                                                                                       all_bigram_feature_differences,
+                                                                                       feature_names)
+    #feature_matrix = np.column_stack([feature_matrix, feature_matrix[:, 11] * feature_matrix[:, 12]])
+    #feature_matrix['bigram_finger1_above_2'] = feature_matrix['finger1_above'] * feature_matrix['finger2_below']
 
+    # Convert all columns in the feature matrix to numeric (coerce invalid values to NaN if any)
+    feature_matrix = feature_matrix.apply(pd.to_numeric, errors='coerce')
 
     # Train the GLMM
     group_ids = bigram_data['group_id']  # Group labels for random effects
     participant_ids = bigram_data['user_id']  # Participant labels for random effects
     study_groups = pd.Categorical(group_ids).codes  # Convert labels to numeric codes
     participants = pd.Categorical(participant_ids).codes  # Convert labels to numeric codes
-    cleaned_data = train_glmm(feature_matrix, target_vector, participants, study_groups)
+    cleaned_data = train_glmm(feature_matrix, target_vector, participants)
 
     # Assuming cleaned_data and bigram_pairs are already defined from GLMM
     #bigram_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs)
