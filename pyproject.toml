@@ -6,14 +6,15 @@ authors = ["Arno Klein <binarybottle@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.10,<3.13"
 pandas = "^2.2.3"
-numpy = "^2.1.2"
 scikit-learn = "^1.5.2"
 matplotlib = "^3.9.2"
 statsmodels = "^0.14.4"
 choix = "^0.3.5"
 networkx = "^3.4"
+numpy = "^1.24"
+pymc = "^5.17.0"
 
 [tool.poetry.group.dev.dependencies]
 scipy = "^1.14.1"

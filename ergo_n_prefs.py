@@ -12,6 +12,8 @@ import statsmodels.api as sm
 from sklearn.model_selection import LeaveOneOut, GroupKFold, cross_val_score, GridSearchCV
 from scipy.optimize import differential_evolution, minimize
 import networkx as nx
+import pymc as pm
+import arviz as az
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -419,42 +421,6 @@ def precompute_bigram_feature_differences(bigram_features):
       
     return bigram_feature_differences
 
-def prepare_feature_matrix_target_vector(bigram_data, bigram_feature_differences, feature_names):
-    """
-    Prepare the feature matrix by looking up precomputed feature differences between bigram pairs.
-    
-    Parameters:
-    - bigram_data: DataFrame containing bigram pairs and their preference scores.
-    - bigram_feature_differences: Dictionary of precomputed feature differences for each bigram pair.
-    - feature_names: List of feature names.
-
-    Returns:
-    - feature_matrix: Feature matrix as a DataFrame (precomputed feature differences between bigram pairs).
-    - target_vector: Target vector of preference scores.
-    """
-    # Convert bigram_pair strings to actual tuples using ast.literal_eval
-    bigram_pairs = [ast.literal_eval(bigram) for bigram in bigram_data['bigram_pair']]
-
-    # Split each bigram in the pair into its individual characters
-    bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]
-
-    # Filter out bigram pairs where either bigram is not in the precomputed differences
-    filtered_bigram_pairs = [bigram for bigram in bigram_pairs if bigram in bigram_feature_differences]
-
-    # Use the precomputed feature differences for the filtered bigram pairs
-    feature_matrix_data = [bigram_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in filtered_bigram_pairs]
-    
-    # Create a DataFrame for the feature matrix
-    feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=filtered_bigram_pairs)
-
-    # Filter the target vector accordingly (only include scores for valid bigram pairs)
-    filtered_target_vector = [
-        bigram_data['abs_sliderValue'].iloc[idx] for idx, bigram in enumerate(bigram_pairs)
-        if bigram in bigram_feature_differences
-    ]
-
-    return feature_matrix, np.array(filtered_target_vector), filtered_bigram_pairs
-
 def plot_bigram_graph(bigram_pairs):
     """
     Plot a graph of all bigrams as nodes with edges connecting bigrams that are in pairs.
@@ -677,6 +643,116 @@ def train_glmm(feature_matrix, target_vector, participants,
 
     return model, fitted_values
 
+def train_bayesian_glmm(feature_matrix, target_vector, participants, 
+                        selected_feature_names=None, typing_time_prior_func=None,
+                        typing_times=None, inference_method="mcmc", 
+                        num_samples=1000, chains=4):
+    """
+    Train a Bayesian GLMM with hierarchical modeling using custom and feature-based priors.
+    """
+    # Ensure that selected features are provided, or default to all features
+    if selected_feature_names is None:
+        selected_feature_names = feature_matrix.columns.tolist()
+
+    num_participants = len(np.unique(participants))
+    selected_features_matrix = feature_matrix[selected_feature_names]
+
+    # Define the model context block to avoid the context stack error
+    with pm.Model() as model:
+        # Create feature-based priors dynamically
+        feature_priors = {}
+        for feature_name in selected_feature_names:
+            feature_priors[feature_name] = pm.Normal(
+                feature_name, 
+                mu=np.mean(selected_features_matrix[feature_name]), 
+                sigma=np.std(selected_features_matrix[feature_name])
+            )
+
+        # Define custom priors
+        if typing_times is not None:
+            if typing_time_prior_func is None:
+                typing_time_prior = pm.Normal('typing_time', 
+                                              mu=np.mean(typing_times), 
+                                              sigma=np.std(typing_times))
+            else:
+                typing_time_prior = typing_time_prior_func()
+        #adjacent_fingers_prior = pm.Normal('adjacent_fingers', mu=0, sigma=2)
+
+        # Combine all priors (feature-based + custom)
+        all_priors = list(feature_priors.values())
+        if typing_times is not None:
+            all_priors.append(typing_time_prior)
+        #all_priors.append(adjacent_fingers_prior)
+
+        # Random effects: Participant-specific intercepts
+        participant_intercept = pm.Normal('participant_intercept', mu=0, sigma=1, 
+                                          shape=num_participants)
+
+        # Define the linear predictor (fixed + random effects)
+        fixed_effects = pm.math.dot(selected_features_matrix, pm.math.stack([feature_priors[name] for name in selected_feature_names]))
+        if typing_times is not None:
+            fixed_effects += typing_time_prior
+        #fixed_effects += adjacent_fingers_prior * selected_features_matrix['adjacent_fingers']
+
+        mu = fixed_effects + participant_intercept[participants]
+
+        # Likelihood: Observed target vector
+        sigma = pm.HalfNormal('sigma', sigma=10)
+        y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma, observed=target_vector)
+
+        # Choose the inference method
+        if inference_method == "mcmc":
+            trace = pm.sample(num_samples, chains=chains, return_inferencedata=True)
+        elif inference_method == "variational":
+            approx = pm.fit(method="advi", n=num_samples)
+            trace = approx.sample(num_samples)
+        else:
+            raise ValueError("Inference method must be 'mcmc' or 'variational'.")
+
+    return trace, model
+
+def perform_sensitivity_analysis(feature_matrix, target_vector, participants, typing_times, 
+                                 prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
+    """
+    Perform sensitivity analysis by varying the prior on typing_time.
+    
+    Args:
+    feature_matrix, target_vector, participants: As in the original model
+    typing_times: The typing time data
+    prior_means, prior_stds: Lists of means and standard deviations to try for the typing_time prior
+    
+    Returns:
+    A dictionary of results for each prior configuration
+    """
+    results = {}
+    
+    for mean in prior_means:
+        for std in prior_stds:
+            print(f"Running model with typing_time prior: N({mean}, {std})")
+            
+            def custom_typing_time_prior():
+                return pm.Normal('typing_time', mu=mean, sigma=std)
+            
+            trace, model = train_bayesian_glmm(
+                feature_matrix=feature_matrix,
+                target_vector=target_vector,
+                participants=participants,
+                selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],
+                typing_times=typing_times,
+                typing_time_prior_func=custom_typing_time_prior,
+                inference_method="mcmc",
+                num_samples=500,
+                chains=2
+            )
+            
+            summary = az.summary(trace)
+            results[f"prior_N({mean},{std})"] = summary
+            
+            print(summary)
+            print("\n" + "="*50 + "\n")
+    
+    return results
+
 def fit_bradley_terry_model(cleaned_data, bigram_pairs, threshold=0.5, 
                             do_filter_disconnected_bigrams=True, do_add_regularization=True,
                             do_provide_initial_scores=True):
@@ -895,36 +971,87 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
-    run_nested_cross_validation = True
+    #===========================#
+    # Load and prepare features #
+    #===========================#
+    plot_bigram_pair_graph = False
+    run_sensitivity_analysis = True
+    run_glmm = False
+    run_nested_cross_validation = False
     run_glmm_bradleyterry = False
-    plot_graph = False
 
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
     all_bigrams, all_bigram_features, feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
-    all_bigram_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
+    all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
     #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_274of377participants_0improbable/tables/filtered_bigram_data.csv"
     csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_377participants/tables/filtered_bigram_data.csv"
     bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
-    # Prepare the feature matrix and target vector
-    feature_matrix, target_vector, bigram_pairs = prepare_feature_matrix_target_vector(bigram_data, 
-                                                                                       all_bigram_feature_differences,
-                                                                                       feature_names)
+    # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
+    bigram_pairs = [ast.literal_eval(bigram_pair) for bigram_pair in bigram_data['bigram_pair']]
+    bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]     # Split each bigram in the pair into its individual characters
+    slider_values = bigram_data['abs_sliderValue']
+    typing_times = bigram_data['chosen_bigram_time']
+    participants = pd.Categorical(bigram_data['user_id']).codes  
+    
+    # Filter out bigram pairs where either bigram is not in the precomputed differences
+    bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_feature_differences]
+    target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+
+    # Create a DataFrame for the feature matrix, using precomputed feature differences for the bigram pairs
+    feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
+    feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
+
+    # Add feature interactions
     feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
 
     # Convert all columns in the feature matrix to numeric (coerce invalid values to NaN if any)
     feature_matrix = feature_matrix.apply(pd.to_numeric, errors='coerce')
 
-    # Check Multicollinearity: Run VIF on the feature matrix to identify and remove highly correlated features.
+    # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
     check_multicollinearity(feature_matrix)
 
-    # Plot a graph of all bigrams as nodes with edges connecting bigrams
-    if plot_graph:
+    # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
+    if plot_bigram_pair_graph:
         plot_bigram_graph(bigram_pairs)
+
+    # Sensitivity analysis to determine how much the typing_time prior is influencing the results
+    if run_sensitivity_analysis:
+        sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
+                                                           typing_times, prior_means=[0, 50, 100], 
+                                                           prior_stds=[1, 10, 100])
+
+    #===============#
+    # Define Priors #
+    #===============#
+    # Train the Bayesian GLMM
+    if run_glmm:
+        trace, model = train_bayesian_glmm(
+            feature_matrix=feature_matrix,
+            target_vector=target_vector,
+            participants=participants,
+            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],  # Make sure to include all relevant features
+            typing_times=typing_times,  # Optional: Provide typing speed data if available
+            inference_method="mcmc",
+            num_samples=500,
+            chains=2
+        )
+
+    # ==============================
+    # Train Bayesian GLMM Function
+    # ==============================
+    # Plot the posterior summary
+    print(az.summary(trace))  
+    az.plot_trace(trace)
+
+    """
+    """
+
+    """
 
     if run_nested_cross_validation:
         # 1. Train the GLMM to analyze fixed and random effects to clean and stabilize data.
@@ -960,7 +1087,7 @@ if __name__ == "__main__":
     #print(bigram_comfort_scores[('a', 'e')])
 
     #validate_model(model, feature_matrix, target_vector, use_loo=False)
-
+    """
     """
     # Initial layout
     initial_layout = layout_chars
