@@ -10,7 +10,7 @@ import choix
 from sklearn.base import BaseEstimator
 import statsmodels.api as sm
 from sklearn.model_selection import LeaveOneOut, GroupKFold, cross_val_score, GridSearchCV
-from scipy.optimize import differential_evolution
+from scipy.optimize import differential_evolution, minimize
 import networkx as nx
 
 #=====================================#
@@ -338,7 +338,7 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         'finger2below': finger2_below(char1, char2, column_map, row_map, finger_map),
         'finger3below': finger3_below(char1, char2, column_map, row_map, finger_map),
         'finger4above': finger4_above(char1, char2, column_map, row_map, finger_map),
-        #'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
+        'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
         'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
         'columns_apart': columns_apart(char1, char2, column_map),
         'outward_roll': outward_roll(char1, char2, column_map, finger_map),  # x9
@@ -478,17 +478,21 @@ def plot_bigram_graph(bigram_pairs):
     
     # Initialize figure
     plt.figure(figsize=(14, 14))
-    
+
     # Layout positioning of all components
     pos = {}
-    x_offset = 0  # Horizontal offset to space out components
-    y_offset = 0  # Vertical offset to space out components
+    grid_size = int(np.ceil(np.sqrt(len(components))))  # Arrange components in a grid
+    spacing = 5.0  # Adjust this value for more space between clusters
 
     # Iterate over each component and apply a layout
-    for component in components:
+    for i, component in enumerate(components):
         # Apply spring layout to the current component
-        component_pos = nx.spring_layout(component, k=1.0, seed=42)
+        component_pos = nx.spring_layout(component, k=1.0, seed=i)  # Use different seed for each component
         
+        # Determine the grid position for this component
+        x_offset = (i % grid_size) * spacing  # X-axis grid position
+        y_offset = (i // grid_size) * spacing  # Y-axis grid position
+
         # Shift the component positions to avoid overlap
         for node in component_pos:
             component_pos[node][0] += x_offset
@@ -496,10 +500,6 @@ def plot_bigram_graph(bigram_pairs):
 
         # Update the global position dictionary
         pos.update(component_pos)
-
-        # Increment the offsets for the next component
-        x_offset += 2.5  # Increase the horizontal distance for the next component
-        y_offset += 2.5  # Increase the vertical distance for the next component
     
     # Draw the entire graph with the adjusted positions
     nx.draw(G, pos, with_labels=True, node_color='lightblue', font_weight='bold', 
@@ -539,18 +539,87 @@ def check_multicollinearity(feature_matrix):
     # Display the VIF for each feature
     print(vif_data)
 
+def check_bigram_connectivity(comparisons, num_bigrams):
+    """
+    Check if all bigrams are part of a fully connected comparison graph.
+    
+    Parameters:
+    - comparisons: List of pairwise comparisons [(bigram1, bigram2), ...]
+    - num_bigrams: Total number of bigrams
+    
+    Returns:
+    - True if the comparison graph is fully connected, False otherwise.
+    """
+    G = nx.Graph()
+    G.add_edges_from(comparisons)
+    
+    # Check if the graph is fully connected
+    if nx.is_connected(G):
+        print("The bigram comparison graph is fully connected.")
+        return True
+    else:
+        print("The bigram comparison graph is not fully connected.")
+        # Find disconnected components
+        components = list(nx.connected_components(G))
+        for i, component in enumerate(components):
+            print(f"Component {i+1}: {component}")
+        return False
+
+def filter_disconnected_bigrams(comparisons):
+    """
+    Remove comparisons that involve disconnected bigrams.
+    
+    Parameters:
+    - comparisons: List of pairwise comparisons [(bigram1, bigram2), ...]
+    
+    Returns:
+    - Filtered comparisons that form a fully connected graph.
+    """
+    G = nx.Graph()
+    G.add_edges_from(comparisons)
+    
+    if not nx.is_connected(G):
+        # Find the largest connected component
+        largest_component = max(nx.connected_components(G), key=len)
+        print(f"Filtering out disconnected components. Keeping component with {len(largest_component)} bigrams.")
+        
+        # Filter comparisons to only keep those within the largest connected component
+        filtered_comparisons = [(b1, b2) for (b1, b2) in comparisons if b1 in largest_component and b2 in largest_component]
+        return filtered_comparisons
+    else:
+        return comparisons
+    
+def add_regularization(comparisons, bigram_index):
+    # Add synthetic comparisons to avoid singular matrix issues
+    for i, bigram1 in enumerate(bigram_index):
+        for j, bigram2 in enumerate(bigram_index):
+            if i != j and (bigram_index[bigram1], bigram_index[bigram2]) not in comparisons:
+                comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))
+    return comparisons
+
 #==================================================#
 # Train and validate GLMM and Bradley-Terry models #
 #==================================================#
-def train_glmm(feature_matrix, target_vector, participants):
+def train_glmm(feature_matrix, target_vector, participants, 
+               do_use_robust_standard_errors=True, do_use_L2=True, alpha=1.0):
     """
     Train a GLMM model to handle continuous preference scores per participant per bigram pair.
-    
+    Options for using L2 (Ridge-like penalty) regularization and using robust estimmation,
+    if the data suffers from multicollinearity and heteroscedasticity.
+    The two techniques operate independently[*]:
+      - Robust estimation ensures that standard errors are not affected by heteroscedasticity or outliers.
+      - L2 regularization addresses multicollinearity by shrinking coefficients.
+    Note: regularization shrinks coefficients, which might affect interpretation of results.
+    *[Although rare, regularization and robust standard errors might interact in unexpected ways. 
+      This is unlikely but worth monitoring by evaluating performance with cross-validation.]
+
     Parameters:
     - feature_matrix: The feature matrix (precomputed bigram pair feature differences).
     - target_vector: The target vector (continuous preference scores for each trial).
     - participants: Participant labels for random effects.
-    
+    - do_use_robust_standard_errors: Fit the model with robust standard errors?
+    - do_use_L2: Use L2 (Ridge-like penalty) regularization?
+    - alpha: Regularization strength for L2 penalty. 
     Returns:
     - glmm_result: GLMM model
     - fitted_values: Cleaned preference data (fitted values from the GLMM).
@@ -560,24 +629,68 @@ def train_glmm(feature_matrix, target_vector, participants):
 
     # Fit a mixed linear model with random effects for participants and study groups
     model = MixedLM(target_vector, feature_matrix, groups=participants) #, exog_re=study_groups)
-    glmm_result = model.fit()
+    
+    if do_use_L2:
+        # Fit the model with a Ridge-like penalty (L2)
+        def penalized_loglike(params):
+            llf = model.loglike(params)
+            penalty = alpha * np.sum(params[1:] ** 2)  # Exclude intercept
+            return llf - penalty
+
+        # Initial parameters (start_params) from the model
+        start_params = np.zeros(model.exog.shape[1])
+
+        # Minimize the negative penalized log-likelihood (scipy's minimize to optimize)
+        result = minimize(
+            lambda params: -penalized_loglike(params),
+            start_params,
+            method='L-BFGS-B'
+        )
+
+        if not result.success:
+            raise ValueError("Optimization failed: " + result.message)
+
+        # Extract fitted parameters
+        glmm_result = model.fit(start_params=result.x)
+
+        # Apply robust standard errors after L2 regularization
+        if do_use_robust_standard_errors:
+            glmm_result = glmm_result.get_robustcov_results(cov_type='HC3')
+            print("\nGLMM Results (with L2 Regularization and Robust Estimation):")
+        else:
+            print("\nGLMM Results (with L2 Regularization):")
+
+    else:
+        # Fit the model with robust standard errors
+        if do_use_robust_standard_errors:
+            glmm_result = model.fit(cov_type='robust')
+            print("\nGLMM Results (with Robust Estimation):")
+        else:
+            glmm_result = model.fit()
+            print("\nGLMM Results:")
 
     # Output the model summary for validation
-    print("\n", glmm_result.summary())
+    print(glmm_result.summary())
 
     # Extract the cleaned preferences (fitted values)
     fitted_values = glmm_result.fittedvalues
 
     return model, fitted_values
 
-def fit_bradley_terry_model(cleaned_data, bigram_pairs):
+def fit_bradley_terry_model(cleaned_data, bigram_pairs, threshold=0.5, 
+                            do_filter_disconnected_bigrams=True, do_add_regularization=True,
+                            do_provide_initial_scores=True):
     """
     Fit a Bradley-Terry model using choix to assign latent comfort scores.
     
     Parameters:
     - cleaned_data: Cleaned preference data from GLMM (continuous scores indicating strength of preference).
     - bigram_pairs: List of bigram pairs used in the comparisons.
-    
+    - threshold: Minimum absolute cleaned score for a comparison to be included.
+    - do_filter_disconnected_bigrams: Filter disconnected bigrams?
+    - do_add_regularization: Add regularization by introducing synthetic comparisons?
+    - do_provide_initial_scores: Provide an initial guess for the scores to reduce instability?
+   
     Returns:
     - bigram_comfort_scores: Dictionary mapping each bigram to its latent comfort score.
     """
@@ -595,7 +708,7 @@ def fit_bradley_terry_model(cleaned_data, bigram_pairs):
     # Create data for choix's pairwise fitting
     comparisons = []
     for idx, (bigram1, bigram2) in enumerate(bigram_pairs):
-        if abs(cleaned_data.iloc[idx]) > 1e-5:  # Ignore comparisons with very low cleaned data
+        if abs(cleaned_data.iloc[idx]) > threshold:  # Ignore comparisons with very low cleaned data
             if cleaned_data.iloc[idx] > 0:
                 comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))
             else:
@@ -604,11 +717,25 @@ def fit_bradley_terry_model(cleaned_data, bigram_pairs):
     if len(comparisons) < 2:  # Ensure there are enough comparisons
         raise ValueError("Not enough valid comparisons for Bradley-Terry model.")
 
-    # Fit Bradley-Terry model using choix
-    num_bigrams = len(bigram_index)
-    
+    # Check if the graph is fully connected, and filter disconnected bigrams
+    if do_filter_disconnected_bigrams:
+        if not check_bigram_connectivity(comparisons, len(bigram_index)):
+            comparisons = filter_disconnected_bigrams(comparisons)
+
+    # Ensure comparisons are unique (avoid repeated comparisons)
+    comparisons = list(set(comparisons))
+
+    # Optional: Add regularization by introducing synthetic comparisons
+    if do_add_regularization:
+        comparisons = add_regularization(comparisons, bigram_index)
+
     try:
-        scores = choix.ilsr_pairwise(num_bigrams, comparisons)
+        if do_provide_initial_scores:
+            # Provide an initial guess for the scores
+            initial_scores = np.random.rand(len(bigram_index))  # Random initial scores
+            scores = choix.ilsr_pairwise(len(bigram_index), comparisons, initial_params=initial_scores)
+        else:
+            scores = choix.ilsr_pairwise(len(bigram_index), comparisons)
     except np.linalg.LinAlgError:
         raise ValueError("The pairwise comparison matrix is singular. Ensure that all bigrams are compared sufficiently.")
 
@@ -620,9 +747,16 @@ def fit_bradley_terry_model(cleaned_data, bigram_pairs):
 def scoring_function(y_true, y_pred):
     """
     Custom scoring function: R-squared.
+    Ensures that only aligned data points are used for scoring.
     """
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
+
+    # Ensure the two arrays are aligned in length
+    min_len = min(len(y_true), len(y_pred))
+    y_true, y_pred = y_true[:min_len], y_pred[:min_len]
+
+    # Calculate R-squared
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     return 1 - (ss_res / ss_tot)
@@ -652,6 +786,8 @@ def nested_cv_full_pipeline(glmm_model_func, bradley_terry_model_func, feature_m
         X_train, X_test = feature_matrix.iloc[train_idx], feature_matrix.iloc[test_idx]
         y_train, y_test = target_vector[train_idx], target_vector[test_idx]
         groups_train = participants[train_idx]
+        bigram_pairs_train = [bigram_pairs[i] for i in train_idx]
+        bigram_pairs_test = [bigram_pairs[i] for i in test_idx]
         
         # Make sure bigram_pairs also align with the train/test split
         bigram_pairs_train = [bigram_pairs[i] for i in train_idx]  # Ensure the bigram pairs are correctly split
@@ -663,9 +799,11 @@ def nested_cv_full_pipeline(glmm_model_func, bradley_terry_model_func, feature_m
         bigram_comfort_scores_train = bradley_terry_model_func(cleaned_data_train, bigram_pairs_train)
         
         # Step 3: Predict latent scores for the test set
-        latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs]
-        
+        #latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs]
+        latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs_test]
+
         # Step 4: Evaluate performance (e.g., using custom scoring function)
+        print(f"y_test shape: {y_test.shape}, latent_scores_test shape: {len(latent_scores_test)}")
         score = scoring_function(y_test, latent_scores_test)
         cv_scores.append(score)
     
@@ -759,6 +897,7 @@ if __name__ == "__main__":
 
     run_nested_cross_validation = True
     run_glmm_bradleyterry = False
+    plot_graph = False
 
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
@@ -767,9 +906,8 @@ if __name__ == "__main__":
     all_bigram_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_0improbable_17inconsistent/tables/filtered_bigram_data.csv"
-    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_0improbable/tables/filtered_bigram_data.csv"
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all3studies_no_filter/tables/filtered_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_274of377participants_0improbable/tables/filtered_bigram_data.csv"
+    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_377participants/tables/filtered_bigram_data.csv"
     bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
     # Prepare the feature matrix and target vector
@@ -785,7 +923,8 @@ if __name__ == "__main__":
     check_multicollinearity(feature_matrix)
 
     # Plot a graph of all bigrams as nodes with edges connecting bigrams
-    plot_bigram_graph(bigram_pairs)
+    if plot_graph:
+        plot_bigram_graph(bigram_pairs)
 
     if run_nested_cross_validation:
         # 1. Train the GLMM to analyze fixed and random effects to clean and stabilize data.
@@ -803,10 +942,14 @@ if __name__ == "__main__":
 
         if run_glmm_bradleyterry:
             # Fit the GLMM on the entire dataset
-            glmm_result, cleaned_data = train_glmm(feature_matrix, target_vector, participants)
+            glmm_result, cleaned_data = train_glmm(feature_matrix, target_vector, participants, 
+                                                   do_use_robust_standard_errors=True, 
+                                                   do_use_L2=True, alpha=1.0)
             
             # Fit the Bradley-Terry model on the cleaned data
-            final_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs)
+            final_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs, threshold=0.5, 
+                do_filter_disconnected_bigrams=True, do_add_regularization=True,
+                do_provide_initial_scores=True)
 
             # Output the final comfort scores
             print("Final Latent Comfort Scores:")
