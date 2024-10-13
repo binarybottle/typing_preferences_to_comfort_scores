@@ -63,9 +63,9 @@ position_map = {
     'n': (1, 6), 'm': (1, 7), ',': (1, 8), '.': (1, 9), '/': (1, 10)
 }
 
-#==================#
-# Extract features #
-#==================#
+#==========#
+# Features #
+#==========#
 def same_hand(char1, char2, column_map):
     """
     Check if the same hand is used to type both keys.
@@ -353,9 +353,9 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
     
     return features, feature_names
 
-#============================================================================#
-# Precompute features for all bigrams and their differences in feature space #
-#============================================================================#
+#=================================================================#
+# Features for all bigrams and their differences in feature space #
+#=================================================================#
 def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map):
     """
     Precompute features for all possible bigrams based on the given layout characters.
@@ -505,144 +505,9 @@ def check_multicollinearity(feature_matrix):
     # Display the VIF for each feature
     print(vif_data)
 
-def check_bigram_connectivity(comparisons, num_bigrams):
-    """
-    Check if all bigrams are part of a fully connected comparison graph.
-    
-    Parameters:
-    - comparisons: List of pairwise comparisons [(bigram1, bigram2), ...]
-    - num_bigrams: Total number of bigrams
-    
-    Returns:
-    - True if the comparison graph is fully connected, False otherwise.
-    """
-    G = nx.Graph()
-    G.add_edges_from(comparisons)
-    
-    # Check if the graph is fully connected
-    if nx.is_connected(G):
-        print("The bigram comparison graph is fully connected.")
-        return True
-    else:
-        print("The bigram comparison graph is not fully connected.")
-        # Find disconnected components
-        components = list(nx.connected_components(G))
-        for i, component in enumerate(components):
-            print(f"Component {i+1}: {component}")
-        return False
-
-def filter_disconnected_bigrams(comparisons):
-    """
-    Remove comparisons that involve disconnected bigrams.
-    
-    Parameters:
-    - comparisons: List of pairwise comparisons [(bigram1, bigram2), ...]
-    
-    Returns:
-    - Filtered comparisons that form a fully connected graph.
-    """
-    G = nx.Graph()
-    G.add_edges_from(comparisons)
-    
-    if not nx.is_connected(G):
-        # Find the largest connected component
-        largest_component = max(nx.connected_components(G), key=len)
-        print(f"Filtering out disconnected components. Keeping component with {len(largest_component)} bigrams.")
-        
-        # Filter comparisons to only keep those within the largest connected component
-        filtered_comparisons = [(b1, b2) for (b1, b2) in comparisons if b1 in largest_component and b2 in largest_component]
-        return filtered_comparisons
-    else:
-        return comparisons
-    
-def add_regularization(comparisons, bigram_index):
-    # Add synthetic comparisons to avoid singular matrix issues
-    for i, bigram1 in enumerate(bigram_index):
-        for j, bigram2 in enumerate(bigram_index):
-            if i != j and (bigram_index[bigram1], bigram_index[bigram2]) not in comparisons:
-                comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))
-    return comparisons
-
-#==================================================#
-# Train and validate GLMM and Bradley-Terry models #
-#==================================================#
-def train_glmm(feature_matrix, target_vector, participants, 
-               do_use_robust_standard_errors=True, do_use_L2=True, alpha=1.0):
-    """
-    Train a GLMM model to handle continuous preference scores per participant per bigram pair.
-    Options for using L2 (Ridge-like penalty) regularization and using robust estimmation,
-    if the data suffers from multicollinearity and heteroscedasticity.
-    The two techniques operate independently[*]:
-      - Robust estimation ensures that standard errors are not affected by heteroscedasticity or outliers.
-      - L2 regularization addresses multicollinearity by shrinking coefficients.
-    Note: regularization shrinks coefficients, which might affect interpretation of results.
-    *[Although rare, regularization and robust standard errors might interact in unexpected ways. 
-      This is unlikely but worth monitoring by evaluating performance with cross-validation.]
-
-    Parameters:
-    - feature_matrix: The feature matrix (precomputed bigram pair feature differences).
-    - target_vector: The target vector (continuous preference scores for each trial).
-    - participants: Participant labels for random effects.
-    - do_use_robust_standard_errors: Fit the model with robust standard errors?
-    - do_use_L2: Use L2 (Ridge-like penalty) regularization?
-    - alpha: Regularization strength for L2 penalty. 
-    Returns:
-    - glmm_result: GLMM model
-    - fitted_values: Cleaned preference data (fitted values from the GLMM).
-    """
-    # Add constant (intercept) term to the feature matrix
-    feature_matrix = sm.add_constant(feature_matrix)
-
-    # Fit a mixed linear model with random effects for participants and study groups
-    model = MixedLM(target_vector, feature_matrix, groups=participants) #, exog_re=study_groups)
-    
-    if do_use_L2:
-        # Fit the model with a Ridge-like penalty (L2)
-        def penalized_loglike(params):
-            llf = model.loglike(params)
-            penalty = alpha * np.sum(params[1:] ** 2)  # Exclude intercept
-            return llf - penalty
-
-        # Initial parameters (start_params) from the model
-        start_params = np.zeros(model.exog.shape[1])
-
-        # Minimize the negative penalized log-likelihood (scipy's minimize to optimize)
-        result = minimize(
-            lambda params: -penalized_loglike(params),
-            start_params,
-            method='L-BFGS-B'
-        )
-
-        if not result.success:
-            raise ValueError("Optimization failed: " + result.message)
-
-        # Extract fitted parameters
-        glmm_result = model.fit(start_params=result.x)
-
-        # Apply robust standard errors after L2 regularization
-        if do_use_robust_standard_errors:
-            glmm_result = glmm_result.get_robustcov_results(cov_type='HC3')
-            print("\nGLMM Results (with L2 Regularization and Robust Estimation):")
-        else:
-            print("\nGLMM Results (with L2 Regularization):")
-
-    else:
-        # Fit the model with robust standard errors
-        if do_use_robust_standard_errors:
-            glmm_result = model.fit(cov_type='robust')
-            print("\nGLMM Results (with Robust Estimation):")
-        else:
-            glmm_result = model.fit()
-            print("\nGLMM Results:")
-
-    # Output the model summary for validation
-    print(glmm_result.summary())
-
-    # Extract the cleaned preferences (fitted values)
-    fitted_values = glmm_result.fittedvalues
-
-    return model, fitted_values
-
+#============================================================#
+# Bayesian GLMM: priors and prior sensitivity, GLMM training #
+#============================================================#
 def train_bayesian_glmm(feature_matrix, target_vector, participants, 
                         selected_feature_names=None, typing_time_prior_func=None,
                         typing_times=None, inference_method="mcmc", 
@@ -709,7 +574,7 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants,
         else:
             raise ValueError("Inference method must be 'mcmc' or 'variational'.")
 
-    return trace, model
+    return trace, model, all_priors
 
 def perform_sensitivity_analysis(feature_matrix, target_vector, participants, typing_times, 
                                  prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
@@ -733,7 +598,7 @@ def perform_sensitivity_analysis(feature_matrix, target_vector, participants, ty
             def custom_typing_time_prior():
                 return pm.Normal('typing_time', mu=mean, sigma=std)
             
-            trace, model = train_bayesian_glmm(
+            trace, model, priors = train_bayesian_glmm(
                 feature_matrix=feature_matrix,
                 target_vector=target_vector,
                 participants=participants,
@@ -753,73 +618,55 @@ def perform_sensitivity_analysis(feature_matrix, target_vector, participants, ty
     
     return results
 
-def fit_bradley_terry_model(cleaned_data, bigram_pairs, threshold=0.5, 
-                            do_filter_disconnected_bigrams=True, do_add_regularization=True,
-                            do_provide_initial_scores=True):
+def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None):
     """
-    Fit a Bradley-Terry model using choix to assign latent comfort scores.
+    Generate latent comfort scores using the full posterior distributions from a Bayesian GLMM.
     
     Parameters:
-    - cleaned_data: Cleaned preference data from GLMM (continuous scores indicating strength of preference).
+    - trace: The trace object from the Bayesian GLMM (contains posterior samples).
     - bigram_pairs: List of bigram pairs used in the comparisons.
-    - threshold: Minimum absolute cleaned score for a comparison to be included.
-    - do_filter_disconnected_bigrams: Filter disconnected bigrams?
-    - do_add_regularization: Add regularization by introducing synthetic comparisons?
-    - do_provide_initial_scores: Provide an initial guess for the scores to reduce instability?
+    - feature_matrix: The feature matrix used in the GLMM, indexed by bigrams.
+    - params: List of parameter names to use from the trace. If None, all parameters in the trace will be used.
    
     Returns:
     - bigram_comfort_scores: Dictionary mapping each bigram to its latent comfort score.
     """
-    # Assign indices to unique bigrams for choix compatibility
-    bigram_index = {}
-    current_index = 0
-    for bigram1, bigram2 in bigram_pairs:
-        if bigram1 not in bigram_index:
-            bigram_index[bigram1] = current_index
-            current_index += 1
-        if bigram2 not in bigram_index:
-            bigram_index[bigram2] = current_index
-            current_index += 1
-
-    # Create data for choix's pairwise fitting
-    comparisons = []
-    for idx, (bigram1, bigram2) in enumerate(bigram_pairs):
-        if abs(cleaned_data.iloc[idx]) > threshold:  # Ignore comparisons with very low cleaned data
-            if cleaned_data.iloc[idx] > 0:
-                comparisons.append((bigram_index[bigram1], bigram_index[bigram2]))
-            else:
-                comparisons.append((bigram_index[bigram2], bigram_index[bigram1]))
-
-    if len(comparisons) < 2:  # Ensure there are enough comparisons
-        raise ValueError("Not enough valid comparisons for Bradley-Terry model.")
-
-    # Check if the graph is fully connected, and filter disconnected bigrams
-    if do_filter_disconnected_bigrams:
-        if not check_bigram_connectivity(comparisons, len(bigram_index)):
-            comparisons = filter_disconnected_bigrams(comparisons)
-
-    # Ensure comparisons are unique (avoid repeated comparisons)
-    comparisons = list(set(comparisons))
-
-    # Optional: Add regularization by introducing synthetic comparisons
-    if do_add_regularization:
-        comparisons = add_regularization(comparisons, bigram_index)
-
-    try:
-        if do_provide_initial_scores:
-            # Provide an initial guess for the scores
-            initial_scores = np.random.rand(len(bigram_index))  # Random initial scores
-            scores = choix.ilsr_pairwise(len(bigram_index), comparisons, initial_params=initial_scores)
-        else:
-            scores = choix.ilsr_pairwise(len(bigram_index), comparisons)
-    except np.linalg.LinAlgError:
-        raise ValueError("The pairwise comparison matrix is singular. Ensure that all bigrams are compared sufficiently.")
-
-    # Map latent comfort scores back to the bigrams
-    bigram_comfort_scores = {bigram: scores[index] for bigram, index in bigram_index.items()}
-
+    # If params is not provided, use all parameters in the trace
+    if params is None:
+        params = [var for var in trace.posterior.variables() if var != 'participant_intercept' and var != 'sigma']
+    
+    # Extract posterior samples for the specified parameters
+    posterior_samples = {param: trace.posterior[param].values.flatten() for param in params}
+    
+    # Create a set of all unique bigrams
+    all_bigrams = set(bigram for pair in bigram_pairs for bigram in pair)
+    
+    # Calculate comfort scores for each bigram
+    bigram_scores = {}
+    for bigram in all_bigrams:
+        # Extract feature values for this bigram
+        bigram_features = feature_matrix.loc[bigram]
+        
+        # Calculate score using all posterior samples
+        scores = np.zeros(len(posterior_samples[params[0]]))
+        for param in params:
+            if param in bigram_features:
+                scores += posterior_samples[param] * bigram_features[param]
+        
+        # Use the mean score across all posterior samples
+        bigram_scores[bigram] = np.mean(scores)
+    
+    # Normalize scores to 0-1 range
+    min_score = min(bigram_scores.values())
+    max_score = max(bigram_scores.values())
+    bigram_comfort_scores = {bigram: (score - min_score) / (max_score - min_score) 
+                             for bigram, score in bigram_scores.items()}
+    
     return bigram_comfort_scores
 
+#=========================#
+# Nested cross-validation #
+#=========================#
 def scoring_function(y_true, y_pred):
     """
     Custom scoring function: R-squared.
@@ -888,9 +735,9 @@ def nested_cv_full_pipeline(glmm_model_func, bradley_terry_model_func, feature_m
         
         return cv_scores
     
-#=================#
-# Optimize layout #
-#=================#
+#=====================#
+# Layout optimization #
+#=====================#
 def is_unique(layout):
     """ Check if all characters in the layout are unique. """
     return len(layout) == len(set(layout))
@@ -971,15 +818,15 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
-    #===========================#
-    # Load and prepare features #
-    #===========================#
     plot_bigram_pair_graph = False
     run_sensitivity_analysis = True
     run_glmm = False
     run_nested_cross_validation = False
-    run_glmm_bradleyterry = False
+    run_optimize_layout = False
 
+    #=====================================#
+    # Load, prepare, and analyze features #
+    #=====================================#
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
@@ -1019,40 +866,36 @@ if __name__ == "__main__":
     if plot_bigram_pair_graph:
         plot_bigram_graph(bigram_pairs)
 
-    # Sensitivity analysis to determine how much the typing_time prior is influencing the results
+    #=======================================================================================#
+    # Define and analyze priors, train a Bayesian GLMM, and score using Bayesian posteriors #
+    #=======================================================================================#
+    # Sensitivity analysis to determine how much each prior influences the results
     if run_sensitivity_analysis:
         sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
                                                            typing_times, prior_means=[0, 50, 100], 
                                                            prior_stds=[1, 10, 100])
-
-    #===============#
-    # Define Priors #
-    #===============#
-    # Train the Bayesian GLMM
     if run_glmm:
-        trace, model = train_bayesian_glmm(
-            feature_matrix=feature_matrix,
-            target_vector=target_vector,
-            participants=participants,
-            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],  # Make sure to include all relevant features
-            typing_times=typing_times,  # Optional: Provide typing speed data if available
-            inference_method="mcmc",
-            num_samples=500,
-            chains=2
-        )
+        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
+            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],  
+            typing_times=typing_times,
+            inference_method="mcmc", 
+            num_samples=1000, 
+            chains=4)
 
-    # ==============================
-    # Train Bayesian GLMM Function
-    # ==============================
-    # Plot the posterior summary
-    print(az.summary(trace))  
-    az.plot_trace(trace)
+        # Plot the posterior summary
+        print(az.summary(trace))  
+        az.plot_trace(trace)
 
-    """
-    """
+        # Generate bigram typing comfort scores using the Bayesian posteriors
+        params = None #['same_finger', 'adjacent_fingers']
+        bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params)
 
-    """
+        # Print the comfort score for a specific bigram
+        print(bigram_comfort_scores[('a', 'e')])
 
+    #=============================#
+    # Run nested cross-validation #
+    #=============================#
     if run_nested_cross_validation:
         # 1. Train the GLMM to analyze fixed and random effects to clean and stabilize data.
         # 2. Train Bradley-Terry model to estimate latent bigram typing comfort values.
@@ -1066,39 +909,19 @@ if __name__ == "__main__":
                         participants=participants,                       # Grouping variable (e.g., participants)
                         bigram_pairs=bigram_pairs                        # Bigram pairs for pairwise comparisons
                     )
-
-        if run_glmm_bradleyterry:
-            # Fit the GLMM on the entire dataset
-            glmm_result, cleaned_data = train_glmm(feature_matrix, target_vector, participants, 
-                                                   do_use_robust_standard_errors=True, 
-                                                   do_use_L2=True, alpha=1.0)
-            
-            # Fit the Bradley-Terry model on the cleaned data
-            final_comfort_scores = fit_bradley_terry_model(cleaned_data, bigram_pairs, threshold=0.5, 
-                do_filter_disconnected_bigrams=True, do_add_regularization=True,
-                do_provide_initial_scores=True)
-
-            # Output the final comfort scores
-            print("Final Latent Comfort Scores:")
-            print(final_comfort_scores)
-
-
-    # Example: Print comfort score for a specific bigram
-    #print(bigram_comfort_scores[('a', 'e')])
-
-    #validate_model(model, feature_matrix, target_vector, use_loo=False)
-    """
-    """
-    # Initial layout
-    initial_layout = layout_chars
-
-    # Optimize the layout
-    optimized_layout, improvement = optimize_layout(initial_layout, scored_bigram_data_df, model, bigram_features)
-
-    # Print results
-    print(f"Initial layout: {initial_layout}")
-    print(f"Optimized layout: {optimized_layout}")
-    print(f"Score improvement: {improvement}")
-    """
     
+    #==============================#
+    # Optimization keyboard layout #
+    #==============================#
+    if run_optimize_layout:
+        # Initial layout
+        initial_layout = layout_chars
+
+        # Optimize the layout
+        #optimized_layout, improvement = optimize_layout(initial_layout, scored_bigram_data_df, model, bigram_features)
+
+        # Print results
+        #print(f"Initial layout: {initial_layout}")
+        #print(f"Optimized layout: {optimized_layout}")
+        #print(f"Score improvement: {improvement}")
 
