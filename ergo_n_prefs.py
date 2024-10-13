@@ -8,6 +8,7 @@ from sklearn.model_selection import GroupKFold
 import networkx as nx
 import pymc as pm
 from itertools import permutations
+from itertools import product
 import ast
 import arviz as az
 
@@ -85,6 +86,17 @@ def same_finger(char1, char2, column_map, finger_map):
             return 1
         else:
             return 0
+    else:
+        return 0
+
+def same_key(char1, char2):
+    """
+    Check if both keys are the same.
+      1: same key
+      0: different keys
+    """
+    if char1 == char2:
+        return 1
     else:
         return 0
 
@@ -323,6 +335,17 @@ def middle_columns(char1, char2, column_map):
     else:
         return 0
 
+def extract_features_samekey(char, finger_map):
+    features = {
+        'finger1': int(finger_map[char] == 1),
+        'finger2': int(finger_map[char] == 2),
+        'finger3': int(finger_map[char] == 3),
+        'finger4': int(finger_map[char] == 4)
+    }
+    feature_names = list(features.keys())
+    
+    return features, feature_names
+
 def extract_features(char1, char2, column_map, row_map, finger_map):
     features = {
         #'same_hand': same_hand(char1, char2, column_map),
@@ -337,14 +360,11 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         'finger3below': finger3_below(char1, char2, column_map, row_map, finger_map),
         'finger4above': finger4_above(char1, char2, column_map, row_map, finger_map),
         'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
-        'rows_apart': rows_apart(char1, char2, column_map, row_map), # x7
+        'rows_apart': rows_apart(char1, char2, column_map, row_map),
         'columns_apart': columns_apart(char1, char2, column_map),
-        'outward_roll': outward_roll(char1, char2, column_map, finger_map),  # x9
-        'middle_columns': middle_columns(char1, char2, column_map)  # x10
+        'outward_roll': outward_roll(char1, char2, column_map, finger_map),
+        'middle_columns': middle_columns(char1, char2, column_map)
     }
-
-    #print(f"Extracted features for {char1}, {char2}: {features}")
-
     feature_names = list(features.keys())
     
     return features, feature_names
@@ -363,32 +383,43 @@ def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map
     - all_bigrams: All possible bigrams.
     - all_bigram_features: DataFrame mapping all bigrams to their feature vectors (with named columns).
     - feature_names: List of feature names.   
+    - samekey_bigrams: All possible same-key bigrams.
+    - samekey_bigram_features: DataFrame mapping all same-key bigrams to their feature vectors (with named columns).
+    - samekey_feature_names: List of same-key feature names.   
     """
-    # Generate all possible bigrams (permutations of 2 unique characters)
-    #bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
+    # Generate all possible bigrams (permutations of 2 characters, with repeats)
+    #all_bigrams = list(product(layout_chars, repeat=2))
+    # Generate all possible 2-key bigrams (permutations of 2 unique characters)
+    all_bigrams = [(x, y) for x, y in product(layout_chars, repeat=2) if x != y]
+    # Generate all possible same-key bigrams
+    samekey_bigrams = [(char, char) for char in layout_chars]
 
-    # Generate all possible bigrams (not including repetition of the same key)
-    all_bigrams = list(permutations(layout_chars, 2))
-
-    # Extract features for each bigram
+    # Extract features for each bigram (non-repeating, and same-key bigrams)
     feature_vectors = []
     feature_names = None
+    samekey_feature_vectors = []
+    samekey_feature_names = None
 
+    # Extract features for the bigram, and convert features to a list
     for char1, char2 in all_bigrams:
-        # Extract features for the bigram
         features, feature_names = extract_features(char1, char2, column_map, row_map, finger_map)
+        feature_vectors.append(list(features.values()))
 
-        # Convert features to a list
-        feature_vector = list(features.values())
-        feature_vectors.append(feature_vector)
-    
+    for char1, char2 in samekey_bigrams:
+        samekey_features, samekey_feature_names = extract_features_samekey(char1, finger_map)
+        samekey_feature_vectors.append(list(samekey_features.values()))
+
     # Convert to DataFrame with feature names
-    all_bigram_features = pd.DataFrame(feature_vectors, columns=feature_names, index=all_bigrams)
-    all_bigram_features.index = pd.MultiIndex.from_tuples(all_bigram_features.index)
+    features_df = pd.DataFrame(feature_vectors, columns=feature_names, index=all_bigrams)
+    features_df.index = pd.MultiIndex.from_tuples(features_df.index)
+    samekey_features_df = pd.DataFrame(samekey_feature_vectors, columns=samekey_feature_names, index=samekey_bigrams)
+    samekey_features_df.index = pd.MultiIndex.from_tuples(samekey_features_df.index)
 
-    print(f"Extracted {len(all_bigram_features.columns)} features from each of {len(all_bigrams)} possible bigrams.")
+    print(f"Extracted {len(features_df.columns)} features from each of {len(all_bigrams)} possible 2-key bigrams.")
+    print(f"Extracted {len(samekey_features_df.columns)} features from each of {len(samekey_bigrams)} possible same-key bigrams.")
 
-    return all_bigrams, all_bigram_features, feature_names
+    return all_bigrams, features_df, feature_names, \
+           samekey_bigrams, samekey_features_df, samekey_feature_names
 
 def precompute_bigram_feature_differences(bigram_features):
     """
@@ -471,52 +502,6 @@ def plot_bigram_graph(bigram_pairs):
     plt.title("Bigram Connectivity Graph", fontsize=20)
     plt.show()
 
-def prepare_feature_matrix(feature_matrix, params=None, participants_col='participants'):
-    """
-    Prepare the feature matrix by ensuring numeric types for relevant columns.
-    
-    Parameters:
-    - feature_matrix: The original feature matrix
-    - params: List of parameter names to be used in the model. If None, all columns will be processed.
-    - participants_col
-
-    Returns:
-    - Prepared feature matrix with numeric columns
-    """
-    # Ensure the index is preserved
-    original_index = feature_matrix.index
-
-    if participants_col in feature_matrix.columns:
-        unique_participants = feature_matrix[participants_col].unique()
-        participant_map = {p: i for i, p in enumerate(unique_participants)}
-        feature_matrix[participants_col] = feature_matrix[participants_col].map(participant_map)
-        participants_index = feature_matrix[participants_col].values
-    else:
-        print(f"Warning: Participants column '{participants_col}' not found in feature matrix")
-        participants_index = None
-        participant_map = None
-
-    # If params is None, use all columns
-    if params is None:
-        params = feature_matrix.columns.tolist()
-
-    # Convert only the relevant columns to numeric
-    for col in params:
-        if col in feature_matrix.columns:
-            try:
-                feature_matrix[col] = pd.to_numeric(feature_matrix[col], errors='raise')
-            except ValueError as e:
-                print(f"Error converting column {col} to numeric: {e}")
-                print(f"Sample of problematic data in {col}:", feature_matrix[col].head())
-                # You might want to handle this error accordingly, e.g., by dropping the column or filling with a default value
-        else:
-            print(f"Warning: Column {col} not found in feature matrix")
-
-    # Ensure the index is maintained
-    feature_matrix.index = original_index
-
-    return feature_matrix, participants_index, participant_map
-
 #============================================================================#
 # Feature matrix multicollinearity, priors sensitivity, and cross-validation #
 #============================================================================#
@@ -538,26 +523,53 @@ def check_multicollinearity(feature_matrix):
     - feature_matrix: DataFrame containing the features
     """
     print("\n ---- Check feature matrix multicollinearity ---- \n")
-    print("Variance Inflation Factor: 1 < VIF < 5: moderate correlation")
-    # Add a constant column for intercept
+    
+    debug = True
+    if debug:
+
+        # Compute the correlation matrix
+        print("Correlation matrix:")
+        corr_matrix = feature_matrix.corr().abs()
+        print(corr_matrix)
+
+        # Identify features with high correlation (e.g., > 0.95)
+        high_corr_features = np.where(corr_matrix > 0.95)
+
+        # Display pairs of highly correlated features
+        for i in range(len(high_corr_features[0])):
+            if high_corr_features[0][i] != high_corr_features[1][i]:  # Avoid self-correlation
+                print(f"High correlation: {feature_matrix.columns[high_corr_features[0][i]]} "
+                    f"and {feature_matrix.columns[high_corr_features[1][i]]}")
+        print("")
+
+    print("Variance Inflation Factor\n1: perfect correlation, 1 < VIF < 5: moderate correlation")
+
     X = sm.add_constant(feature_matrix)
 
-    # Calculate VIF for each feature
     vif_data = pd.DataFrame()
     vif_data["Feature"] = X.columns
-    vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+    # Handle infinite VIF gracefully
+    def safe_vif(i):
+        try:
+            return variance_inflation_factor(X.values, i)
+        except (ZeroDivisionError, np.linalg.LinAlgError):
+            return np.inf
+
+    vif_data["VIF"] = [safe_vif(i) for i in range(X.shape[1])]
 
     # Display the VIF for each feature
     print(vif_data)
 
-def perform_sensitivity_analysis(feature_matrix, target_vector, participants_index, typing_times, 
-                                 prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
+def perform_sensitivity_analysis(feature_matrix, target_vector, participants, selected_feature_names=None,
+                                 typing_times=None, prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
     """
     Perform sensitivity analysis by varying the prior on typing_time.
     
     Args:
     feature_matrix, target_vector, participants: As in the original model
-    typing_times: The typing time data
+    selected_feature_names: names of features to include as priors (if None, use all)
+    typing_times: Typing time data
     prior_means, prior_stds: Lists of means and standard deviations to try for the typing_time prior
     
     Returns:
@@ -574,8 +586,8 @@ def perform_sensitivity_analysis(feature_matrix, target_vector, participants_ind
             trace, model, priors = train_bayesian_glmm(
                 feature_matrix=feature_matrix,
                 target_vector=target_vector,
-                participants=participants_index,
-                selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],
+                participants=participants,
+                selected_feature_names=selected_feature_names,
                 typing_times=typing_times,
                 inference_method="mcmc",
                 num_samples=1000,
@@ -702,7 +714,7 @@ def bayesian_cv_pipeline(bayesian_glmm_func, bayesian_scoring_func, feature_matr
 #====================================================#
 # Bayesian GLMM training, Bayesian posterior scoring #
 #====================================================#
-def train_bayesian_glmm(feature_matrix, target_vector, participants_index=None, 
+def train_bayesian_glmm(feature_matrix, target_vector, participants=None, 
                         selected_feature_names=None,
                         typing_times=None, inference_method="mcmc", 
                         num_samples=1000, chains=4):
@@ -715,25 +727,20 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants_index=None,
     if selected_feature_names is None:
         selected_feature_names = feature_matrix.columns.tolist()
 
-    # Handle the case where participants_index is None
-    if participants_index is None:
-        print("Warning: participants_index is None. Using range(len(target_vector)) as default.")
-        participants_index = np.arange(len(target_vector))
+    # Handle the case where participants is None
+    if participants is None:
+        print("Warning: participants is None. Using range(len(target_vector)) as default.")
+        participants = np.arange(len(target_vector))
 
     # Get the unique participants in this subset of data
-    unique_participants = np.unique(participants_index)
+    unique_participants = np.unique(participants)
     num_participants = len(unique_participants)
     
     # Create a mapping from original indices to contiguous indices
     participant_map = {p: i for i, p in enumerate(unique_participants)}
-    participants_index_contiguous = np.array([participant_map[p] for p in participants_index])
+    participants_contiguous = np.array([participant_map[p] for p in participants])
 
     selected_features_matrix = feature_matrix[selected_feature_names]
-
-    print(f"Number of unique participants in this subset: {num_participants}")
-    print(f"Shape of feature matrix: {feature_matrix.shape}")
-    print(f"Shape of target vector: {target_vector.shape}")
-    print(f"Shape of participants_index: {participants_index.shape}")
 
     # Define the model context block to avoid the context stack error
     with pm.Model() as model:
@@ -766,7 +773,7 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants_index=None,
         if typing_times is not None:
             fixed_effects += typing_time_prior
 
-        mu = (fixed_effects + participant_intercept[participants_index_contiguous]).reshape(target_vector.shape)
+        mu = (fixed_effects + participant_intercept[participants_contiguous]).reshape(target_vector.shape)
 
         # Likelihood: Observed target vector
         sigma = pm.HalfNormal('sigma', sigma=10)
@@ -956,10 +963,12 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
+    run_samekey_analysis = True
+
     plot_bigram_pair_graph = False
-    run_sensitivity_analysis = False
-    run_cross_validation = False
-    run_glmm = True
+    run_sensitivity_analysis = True
+    run_cross_validation = True
+    run_glmm = False
     run_optimize_layout = False
 
     #=====================================#
@@ -970,8 +979,10 @@ if __name__ == "__main__":
     layout_chars = list("qwertasdfgzxcvb")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
-    all_bigrams, all_bigram_features, feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
+    all_bigrams, all_bigram_features, feature_names, samekey_bigrams, samekey_bigram_features, \
+        samekey_feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
     all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
+    all_samekey_feature_differences = precompute_bigram_feature_differences(samekey_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
     #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_274of377participants_0improbable/tables/filtered_bigram_data.csv"
@@ -983,36 +994,48 @@ if __name__ == "__main__":
     bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]     # Split each bigram in the pair into its individual characters
     slider_values = bigram_data['abs_sliderValue']
     typing_times = bigram_data['chosen_bigram_time']
-    participants = pd.Categorical(bigram_data['user_id']).codes  
-    
-    # Filter out bigram pairs where either bigram is not in the precomputed differences
-    bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_feature_differences]
-    target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+    # Extract participant IDs as codes and ensure a 1D numpy array of integers
+    participants = pd.Categorical(bigram_data['user_id']).codes
+    participants = participants.astype(int)  # Already flattened, so no need for .flatten()
 
-    # Create a DataFrame for the feature matrix, using precomputed feature differences for the bigram pairs
-    feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
-    feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
+    if run_samekey_analysis:
+        # Filter out bigram pairs where either bigram is not in the precomputed features
+        bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_samekey_feature_differences]
+        target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+        participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
 
-    # Add feature interactions
-    feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
+        # Create a DataFrame for the feature matrix, using precomputed features for the bigram pairs
+        feature_matrix_data = [all_samekey_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
+        feature_matrix = pd.DataFrame(feature_matrix_data, columns=samekey_feature_names, index=bigram_pairs)
+    else:
+        # Filter out bigram pairs where either bigram is not in the precomputed differences
+        bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_feature_differences]
+        target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+        participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
 
-    params = None #['same_finger', 'adjacent_fingers']
-    feature_matrix, participants_index, participant_map = prepare_feature_matrix(feature_matrix, params, 'participants')
+        # Create a DataFrame for the feature matrix, using precomputed feature differences for the bigram pairs
+        feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
+        feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
+
+        # Add feature interactions
+        feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
 
     #======================================================================================#
     # Check feature matrix multicollinearity, priors sensitivity, and run cross-validation #
     #======================================================================================#
-    # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
-    check_multicollinearity(feature_matrix)
-
     # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
     if plot_bigram_pair_graph:
         plot_bigram_graph(bigram_pairs)
 
+    # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
+    check_multicollinearity(feature_matrix)
+
     # Sensitivity analysis to determine how much each prior influences the results
     if run_sensitivity_analysis:
         sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
-                                                           typing_times, prior_means=[0, 50, 100], 
+                                                           selected_feature_names=None,
+                                                           typing_times=typing_times, 
+                                                           prior_means=[0, 50, 100], 
                                                            prior_stds=[1, 10, 100])
     if run_cross_validation:
         cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
@@ -1022,8 +1045,13 @@ if __name__ == "__main__":
     # Train a Bayesian GLMM and score using Bayesian posteriors #
     #===========================================================#
     if run_glmm:
-        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants_index, 
-            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'], 
+        if run_samekey_analysis:
+            selected_feature_names = None
+        else:
+            selected_feature_names = ['same_finger', 'outward_roll', 'adjacent_fingers']
+
+        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
+            selected_feature_names=selected_feature_names, 
             typing_times=typing_times,
             inference_method="mcmc", 
             num_samples=1000, 
@@ -1035,10 +1063,11 @@ if __name__ == "__main__":
 
         print("\n ---- Score comfort using Bayesian posteriors ---- \n")
         # Generate bigram typing comfort scores using the Bayesian posteriors
-        bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params)
+        bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None)
+        print(bigram_comfort_scores)
 
         # Print the comfort score for a specific bigram
-        print(bigram_comfort_scores['ae'])
+        print(bigram_comfort_scores['aa'])
 
     #==========================#
     # Optimize keyboard layout #
