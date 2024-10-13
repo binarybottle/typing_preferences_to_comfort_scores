@@ -14,6 +14,7 @@ from scipy.optimize import differential_evolution, minimize
 import networkx as nx
 import pymc as pm
 import arviz as az
+from collections import Counter
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -475,6 +476,55 @@ def plot_bigram_graph(bigram_pairs):
     plt.title("Bigram Connectivity Graph", fontsize=20)
     plt.show()
 
+def prepare_feature_matrix(feature_matrix, params=None, participants_col='participants'):
+    """
+    Prepare the feature matrix by ensuring numeric types for relevant columns.
+    
+    Parameters:
+    - feature_matrix: The original feature matrix
+    - params: List of parameter names to be used in the model. If None, all columns will be processed.
+    - participants_col
+
+    Returns:
+    - Prepared feature matrix with numeric columns
+    """
+    # Ensure the index is preserved
+    original_index = feature_matrix.index
+
+    if participants_col in feature_matrix.columns:
+        unique_participants = feature_matrix[participants_col].unique()
+        participant_map = {p: i for i, p in enumerate(unique_participants)}
+        feature_matrix[participants_col] = feature_matrix[participants_col].map(participant_map)
+        participants_index = feature_matrix[participants_col].values
+    else:
+        print(f"Warning: Participants column '{participants_col}' not found in feature matrix")
+        participants_index = None
+        participant_map = None
+
+    # If params is None, use all columns
+    if params is None:
+        params = feature_matrix.columns.tolist()
+
+    # Convert only the relevant columns to numeric
+    for col in params:
+        if col in feature_matrix.columns:
+            try:
+                feature_matrix[col] = pd.to_numeric(feature_matrix[col], errors='raise')
+            except ValueError as e:
+                print(f"Error converting column {col} to numeric: {e}")
+                print(f"Sample of problematic data in {col}:", feature_matrix[col].head())
+                # You might want to handle this error accordingly, e.g., by dropping the column or filling with a default value
+        else:
+            print(f"Warning: Column {col} not found in feature matrix")
+
+    # Ensure the index is maintained
+    feature_matrix.index = original_index
+
+    return feature_matrix, participants_index, participant_map
+
+#============================================================================#
+# Feature matrix multicollinearity, priors sensitivity, and cross-validation #
+#============================================================================#
 def check_multicollinearity(feature_matrix):
     """
     Check for multicollinearity.
@@ -492,8 +542,8 @@ def check_multicollinearity(feature_matrix):
     Parameters:
     - feature_matrix: DataFrame containing the features
     """
-    print("\nVariance Inflation Factor to check for multicollinearity")
-    print("    1 < VIF < 5: moderate correlation, but acceptable")
+    print("\n ---- Check feature matrix multicollinearity ---- \n")
+    print("Variance Inflation Factor: 1 < VIF < 5: moderate correlation")
     # Add a constant column for intercept
     X = sm.add_constant(feature_matrix)
 
@@ -505,22 +555,190 @@ def check_multicollinearity(feature_matrix):
     # Display the VIF for each feature
     print(vif_data)
 
-#============================================================#
-# Bayesian GLMM: priors and prior sensitivity, GLMM training #
-#============================================================#
-def train_bayesian_glmm(feature_matrix, target_vector, participants, 
-                        selected_feature_names=None, typing_time_prior_func=None,
+def perform_sensitivity_analysis(feature_matrix, target_vector, participants_index, typing_times, 
+                                 prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
+    """
+    Perform sensitivity analysis by varying the prior on typing_time.
+    
+    Args:
+    feature_matrix, target_vector, participants: As in the original model
+    typing_times: The typing time data
+    prior_means, prior_stds: Lists of means and standard deviations to try for the typing_time prior
+    
+    Returns:
+    A dictionary of results for each prior configuration
+    """
+    print("\n ---- Analyze sensitivity of the GLMM results on each prior ---- \n")
+    
+    results = {}
+    
+    for mean in prior_means:
+        for std in prior_stds:
+            print(f"Running model with typing_time prior: N({mean}, {std})")
+            
+            trace, model, priors = train_bayesian_glmm(
+                feature_matrix=feature_matrix,
+                target_vector=target_vector,
+                participants=participants_index,
+                selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],
+                typing_times=typing_times,
+                inference_method="mcmc",
+                num_samples=1000,
+                chains=4
+            )
+            
+            summary = az.summary(trace)
+            results[f"prior_N({mean},{std})"] = summary
+            
+            print(summary)
+            print("\n" + "="*50 + "\n")
+    
+    return results
+
+def bayesian_pairwise_scoring(y_true, y_pred):
+    """
+    Calculate a score for Bayesian pairwise comparison predictions.
+    
+    Parameters:
+    - y_true: True pairwise preferences (positive for first bigram preferred, negative for second)
+    - y_pred: Predicted differences in comfort scores
+    
+    Returns:
+    - score: A score between 0 and 1, where 1 is perfect prediction
+    """
+    # Convert inputs to numpy arrays
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    
+    # Convert predictions and true values to binary outcomes
+    y_true_binary = (y_true > 0).astype(int)
+    y_pred_binary = (y_pred > 0).astype(int)
+    
+    # Calculate accuracy
+    accuracy = np.mean(y_true_binary == y_pred_binary)
+    
+    # Calculate log-likelihood
+    epsilon = 1e-15  # Small value to avoid log(0)
+    probs = 1 / (1 + np.exp(-np.abs(y_pred)))
+    log_likelihood = np.mean(y_true_binary * np.log(probs + epsilon) + 
+                             (1 - y_true_binary) * np.log(1 - probs + epsilon))
+    
+    # Combine accuracy and log-likelihood
+    score = (accuracy + (log_likelihood + 1) / 2) / 2
+    
+    return score
+
+def bayesian_cv_pipeline(bayesian_glmm_func, bayesian_scoring_func, feature_matrix, 
+                         target_vector, participants, bigram_pairs, n_splits=5):
+    """
+    Perform cross-validation for Bayesian GLMM and posterior scoring.
+    
+    Parameters:
+    - bayesian_glmm_func: Function to fit the Bayesian GLMM.
+    - bayesian_scoring_func: Function to calculate Bayesian comfort scores.
+    - feature_matrix: Feature matrix (X).
+    - target_vector: Target vector (y).
+    - participants: Grouping variable for random effects or None if already preprocessed.
+    - bigram_pairs: List of bigram pairs used in the comparisons.
+    - n_splits: Number of cross-validation splits.
+    
+    Returns:
+    - cv_scores: Scores from cross-validation for the full pipeline.
+    """
+    print("\n ---- Run Bayesian cross-validation ---- \n")
+
+    cv = GroupKFold(n_splits=n_splits)
+    
+    cv_scores = []
+    
+    # Check if participants need preprocessing
+    if participants is not None and not isinstance(participants[0], (int, np.integer)):
+        #print("Preprocessing participants...")
+        unique_participants = np.unique(participants)
+        participant_map = {p: i for i, p in enumerate(unique_participants)}
+        participants_index = np.array([participant_map[p] for p in participants])
+    else:
+        #print("Using provided participant indices...")
+        participants_index = participants
+
+    if participants_index is None:
+        print("Warning: participants_index is None. Using range(len(target_vector)) as default.")
+        participants_index = np.arange(len(target_vector))
+
+    for train_idx, test_idx in cv.split(feature_matrix, target_vector, groups=participants_index):
+        X_train, X_test = feature_matrix.iloc[train_idx], feature_matrix.iloc[test_idx]
+        y_train, y_test = target_vector[train_idx], target_vector[test_idx]
+        groups_train = participants_index[train_idx]
+        bigram_pairs_train = [bigram_pairs[i] for i in train_idx]
+        bigram_pairs_test = [bigram_pairs[i] for i in test_idx]
+        
+        #print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
+        
+        # Step 1: Fit the Bayesian GLMM on the training set
+        glmm_result = bayesian_glmm_func(X_train, y_train, groups_train)
+        
+        # Unpack the result, assuming it returns (trace, model, all_priors)
+        if isinstance(glmm_result, tuple) and len(glmm_result) >= 1:
+            trace = glmm_result[0]
+        else:
+            trace = glmm_result  # In case it only returns the trace
+        
+        # Step 2: Calculate Bayesian comfort scores for test set
+        comfort_scores_test = bayesian_scoring_func(trace, bigram_pairs_test, X_test)
+        
+        # Step 3: Prepare test scores for evaluation
+        test_scores = []
+        for (bigram1, bigram2) in bigram_pairs_test:
+            score_diff = comfort_scores_test.get(bigram1, 0) - comfort_scores_test.get(bigram2, 0)
+            test_scores.append(score_diff)
+        
+        # Convert test_scores to a numpy array
+        test_scores = np.array(test_scores)
+
+        # Step 4: Evaluate performance
+        score = bayesian_pairwise_scoring(y_test, test_scores)
+        cv_scores.append(score)
+        
+        print(f"Cross-validation fold score: {score}")
+
+    print(f"Mean CV Score: {np.mean(cv_scores)}")
+    return cv_scores
+
+#====================================================#
+# Bayesian GLMM training, Bayesian posterior scoring #
+#====================================================#
+def train_bayesian_glmm(feature_matrix, target_vector, participants_index=None, 
+                        selected_feature_names=None,
                         typing_times=None, inference_method="mcmc", 
                         num_samples=1000, chains=4):
     """
     Train a Bayesian GLMM with hierarchical modeling using custom and feature-based priors.
     """
+    print("\n ---- Train Bayesian GLMM ---- \n")
+
     # Ensure that selected features are provided, or default to all features
     if selected_feature_names is None:
         selected_feature_names = feature_matrix.columns.tolist()
 
-    num_participants = len(np.unique(participants))
+    # Handle the case where participants_index is None
+    if participants_index is None:
+        print("Warning: participants_index is None. Using range(len(target_vector)) as default.")
+        participants_index = np.arange(len(target_vector))
+
+    # Get the unique participants in this subset of data
+    unique_participants = np.unique(participants_index)
+    num_participants = len(unique_participants)
+    
+    # Create a mapping from original indices to contiguous indices
+    participant_map = {p: i for i, p in enumerate(unique_participants)}
+    participants_index_contiguous = np.array([participant_map[p] for p in participants_index])
+
     selected_features_matrix = feature_matrix[selected_feature_names]
+
+    print(f"Number of unique participants in this subset: {num_participants}")
+    print(f"Shape of feature matrix: {feature_matrix.shape}")
+    print(f"Shape of target vector: {target_vector.shape}")
+    print(f"Shape of participants_index: {participants_index.shape}")
 
     # Define the model context block to avoid the context stack error
     with pm.Model() as model:
@@ -535,19 +753,14 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants,
 
         # Define custom priors
         if typing_times is not None:
-            if typing_time_prior_func is None:
-                typing_time_prior = pm.Normal('typing_time', 
-                                              mu=np.mean(typing_times), 
-                                              sigma=np.std(typing_times))
-            else:
-                typing_time_prior = typing_time_prior_func()
-        #adjacent_fingers_prior = pm.Normal('adjacent_fingers', mu=0, sigma=2)
+            typing_time_prior = pm.Normal('typing_time', 
+                                          mu=np.mean(typing_times), 
+                                          sigma=np.std(typing_times))
 
         # Combine all priors (feature-based + custom)
         all_priors = list(feature_priors.values())
         if typing_times is not None:
             all_priors.append(typing_time_prior)
-        #all_priors.append(adjacent_fingers_prior)
 
         # Random effects: Participant-specific intercepts
         participant_intercept = pm.Normal('participant_intercept', mu=0, sigma=1, 
@@ -557,9 +770,8 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants,
         fixed_effects = pm.math.dot(selected_features_matrix, pm.math.stack([feature_priors[name] for name in selected_feature_names]))
         if typing_times is not None:
             fixed_effects += typing_time_prior
-        #fixed_effects += adjacent_fingers_prior * selected_features_matrix['adjacent_fingers']
 
-        mu = fixed_effects + participant_intercept[participants]
+        mu = (fixed_effects + participant_intercept[participants_index_contiguous]).reshape(target_vector.shape)
 
         # Likelihood: Observed target vector
         sigma = pm.HalfNormal('sigma', sigma=10)
@@ -576,165 +788,96 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants,
 
     return trace, model, all_priors
 
-def perform_sensitivity_analysis(feature_matrix, target_vector, participants, typing_times, 
-                                 prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
-    """
-    Perform sensitivity analysis by varying the prior on typing_time.
-    
-    Args:
-    feature_matrix, target_vector, participants: As in the original model
-    typing_times: The typing time data
-    prior_means, prior_stds: Lists of means and standard deviations to try for the typing_time prior
-    
-    Returns:
-    A dictionary of results for each prior configuration
-    """
-    results = {}
-    
-    for mean in prior_means:
-        for std in prior_stds:
-            print(f"Running model with typing_time prior: N({mean}, {std})")
-            
-            def custom_typing_time_prior():
-                return pm.Normal('typing_time', mu=mean, sigma=std)
-            
-            trace, model, priors = train_bayesian_glmm(
-                feature_matrix=feature_matrix,
-                target_vector=target_vector,
-                participants=participants,
-                selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],
-                typing_times=typing_times,
-                typing_time_prior_func=custom_typing_time_prior,
-                inference_method="mcmc",
-                num_samples=500,
-                chains=2
-            )
-            
-            summary = az.summary(trace)
-            results[f"prior_N({mean},{std})"] = summary
-            
-            print(summary)
-            print("\n" + "="*50 + "\n")
-    
-    return results
-
 def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None):
     """
     Generate latent comfort scores using the full posterior distributions from a Bayesian GLMM.
+    This version handles both feature-based and manual priors.
     
     Parameters:
-    - trace: The trace object from the Bayesian GLMM (contains posterior samples).
+    - trace: The InferenceData object from the Bayesian GLMM (contains posterior samples).
     - bigram_pairs: List of bigram pairs used in the comparisons.
-    - feature_matrix: The feature matrix used in the GLMM, indexed by bigrams.
-    - params: List of parameter names to use from the trace. If None, all parameters in the trace will be used.
+    - feature_matrix: The feature matrix used in the GLMM, indexed by bigram pairs.
+    - params: List of parameter names to use from the trace. If None, all suitable parameters will be used.
    
     Returns:
     - bigram_comfort_scores: Dictionary mapping each bigram to its latent comfort score.
     """
-    # If params is not provided, use all parameters in the trace
+    # Extract variable names from the trace
+    all_vars = list(trace.posterior.data_vars)
+    
+    # If params is not provided, use all parameters except 'participant_intercept' and 'sigma'
     if params is None:
-        params = [var for var in trace.posterior.variables() if var != 'participant_intercept' and var != 'sigma']
+        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
     
-    # Extract posterior samples for the specified parameters
-    posterior_samples = {param: trace.posterior[param].values.flatten() for param in params}
+    print(f"All parameters: {params}")
     
-    # Create a set of all unique bigrams
-    all_bigrams = set(bigram for pair in bigram_pairs for bigram in pair)
+    # Separate parameters into those in the feature matrix and those that aren't
+    feature_params = [param for param in params if param in feature_matrix.columns]
+    manual_params = [param for param in params if param not in feature_matrix.columns]
     
-    # Calculate comfort scores for each bigram
-    bigram_scores = {}
-    for bigram in all_bigrams:
-        # Extract feature values for this bigram
-        bigram_features = feature_matrix.loc[bigram]
-        
-        # Calculate score using all posterior samples
-        scores = np.zeros(len(posterior_samples[params[0]]))
-        for param in params:
-            if param in bigram_features:
-                scores += posterior_samples[param] * bigram_features[param]
-        
-        # Use the mean score across all posterior samples
-        bigram_scores[bigram] = np.mean(scores)
+    print(f"Feature-based parameters: {feature_params}")
+    print(f"Manual parameters: {manual_params}")
+    
+    # Extract posterior samples for all parameters
+    posterior_samples = {param: az.extract(trace, var_names=param).values for param in params}
+    
+    # Convert feature matrix to numpy array and extract relevant columns
+    feature_array = feature_matrix[feature_params].values
+    
+    # Create a dictionary to map bigram pairs to their index in the feature array
+    bigram_to_index = {tuple(map(tuple, pair)): i for i, pair in enumerate(feature_matrix.index)}
+    
+    # Calculate comfort scores for each bigram pair
+    bigram_pair_scores = {}
+    mismatches = []
+    for bigram_pair in bigram_pairs:
+        bigram_pair_tuple = tuple(map(tuple, bigram_pair))
+        if bigram_pair_tuple in bigram_to_index:
+            row_index = bigram_to_index[bigram_pair_tuple]
+            bigram_features = feature_array[row_index]
+            
+            # Calculate score using feature-based parameters
+            scores = np.zeros(len(next(iter(posterior_samples.values()))))
+            for i, param in enumerate(feature_params):
+                scores += posterior_samples[param] * bigram_features[i]
+            
+            # Add contribution from manual parameters
+            for param in manual_params:
+                scores += posterior_samples[param]
+            
+            # Use the mean score across all posterior samples
+            bigram_pair_scores[bigram_pair] = np.mean(scores)
+        else:
+            mismatches.append(bigram_pair)
+    
+    if not bigram_pair_scores:
+        raise ValueError("No valid bigram pair scores could be calculated.")
     
     # Normalize scores to 0-1 range
-    min_score = min(bigram_scores.values())
-    max_score = max(bigram_scores.values())
-    bigram_comfort_scores = {bigram: (score - min_score) / (max_score - min_score) 
-                             for bigram, score in bigram_scores.items()}
+    min_score = min(bigram_pair_scores.values())
+    max_score = max(bigram_pair_scores.values())
+    normalized_scores = {bigram_pair: (score - min_score) / (max_score - min_score) 
+                         for bigram_pair, score in bigram_pair_scores.items()}
+    
+    # Calculate comfort scores for individual bigrams
+    bigram_comfort_scores = {}
+    for bigram_pair, score in normalized_scores.items():
+        bigram1, bigram2 = bigram_pair
+        bigram1 = ''.join(bigram1)
+        bigram2 = ''.join(bigram2)
+        
+        if bigram1 not in bigram_comfort_scores:
+            bigram_comfort_scores[bigram1] = []
+        if bigram2 not in bigram_comfort_scores:
+            bigram_comfort_scores[bigram2] = []
+        bigram_comfort_scores[bigram1].append(score)
+        bigram_comfort_scores[bigram2].append(1 - score)  # Invert score for the second bigram
+    
+    # Average the scores for each bigram
+    bigram_comfort_scores = {bigram: np.mean(scores) for bigram, scores in bigram_comfort_scores.items()}
     
     return bigram_comfort_scores
-
-#=========================#
-# Nested cross-validation #
-#=========================#
-def scoring_function(y_true, y_pred):
-    """
-    Custom scoring function: R-squared.
-    Ensures that only aligned data points are used for scoring.
-    """
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-
-    # Ensure the two arrays are aligned in length
-    min_len = min(len(y_true), len(y_pred))
-    y_true, y_pred = y_true[:min_len], y_pred[:min_len]
-
-    # Calculate R-squared
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    return 1 - (ss_res / ss_tot)
-
-def nested_cv_full_pipeline(glmm_model_func, bradley_terry_model_func, feature_matrix, 
-                            target_vector, participants, bigram_pairs):
-    """
-    Perform nested cross-validation for both GLMM and Bradley-Terry models 
-    for model validation and tuning.
-    
-    Parameters:
-    - glmm_model: GLMM model to clean the data.
-    - bradley_terry_model: Bradley-Terry model for pairwise comparisons.
-    - feature_matrix: Feature matrix (X).
-    - target_vector: Target vector (y).
-    - participants: Grouping variable for random effects.
-    
-    Returns:
-    - nested_scores: Scores from nested cross-validation for the full pipeline.
-    """
-    # Outer loop for evaluating the full pipeline
-    outer_cv = GroupKFold(n_splits=5)
-    
-    cv_scores = []
-    
-    for train_idx, test_idx in outer_cv.split(feature_matrix, target_vector, groups=participants):
-        X_train, X_test = feature_matrix.iloc[train_idx], feature_matrix.iloc[test_idx]
-        y_train, y_test = target_vector[train_idx], target_vector[test_idx]
-        groups_train = participants[train_idx]
-        bigram_pairs_train = [bigram_pairs[i] for i in train_idx]
-        bigram_pairs_test = [bigram_pairs[i] for i in test_idx]
-        
-        # Make sure bigram_pairs also align with the train/test split
-        bigram_pairs_train = [bigram_pairs[i] for i in train_idx]  # Ensure the bigram pairs are correctly split
-        
-        # Step 1: Fit the GLMM on the training set
-        glmm_result, cleaned_data_train = glmm_model_func(X_train, y_train, groups_train)
-        
-        # Step 2: Fit the Bradley-Terry model on the cleaned data and corresponding bigram pairs
-        bigram_comfort_scores_train = bradley_terry_model_func(cleaned_data_train, bigram_pairs_train)
-        
-        # Step 3: Predict latent scores for the test set
-        #latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs]
-        latent_scores_test = [bigram_comfort_scores_train.get(bigram, 0) for bigram in bigram_pairs_test]
-
-        # Step 4: Evaluate performance (e.g., using custom scoring function)
-        print(f"y_test shape: {y_test.shape}, latent_scores_test shape: {len(latent_scores_test)}")
-        score = scoring_function(y_test, latent_scores_test)
-        cv_scores.append(score)
-    
-        print(f"Nested CV Scores: {cv_scores}")
-        print(f"Mean CV Score: {np.mean(cv_scores)}")
-        
-        return cv_scores
-    
+   
 #=====================#
 # Layout optimization #
 #=====================#
@@ -819,14 +962,15 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 if __name__ == "__main__":
 
     plot_bigram_pair_graph = False
-    run_sensitivity_analysis = True
+    run_sensitivity_analysis = False
+    run_cross_validation = False
     run_glmm = False
-    run_nested_cross_validation = False
     run_optimize_layout = False
 
     #=====================================#
     # Load, prepare, and analyze features #
     #=====================================#
+    print("\n ---- Load, prepare, and analyze features ---- \n")
     layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
@@ -856,9 +1000,12 @@ if __name__ == "__main__":
     # Add feature interactions
     feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
 
-    # Convert all columns in the feature matrix to numeric (coerce invalid values to NaN if any)
-    feature_matrix = feature_matrix.apply(pd.to_numeric, errors='coerce')
+    params = None #['same_finger', 'adjacent_fingers']
+    feature_matrix, participants_index, participant_map = prepare_feature_matrix(feature_matrix, params, 'participants')
 
+    #======================================================================================#
+    # Check feature matrix multicollinearity, priors sensitivity, and run cross-validation #
+    #======================================================================================#
     # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
     check_multicollinearity(feature_matrix)
 
@@ -866,17 +1013,21 @@ if __name__ == "__main__":
     if plot_bigram_pair_graph:
         plot_bigram_graph(bigram_pairs)
 
-    #=======================================================================================#
-    # Define and analyze priors, train a Bayesian GLMM, and score using Bayesian posteriors #
-    #=======================================================================================#
     # Sensitivity analysis to determine how much each prior influences the results
     if run_sensitivity_analysis:
         sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
                                                            typing_times, prior_means=[0, 50, 100], 
                                                            prior_stds=[1, 10, 100])
+    if run_cross_validation:
+        cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
+                        feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
+        
+    #===========================================================#
+    # Train a Bayesian GLMM and score using Bayesian posteriors #
+    #===========================================================#
     if run_glmm:
-        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
-            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'],  
+        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants_index, 
+            selected_feature_names=['same_finger', 'outward_roll', 'adjacent_fingers'], 
             typing_times=typing_times,
             inference_method="mcmc", 
             num_samples=1000, 
@@ -886,33 +1037,16 @@ if __name__ == "__main__":
         print(az.summary(trace))  
         az.plot_trace(trace)
 
+        print("\n ---- Score comfort using Bayesian posteriors ---- \n")
         # Generate bigram typing comfort scores using the Bayesian posteriors
-        params = None #['same_finger', 'adjacent_fingers']
         bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params)
 
         # Print the comfort score for a specific bigram
-        print(bigram_comfort_scores[('a', 'e')])
+        print(bigram_comfort_scores['ae'])
 
-    #=============================#
-    # Run nested cross-validation #
-    #=============================#
-    if run_nested_cross_validation:
-        # 1. Train the GLMM to analyze fixed and random effects to clean and stabilize data.
-        # 2. Train Bradley-Terry model to estimate latent bigram typing comfort values.
-        # 3. Nested cross-validation for model validation and tuning:
-        participants = pd.Categorical(bigram_data['user_id']).codes  # Convert participant labels for random effects to numeric codes
-        cv_scores = nested_scores = nested_cv_full_pipeline(
-                        glmm_model_func=train_glmm,                     # The GLMM function to clean the data
-                        bradley_terry_model_func=fit_bradley_terry_model,  # The Bradley-Terry model function
-                        feature_matrix=feature_matrix,                   # Feature matrix (X)
-                        target_vector=target_vector,                     # Target vector (y)
-                        participants=participants,                       # Grouping variable (e.g., participants)
-                        bigram_pairs=bigram_pairs                        # Bigram pairs for pairwise comparisons
-                    )
-    
-    #==============================#
-    # Optimization keyboard layout #
-    #==============================#
+    #==========================#
+    # Optimize keyboard layout #
+    #==========================#
     if run_optimize_layout:
         # Initial layout
         initial_layout = layout_chars
