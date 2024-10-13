@@ -1,20 +1,15 @@
 import numpy as np
 import pandas as pd
-from itertools import permutations, product
 import matplotlib.pyplot as plt
-import ast
 import statsmodels.api as sm
-from statsmodels.regression.mixed_linear_model import MixedLM
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-import choix
-from sklearn.base import BaseEstimator
-import statsmodels.api as sm
-from sklearn.model_selection import LeaveOneOut, GroupKFold, cross_val_score, GridSearchCV
 from scipy.optimize import differential_evolution, minimize
+from sklearn.model_selection import GroupKFold
 import networkx as nx
 import pymc as pm
+from itertools import permutations
+import ast
 import arviz as az
-from collections import Counter
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -365,15 +360,15 @@ def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map
     - layout_chars: List of all possible characters in the keyboard layout.
     
     Returns:
-    - all_bigrams: All possible bigrams, including repetition.
+    - all_bigrams: All possible bigrams.
     - all_bigram_features: DataFrame mapping all bigrams to their feature vectors (with named columns).
     - feature_names: List of feature names.   
     """
     # Generate all possible bigrams (permutations of 2 unique characters)
     #bigrams = list(permutations(layout_chars, 2))  # Permutations give us all bigram pairs (without repetition)
 
-    # Generate all possible bigrams, including repetition
-    all_bigrams = list(product(layout_chars, repeat=2))  # Product allows repetition (e.g., ('a', 'a'))
+    # Generate all possible bigrams (not including repetition of the same key)
+    all_bigrams = list(permutations(layout_chars, 2))
 
     # Extract features for each bigram
     feature_vectors = []
@@ -964,14 +959,15 @@ if __name__ == "__main__":
     plot_bigram_pair_graph = False
     run_sensitivity_analysis = False
     run_cross_validation = False
-    run_glmm = False
+    run_glmm = True
     run_optimize_layout = False
 
     #=====================================#
     # Load, prepare, and analyze features #
     #=====================================#
     print("\n ---- Load, prepare, and analyze features ---- \n")
-    layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
+    #layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
+    layout_chars = list("qwertasdfgzxcvb")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
     all_bigrams, all_bigram_features, feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
