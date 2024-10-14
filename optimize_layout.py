@@ -3,40 +3,92 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import math
+import matplotlib.pyplot as plt
+from collections import defaultdict
 
 #=========================================#
 # Functions to optimizge keyboard layouts #
 #=========================================#
-def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, comfort_scores):
+def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
+                             comfort_scores, plot_bigram_scores=False):
     """
     Optimizes the computation of valid bigrams by caching character positions.
     """
     character_set = set(keyboard_layout)
     valid_bigrams = {}
 
-    # Normalize comfort scores and bigram frequencies
+    # Normalize comfort scores
     comfort_scores['normalized_comfort'] = (
         (comfort_scores['comfort_score'] - comfort_scores['comfort_score'].min()) /
         (comfort_scores['comfort_score'].max() - comfort_scores['comfort_score'].min())
     )
+
+    # Normalize bigram frequencies with handling of edge case (min == max)
     freq_values = np.array(list(bigram_frequencies.values()))
     min_freq, max_freq = freq_values.min(), freq_values.max()
+    if min_freq == max_freq:
+        normalized_frequencies = {bigram: 1.0 for bigram in bigram_frequencies}
+    else:
+        normalized_frequencies = {
+            bigram: (freq - min_freq) / (max_freq - min_freq)
+            for bigram, freq in bigram_frequencies.items()
+        }
 
-    # Cache the index positions of characters
+    # Cache character positions for faster lookup
     char_positions = {char: idx for idx, char in enumerate(keyboard_layout)}
 
-    # Iterate through all valid bigrams efficiently using cached positions
+    # Iterate through all valid bigrams using cached positions
     for char1, char2 in itertools.permutations(character_set, 2):
         bigram = char1 + char2
         if bigram in bigram_frequencies:
-            normalized_freq = (bigram_frequencies[bigram] - min_freq) / (max_freq - min_freq)
+            normalized_freq = normalized_frequencies[bigram]
 
             # Construct the keyboard bigram from cached positions
-            keyboard_bigram = keyboard_layout[char_positions[char1]] + keyboard_layout[char_positions[char2]]
+            keyboard_bigram = (
+                keyboard_layout[char_positions[char1]] +
+                keyboard_layout[char_positions[char2]]
+            )
 
-            # Assign a normalized comfort score or the maximum of 1.0 for all valid pairs
-            comfort = comfort_scores.get(keyboard_bigram, {}).get('normalized_comfort', 1.0)
+            # Retrieve normalized comfort score or use default 1.0
+            comfort = comfort_scores.loc[keyboard_bigram, 'normalized_comfort'] \
+                if keyboard_bigram in comfort_scores.index else 1.0
+
+            # Store the valid bigram score
             valid_bigrams[bigram] = normalized_freq * comfort
+
+    # Plot the bigram scores if requested
+    if plot_bigram_scores:
+        # Prepare data for plotting
+        bigrams = list(valid_bigrams.keys())
+        combined_scores = list(valid_bigrams.values())
+        frequencies = [normalized_frequencies[bigram] for bigram in bigrams]
+        comforts = [
+            comfort_scores.loc[bigram, 'normalized_comfort'] if bigram in comfort_scores.index else 1.0
+            for bigram in bigrams
+        ]
+
+        # Plot the distributions as scatter plots
+        plt.figure(figsize=(14, 7))
+
+        # Scatter plot for normalized frequencies
+        plt.scatter(bigrams, frequencies, label='Normalized Frequencies', alpha=0.5)
+
+        # Scatter plot for normalized comforts
+        plt.scatter(bigrams, comforts, label='Normalized Comforts', alpha=0.5)
+
+        # Scatter plot for combined scores (Freq * Comfort)
+        plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', alpha=0.5)
+
+        # Configure plot appearance
+        plt.xticks(rotation=90)  # Rotate x-axis labels for readability
+        plt.xlabel('Bigrams')
+        plt.ylabel('Scores')
+        plt.title('Comparison of Bigram Scores, Frequencies, and Comforts')
+        plt.legend()
+        plt.tight_layout()
+
+        # Show the plot
+        plt.show()
 
     return valid_bigrams
 
@@ -58,12 +110,21 @@ def optimize_subset(keys_to_replace, chars_to_arrange, valid_bigrams, keyboard_l
             pos = temp_layout.index(key)
             temp_layout[pos] = char
 
+        # Identify positions of the replaced keys in the layout
+        key_positions = [keyboard_layout.index(key) for key in keys_to_replace]
+
         # Calculate the layout score (inlined for performance)
         score = 0
-        for char1, char2 in itertools.permutations(temp_layout, 2):
-            bigram = char1 + char2
-            if bigram in valid_bigrams:
-                score += valid_bigrams[bigram]
+        for i in key_positions:
+            for j in key_positions:  # Only compare with other relevant keys
+                if i != j:
+                    bigram = temp_layout[i] + temp_layout[j]
+                    bigram_score = valid_bigrams.get(bigram, 0)
+                    score += bigram_score
+
+                    # Debugging print to confirm only relevant bigrams are evaluated
+                    print(f"Evaluating relevant bigram: {bigram}, Score: {bigram_score}")
+        print(f"Temporary Layout: {''.join(temp_layout)} score: {score}")
 
         # Track the best layout and score
         if score > best_score:
@@ -118,13 +179,16 @@ if __name__ == "__main__":
 
     from ngram_frequencies import onegram_frequencies, bigram_frequencies
 
-    valid_bigrams = precompute_valid_bigrams(keyboard_layout, bigram_frequencies, comfort_scores)
+    plot_bigram_scores = True
+    valid_bigrams = precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
+                                             comfort_scores, plot_bigram_scores)
+    #print(f"Bigrams: {valid_bigrams}")
 
     #--------------------------------------------------------------#
     # Stage 1: select keys and characters to arrange in those keys #
     #--------------------------------------------------------------#
-    keys_to_replace = "asdf"
-    chars_to_arrange = "etao"
+    keys_to_replace = "asd"
+    chars_to_arrange = "eic"
 
     print(f"Keys to replace: {keys_to_replace}")
     print(f"Characters to arrange in the keys: {chars_to_arrange}")
