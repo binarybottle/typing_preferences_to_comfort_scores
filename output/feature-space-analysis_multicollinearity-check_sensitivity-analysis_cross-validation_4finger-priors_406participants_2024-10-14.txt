@@ -1,0 +1,485 @@
+❯ poetry run python ergo_n_prefs.py
+WARNING (pytensor.tensor.blas): Using NumPy C-API based implementation for BLAS functions.
+
+ ---- Load, prepare, and analyze features ---- 
+
+Extracted 13 features from each of 210 possible 2-key bigrams.
+Extracted 4 features from each of 15 possible same-key bigrams.
+Calculated all 44100 bigram-bigram feature differences.
+Convex Hull Area: 24.50895510915613
+Point Density: 619.4470524093564
+Suggested new bigram pairs to collect data for:
+wq, wx
+ez, fb
+wa, rd
+qe, wx
+es, rd
+qr, cr
+sc, fc
+wz, rx
+qw, eq
+rd, dx
+rd, tb
+qa, cr
+wv, ct
+qw, qw
+wz, wx
+qw, wq
+wd, cs
+tg, ct
+wv, cr
+wz, rc
+wt, fz
+wf, cr
+wg, fz
+ws, cr
+wx, te
+rt, ct
+Extended list of suggested bigram pairs to collect data for:
+ws, ea
+qw, wt
+wd, cr
+qw, ra
+wa, wv
+rt, sx
+qa, xa
+wx, rt
+ws, eq
+qe, ws
+ws, ge
+qa, eb
+qg, wx
+wf, fz
+qr, rt
+qw, wa
+rt, sc
+
+ ---- Check feature matrix multicollinearity ---- 
+
+Correlation matrix:
+                   ncols     nrows       out      skip  1or4_top_above  2or3_bot_below    1above    4above    2below    3below    center      same  adj_skip  same_skip  1_center
+ncols           1.000000  0.212443  0.077634  0.236816        0.046006        0.267432  0.011486  0.058130  0.105343  0.072755  0.118049  0.648277  0.222705   0.389217  0.063535
+nrows           0.212443  1.000000  0.168221  0.757712        0.066997        0.176644  0.047524  0.022674  0.043846  0.280251  0.063740  0.153711  0.114547   0.486047  0.007134
+out             0.077634  0.168221  1.000000  0.074889        0.072687        0.173191  0.207268  0.148205  0.094158  0.283008  0.076572  0.006821  0.162013   0.088638  0.030827
+skip            0.236816  0.757712  0.074889  1.000000        0.117628        0.207269  0.086900  0.118349  0.130161  0.203683  0.109636  0.165523  0.180612   0.596068  0.088825
+1or4_top_above  0.046006  0.066997  0.072687  0.117628        1.000000        0.100435  0.459604  0.221570  0.156403  0.106117  0.107558  0.060016  0.064987   0.050041  0.076530
+2or3_bot_below  0.267432  0.176644  0.173191  0.207269        0.100435        1.000000  0.227868  0.041069  0.201375  0.041081  0.061948  0.285258  0.406880   0.351114  0.074346
+1above          0.011486  0.047524  0.207268  0.086900        0.459604        0.227868  1.000000  0.112204  0.478649  0.062913  0.068772  0.038292  0.219746   0.047233  0.051906
+4above          0.058130  0.022674  0.148205  0.118349        0.221570        0.041069  0.112204  1.000000  0.111725  0.202759  0.124149  0.105911  0.052501   0.091448  0.076964
+2below          0.105343  0.043846  0.094158  0.130161        0.156403        0.201375  0.478649  0.111725  1.000000  0.057658  0.116579  0.081253  0.269333   0.049640  0.118323
+3below          0.072755  0.280251  0.283008  0.203683        0.106117        0.041081  0.062913  0.202759  0.057658  1.000000  0.094842  0.120136  0.066021   0.081822  0.086894
+center          0.118049  0.063740  0.076572  0.109636        0.107558        0.061948  0.068772  0.124149  0.116579  0.094842  1.000000  0.143596  0.009920   0.090822  0.619934
+same            0.648277  0.153711  0.006821  0.165523        0.060016        0.285258  0.038292  0.105911  0.081253  0.120136  0.143596  1.000000  0.187845   0.525030  0.441873
+adj_skip        0.222705  0.114547  0.162013  0.180612        0.064987        0.406880  0.219746  0.052501  0.269333  0.066021  0.009920  0.187845  1.000000   0.003290  0.102524
+same_skip       0.389217  0.486047  0.088638  0.596068        0.050041        0.351114  0.047233  0.091448  0.049640  0.081822  0.090822  0.525030  0.003290   1.000000  0.254309
+1_center        0.063535  0.007134  0.030827  0.088825        0.076530        0.074346  0.051906  0.076964  0.118323  0.086894  0.619934  0.441873  0.102524   0.254309  1.000000
+
+Variance Inflation Factor
+1: perfect correlation, 1 < VIF < 5: moderate correlation
+           Feature       VIF
+0            const  5.866243
+1            ncols  2.282899
+2            nrows  3.220966
+3              out  1.489001
+4             skip  4.325135
+5   1or4_top_above  1.678268
+6   2or3_bot_below  1.715357
+7           1above  1.964936
+8           4above  1.308847
+9           2below  1.495866
+10          3below  1.252889
+11          center  1.992486
+12            same  3.601948
+13        adj_skip  1.605169
+14       same_skip  2.900557
+15        1_center  2.893062
+
+ ---- Analyze sensitivity of the GLMM results on each prior ---- 
+
+Running model with typing_time prior: N(0, 1)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:26
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.312  0.375  -0.965    0.440      0.004    0.005    8976.0    2898.0   1.00
+nrows                      0.385  0.358  -0.265    1.069      0.004    0.004    9788.0    3198.0   1.00
+out                        0.104  0.359  -0.553    0.779      0.004    0.006    9296.0    3291.0   1.00
+skip                       0.059  0.380  -0.664    0.775      0.004    0.006    9740.0    3118.0   1.00
+1or4_top_above            -0.251  0.369  -0.923    0.476      0.004    0.005    8502.0    2965.0   1.00
+2or3_bot_below             0.234  0.353  -0.439    0.880      0.003    0.005   11138.0    2950.0   1.00
+1above                    -0.124  0.375  -0.804    0.572      0.004    0.007    9308.0    2705.0   1.00
+4above                     0.120  0.250  -0.349    0.583      0.002    0.004   11445.0    2966.0   1.00
+2below                     0.207  0.376  -0.467    0.940      0.004    0.006   10996.0    3025.0   1.00
+3below                     0.168  0.324  -0.436    0.752      0.003    0.005    8757.0    3301.0   1.00
+center                    -0.339  0.334  -0.968    0.276      0.003    0.004   10310.0    2707.0   1.00
+same                       0.339  0.368  -0.330    1.026      0.004    0.004    9490.0    3374.0   1.00
+adj_skip                   0.069  0.309  -0.516    0.638      0.003    0.006   11137.0    2752.0   1.00
+same_skip                 -0.017  0.279  -0.535    0.507      0.003    0.005   11296.0    3237.0   1.00
+1_center                   0.046  0.245  -0.411    0.499      0.002    0.005    9974.0    2769.0   1.00
+typing_time               63.725  0.416  62.948   64.506      0.004    0.003    9576.0    3303.0   1.00
+participant_intercept[0]   2.346  0.957   0.603    4.134      0.010    0.008    9903.0    2725.0   1.01
+participant_intercept[1]  -2.157  0.934  -3.998   -0.540      0.009    0.008   10438.0    2634.0   1.00
+participant_intercept[2]  -0.156  1.014  -2.007    1.788      0.010    0.019    9569.0    2562.0   1.00
+participant_intercept[3]  -0.806  0.980  -2.594    1.023      0.010    0.013    9691.0    2690.0   1.00
+
+==================================================
+
+Running model with typing_time prior: N(0, 10)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 25 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.309  0.375  -0.983    0.390      0.004    0.005    9311.0    3281.0    1.0
+nrows                      0.382  0.359  -0.304    1.046      0.004    0.004    7441.0    3327.0    1.0
+out                        0.105  0.377  -0.595    0.801      0.004    0.006    9798.0    2938.0    1.0
+skip                       0.054  0.380  -0.678    0.753      0.004    0.007    9051.0    3228.0    1.0
+1or4_top_above            -0.249  0.357  -0.967    0.365      0.004    0.005    9455.0    2916.0    1.0
+2or3_bot_below             0.236  0.353  -0.408    0.905      0.003    0.005   10072.0    2670.0    1.0
+1above                    -0.122  0.379  -0.842    0.568      0.004    0.006    8546.0    2810.0    1.0
+4above                     0.123  0.252  -0.325    0.608      0.003    0.004    9746.0    2928.0    1.0
+2below                     0.215  0.363  -0.411    0.962      0.004    0.006    9019.0    2402.0    1.0
+3below                     0.168  0.332  -0.414    0.816      0.003    0.005   10212.0    2867.0    1.0
+center                    -0.337  0.335  -1.004    0.260      0.003    0.004   10546.0    3025.0    1.0
+same                       0.332  0.379  -0.416    1.007      0.004    0.005    8326.0    3103.0    1.0
+adj_skip                   0.066  0.306  -0.519    0.623      0.003    0.006   10475.0    2430.0    1.0
+same_skip                 -0.025  0.296  -0.583    0.528      0.003    0.006   12035.0    2810.0    1.0
+1_center                   0.046  0.244  -0.415    0.499      0.003    0.004    8630.0    2984.0    1.0
+typing_time               63.723  0.439  62.936   64.551      0.005    0.003    8493.0    3424.0    1.0
+participant_intercept[0]   2.346  0.939   0.608    4.105      0.009    0.008   12111.0    2550.0    1.0
+participant_intercept[1]  -2.154  0.993  -3.900   -0.132      0.009    0.009   11363.0    2292.0    1.0
+participant_intercept[2]  -0.155  0.997  -2.045    1.696      0.010    0.018   10470.0    2979.0    1.0
+participant_intercept[3]  -0.800  0.983  -2.579    1.074      0.010    0.014    9323.0    2746.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(0, 100)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.318  0.362  -1.004    0.331      0.004    0.004    9799.0    3540.0    1.0
+nrows                      0.389  0.361  -0.298    1.059      0.004    0.004   10206.0    2942.0    1.0
+out                        0.101  0.360  -0.595    0.759      0.004    0.005    8868.0    3305.0    1.0
+skip                       0.054  0.375  -0.627    0.783      0.004    0.006    8537.0    2984.0    1.0
+1or4_top_above            -0.261  0.363  -0.915    0.429      0.004    0.005    9175.0    3017.0    1.0
+2or3_bot_below             0.241  0.349  -0.386    0.950      0.004    0.005    9748.0    2684.0    1.0
+1above                    -0.123  0.379  -0.838    0.594      0.004    0.006    8223.0    2913.0    1.0
+4above                     0.117  0.246  -0.303    0.620      0.002    0.004   10586.0    2823.0    1.0
+2below                     0.214  0.357  -0.417    0.906      0.004    0.005    9392.0    2847.0    1.0
+3below                     0.163  0.337  -0.448    0.825      0.004    0.005    8602.0    2850.0    1.0
+center                    -0.339  0.328  -1.007    0.225      0.003    0.004   10110.0    3025.0    1.0
+same                       0.334  0.385  -0.396    1.044      0.004    0.005    8700.0    2895.0    1.0
+adj_skip                   0.066  0.304  -0.510    0.632      0.003    0.005   11001.0    3012.0    1.0
+same_skip                 -0.021  0.289  -0.565    0.510      0.003    0.005    7724.0    3133.0    1.0
+1_center                   0.047  0.249  -0.430    0.506      0.002    0.005   11318.0    2740.0    1.0
+typing_time               63.729  0.443  62.935   64.596      0.005    0.003    8959.0    3168.0    1.0
+participant_intercept[0]   2.339  0.968   0.517    4.147      0.010    0.009    9360.0    2779.0    1.0
+participant_intercept[1]  -2.168  0.979  -3.992   -0.311      0.010    0.009    9110.0    2756.0    1.0
+participant_intercept[2]  -0.150  0.998  -2.037    1.671      0.010    0.018    9906.0    3103.0    1.0
+participant_intercept[3]  -0.849  0.971  -2.708    0.954      0.010    0.014    9139.0    2869.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(50, 1)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:27
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 27 seconds.
+The rhat statistic is larger than 1.01 for some parameters. This indicates problems during sampling. See https://arxiv.org/abs/1903.08008 for details
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.310  0.374  -1.011    0.384      0.004    0.004    9774.0    3240.0    1.0
+nrows                      0.381  0.357  -0.321    1.025      0.004    0.004    9257.0    3261.0    1.0
+out                        0.104  0.360  -0.525    0.840      0.004    0.006    9452.0    3325.0    1.0
+skip                       0.060  0.391  -0.696    0.764      0.004    0.006    8143.0    3247.0    1.0
+1or4_top_above            -0.255  0.354  -0.883    0.430      0.004    0.005    8953.0    3080.0    1.0
+2or3_bot_below             0.241  0.353  -0.446    0.879      0.004    0.005    9465.0    2816.0    1.0
+1above                    -0.128  0.374  -0.811    0.581      0.004    0.006    9222.0    3090.0    1.0
+4above                     0.126  0.253  -0.342    0.587      0.003    0.004    9923.0    2577.0    1.0
+2below                     0.215  0.356  -0.434    0.893      0.004    0.006    8760.0    2514.0    1.0
+3below                     0.169  0.330  -0.440    0.790      0.003    0.005   10288.0    3214.0    1.0
+center                    -0.341  0.346  -1.004    0.289      0.003    0.004   12174.0    2310.0    1.0
+same                       0.334  0.381  -0.387    1.019      0.004    0.005    8420.0    2751.0    1.0
+adj_skip                   0.057  0.305  -0.517    0.625      0.003    0.006    9024.0    2802.0    1.0
+same_skip                 -0.020  0.298  -0.596    0.518      0.003    0.006   10378.0    2562.0    1.0
+1_center                   0.048  0.247  -0.396    0.540      0.003    0.005    8785.0    2659.0    1.0
+typing_time               63.721  0.438  62.914   64.513      0.005    0.003    9375.0    2929.0    1.0
+participant_intercept[0]   2.346  0.952   0.556    4.166      0.010    0.009    8986.0    2484.0    1.0
+participant_intercept[1]  -2.159  0.960  -3.931   -0.299      0.009    0.009   12457.0    2629.0    1.0
+participant_intercept[2]  -0.163  0.982  -2.083    1.655      0.010    0.019   10320.0    2417.0    1.0
+participant_intercept[3]  -0.825  0.984  -2.621    1.101      0.010    0.014   10113.0    2378.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(50, 10)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.316  0.389  -1.022    0.429      0.004    0.005    9342.0    3162.0    1.0
+nrows                      0.383  0.367  -0.285    1.071      0.004    0.004    9585.0    3103.0    1.0
+out                        0.101  0.363  -0.571    0.806      0.004    0.006   10565.0    2984.0    1.0
+skip                       0.053  0.381  -0.667    0.743      0.004    0.006    8089.0    3283.0    1.0
+1or4_top_above            -0.257  0.368  -0.998    0.387      0.004    0.005    8934.0    2922.0    1.0
+2or3_bot_below             0.237  0.348  -0.427    0.867      0.003    0.004   11528.0    3159.0    1.0
+1above                    -0.119  0.363  -0.803    0.552      0.003    0.006   11402.0    2866.0    1.0
+4above                     0.119  0.248  -0.372    0.558      0.002    0.004   13169.0    2897.0    1.0
+2below                     0.212  0.367  -0.443    0.934      0.004    0.005   10463.0    3263.0    1.0
+3below                     0.164  0.337  -0.482    0.782      0.003    0.005    9358.0    3124.0    1.0
+center                    -0.336  0.330  -0.913    0.304      0.003    0.004    9043.0    2527.0    1.0
+same                       0.341  0.384  -0.403    1.032      0.004    0.005    8045.0    2800.0    1.0
+adj_skip                   0.064  0.295  -0.501    0.592      0.003    0.006   10669.0    2748.0    1.0
+same_skip                 -0.019  0.298  -0.564    0.555      0.003    0.006    8866.0    2452.0    1.0
+1_center                   0.045  0.258  -0.438    0.533      0.002    0.005   11556.0    2407.0    1.0
+typing_time               63.727  0.432  62.942   64.565      0.004    0.003    9512.0    2570.0    1.0
+participant_intercept[0]   2.336  0.964   0.536    4.138      0.009    0.008   10680.0    2770.0    1.0
+participant_intercept[1]  -2.160  0.969  -3.893   -0.303      0.009    0.008   10537.0    3003.0    1.0
+participant_intercept[2]  -0.171  0.957  -2.001    1.614      0.009    0.017   10524.0    2878.0    1.0
+participant_intercept[3]  -0.824  0.973  -2.714    0.921      0.009    0.013   10956.0    2759.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(50, 100)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.317  0.379  -1.035    0.377      0.004    0.005    7839.0    2810.0    1.0
+nrows                      0.383  0.349  -0.273    1.028      0.004    0.004    8426.0    3150.0    1.0
+out                        0.105  0.366  -0.541    0.816      0.004    0.006    8500.0    3357.0    1.0
+skip                       0.054  0.388  -0.643    0.800      0.004    0.007    8119.0    3000.0    1.0
+1or4_top_above            -0.254  0.366  -0.927    0.450      0.004    0.005    9676.0    2989.0    1.0
+2or3_bot_below             0.237  0.362  -0.416    0.943      0.004    0.006    8409.0    2440.0    1.0
+1above                    -0.121  0.368  -0.803    0.577      0.004    0.006    9201.0    2859.0    1.0
+4above                     0.119  0.248  -0.350    0.583      0.003    0.004    8625.0    2613.0    1.0
+2below                     0.218  0.351  -0.468    0.841      0.004    0.005    9165.0    3064.0    1.0
+3below                     0.168  0.332  -0.473    0.780      0.003    0.005   10194.0    2875.0    1.0
+center                    -0.340  0.336  -0.992    0.266      0.003    0.004    9575.0    2850.0    1.0
+same                       0.324  0.370  -0.358    1.044      0.004    0.005    7489.0    3073.0    1.0
+adj_skip                   0.063  0.298  -0.515    0.611      0.003    0.006   10616.0    2546.0    1.0
+same_skip                 -0.025  0.291  -0.544    0.521      0.003    0.006    9441.0    2695.0    1.0
+1_center                   0.047  0.254  -0.422    0.532      0.003    0.005    7517.0    2704.0    1.0
+typing_time               63.720  0.431  62.884   64.510      0.005    0.003    8361.0    3066.0    1.0
+participant_intercept[0]   2.324  0.966   0.639    4.207      0.011    0.009    8363.0    2564.0    1.0
+participant_intercept[1]  -2.169  0.983  -4.013   -0.386      0.011    0.009    8283.0    2605.0    1.0
+participant_intercept[2]  -0.149  1.014  -2.207    1.650      0.010    0.022   10505.0    2222.0    1.0
+participant_intercept[3]  -0.814  0.970  -2.650    0.994      0.010    0.013    9019.0    2689.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(100, 1)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.321  0.372  -1.009    0.373      0.004    0.005    8758.0    3387.0    1.0
+nrows                      0.383  0.350  -0.280    1.017      0.004    0.004    8895.0    3176.0    1.0
+out                        0.102  0.365  -0.586    0.756      0.004    0.005    9851.0    3331.0    1.0
+skip                       0.049  0.381  -0.689    0.747      0.004    0.007    9680.0    2926.0    1.0
+1or4_top_above            -0.244  0.362  -0.903    0.450      0.004    0.005    8944.0    2755.0    1.0
+2or3_bot_below             0.237  0.359  -0.402    0.947      0.003    0.005   11399.0    2633.0    1.0
+1above                    -0.117  0.367  -0.813    0.550      0.004    0.006    9551.0    3303.0    1.0
+4above                     0.121  0.246  -0.371    0.558      0.002    0.004   14327.0    3049.0    1.0
+2below                     0.205  0.367  -0.492    0.868      0.004    0.005   10265.0    2724.0    1.0
+3below                     0.167  0.330  -0.455    0.784      0.003    0.005    9356.0    2916.0    1.0
+center                    -0.347  0.332  -0.962    0.299      0.004    0.004    8671.0    2825.0    1.0
+same                       0.339  0.374  -0.334    1.041      0.004    0.005    8221.0    3046.0    1.0
+adj_skip                   0.062  0.308  -0.544    0.622      0.003    0.006    9749.0    2814.0    1.0
+same_skip                 -0.019  0.284  -0.538    0.559      0.003    0.005   10379.0    2518.0    1.0
+1_center                   0.046  0.242  -0.409    0.478      0.002    0.004   11170.0    3104.0    1.0
+typing_time               63.736  0.417  62.961   64.526      0.005    0.003    8080.0    3349.0    1.0
+participant_intercept[0]   2.348  0.979   0.536    4.146      0.009    0.008   11583.0    2620.0    1.0
+participant_intercept[1]  -2.151  0.970  -3.927   -0.295      0.010    0.009    8820.0    2596.0    1.0
+participant_intercept[2]  -0.138  0.988  -1.966    1.743      0.009    0.018   11187.0    2460.0    1.0
+participant_intercept[3]  -0.800  0.980  -2.684    0.959      0.010    0.013    9439.0    2486.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(100, 10)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+The rhat statistic is larger than 1.01 for some parameters. This indicates problems during sampling. See https://arxiv.org/abs/1903.08008 for details
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.316  0.381  -0.986    0.446      0.004    0.005   10768.0    3091.0    1.0
+nrows                      0.384  0.349  -0.289    1.016      0.004    0.004    8762.0    2820.0    1.0
+out                        0.102  0.361  -0.564    0.764      0.004    0.006    8693.0    3545.0    1.0
+skip                       0.053  0.379  -0.671    0.758      0.004    0.006    9277.0    2967.0    1.0
+1or4_top_above            -0.257  0.359  -0.924    0.417      0.004    0.005   10209.0    3171.0    1.0
+2or3_bot_below             0.233  0.359  -0.439    0.915      0.003    0.006   10939.0    2673.0    1.0
+1above                    -0.123  0.365  -0.795    0.556      0.004    0.006    9330.0    2997.0    1.0
+4above                     0.123  0.255  -0.334    0.618      0.002    0.004   11965.0    2806.0    1.0
+2below                     0.211  0.366  -0.476    0.910      0.004    0.005    8751.0    2678.0    1.0
+3below                     0.169  0.330  -0.450    0.777      0.003    0.005   10290.0    3028.0    1.0
+center                    -0.338  0.330  -0.962    0.279      0.003    0.004    9746.0    3133.0    1.0
+same                       0.330  0.374  -0.386    1.026      0.003    0.004   12058.0    3144.0    1.0
+adj_skip                   0.064  0.305  -0.500    0.638      0.003    0.006   10687.0    2595.0    1.0
+same_skip                 -0.024  0.292  -0.565    0.524      0.003    0.005    9828.0    2897.0    1.0
+1_center                   0.044  0.249  -0.433    0.503      0.003    0.005    9758.0    2054.0    1.0
+typing_time               63.720  0.419  62.944   64.556      0.004    0.003    8937.0    3114.0    1.0
+participant_intercept[0]   2.337  0.963   0.522    4.099      0.010    0.008   10290.0    2536.0    1.0
+participant_intercept[1]  -2.155  0.985  -4.137   -0.412      0.009    0.009   11021.0    2233.0    1.0
+participant_intercept[2]  -0.151  1.004  -2.062    1.657      0.009    0.019   11690.0    2701.0    1.0
+participant_intercept[3]  -0.836  0.993  -2.654    1.038      0.010    0.013   10311.0    2749.0    1.0
+
+==================================================
+
+Running model with typing_time prior: N(100, 100)
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, typing_time, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:25
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 26 seconds.
+20
+                            mean     sd  hdi_3%  hdi_97%  mcse_mean  mcse_sd  ess_bulk  ess_tail  r_hat
+ncols                     -0.313  0.384  -1.045    0.400      0.004    0.005   10851.0    3163.0    1.0
+nrows                      0.379  0.363  -0.291    1.061      0.004    0.004    8734.0    3273.0    1.0
+out                        0.098  0.362  -0.572    0.808      0.004    0.006    8206.0    3164.0    1.0
+skip                       0.065  0.394  -0.689    0.763      0.004    0.007    8823.0    2805.0    1.0
+1or4_top_above            -0.256  0.364  -0.939    0.432      0.004    0.005    9710.0    2866.0    1.0
+2or3_bot_below             0.246  0.354  -0.427    0.895      0.003    0.005   11408.0    2687.0    1.0
+1above                    -0.129  0.364  -0.800    0.571      0.004    0.006    7941.0    3303.0    1.0
+4above                     0.117  0.240  -0.306    0.587      0.002    0.004   10955.0    3027.0    1.0
+2below                     0.209  0.354  -0.467    0.880      0.004    0.006    9303.0    2747.0    1.0
+3below                     0.165  0.334  -0.467    0.795      0.004    0.005    7587.0    2793.0    1.0
+center                    -0.339  0.330  -0.979    0.274      0.003    0.004   10986.0    2502.0    1.0
+same                       0.330  0.374  -0.401    0.989      0.004    0.004    8091.0    3013.0    1.0
+adj_skip                   0.063  0.302  -0.491    0.642      0.003    0.005   10548.0    2907.0    1.0
+same_skip                 -0.018  0.283  -0.548    0.535      0.003    0.005    9716.0    3025.0    1.0
+1_center                   0.044  0.245  -0.414    0.512      0.003    0.004    8585.0    2647.0    1.0
+typing_time               63.726  0.446  62.903   64.553      0.005    0.003    9041.0    2717.0    1.0
+participant_intercept[0]   2.331  0.936   0.637    4.176      0.010    0.008    8947.0    2788.0    1.0
+participant_intercept[1]  -2.146  0.947  -3.932   -0.374      0.011    0.009    7355.0    2896.0    1.0
+participant_intercept[2]  -0.130  1.000  -1.903    1.827      0.010    0.022   10851.0    2430.0    1.0
+participant_intercept[3]  -0.809  1.014  -2.785    1.034      0.011    0.016    8699.0    2633.0    1.0
+
+==================================================
+
+
+ ---- Run Bayesian cross-validation ---- 
+
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:20
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 20 seconds.
+All parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Feature-based parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Manual parameters: []
+Cross-validation fold score: 0.07671320486001412
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:20
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 21 seconds.
+All parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Feature-based parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Manual parameters: []
+Cross-validation fold score: 0.07671320486001412
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:20
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 20 seconds.
+All parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Feature-based parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Manual parameters: []
+Cross-validation fold score: 0.0767132048600141
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:20
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 21 seconds.
+All parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Feature-based parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Manual parameters: []
+Cross-validation fold score: 0.0767132048600141
+
+ ---- Train Bayesian GLMM ---- 
+
+Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Multiprocess sampling (4 chains in 4 jobs)
+NUTS: [ncols, nrows, out, skip, 1or4_top_above, 2or3_bot_below, 1above, 4above, 2below, 3below, center, same, adj_skip, same_skip, 1_center, participant_intercept, sigma]
+Sampling 4 chains, 0 divergences ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00 / 0:00:20
+Sampling 4 chains for 1_000 tune and 1_000 draw iterations (4_000 + 4_000 draws total) took 21 seconds.
+All parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Feature-based parameters: ['ncols', 'nrows', 'out', 'skip', '1or4_top_above', '2or3_bot_below', '1above', '4above', '2below', '3below', 'center', 'same', 'adj_skip', 'same_skip', '1_center']
+Manual parameters: []
+Cross-validation fold score: 0.0767132048600141
+Mean CV Score: 0.07671320486001411
+

@@ -1458,12 +1458,18 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
+    # Run analysis on comparisons of repeat-key bigrams (only collected data on 4: "aa", "ss", "dd", "ff")
     run_samekey_analysis = False
-    plot_bigram_pair_graph = True
+
+    # Run analyses on the feature space, and sensitivity and generalizability of priors
     run_analyze_feature_space = True
     run_sensitivity_analysis = True
     run_cross_validation = True
+
+    # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
     run_glmm = False
+
+    # Incomplete
     run_optimize_layout = False
 
     #=====================================#
@@ -1479,9 +1485,9 @@ if __name__ == "__main__":
 
     # Load the CSV file into a pandas DataFrame
     csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
     #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
     #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
     bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
     # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
@@ -1523,11 +1529,13 @@ if __name__ == "__main__":
     #=====================================================================================================#
     # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
     #=====================================================================================================#
-    # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
-    if plot_bigram_pair_graph:
-        plot_bigram_graph(bigram_pairs)
-
     if run_analyze_feature_space:
+
+        # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
+        plot_bigram_pair_graph = False
+        if plot_bigram_pair_graph:
+            plot_bigram_graph(bigram_pairs)
+
         pca, scaler, hull = analyze_feature_space(feature_matrix)
         grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
         new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
