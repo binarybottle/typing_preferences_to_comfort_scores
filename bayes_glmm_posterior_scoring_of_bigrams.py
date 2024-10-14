@@ -15,7 +15,6 @@ import pymc as pm
 import arviz as az
 import ast
 import json
-import pickle
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -1283,7 +1282,8 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants=None,
 
     return trace, model, all_priors
 
-def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None):
+def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None, 
+                                      output_filename="bigram_typing_comfort_scores.csv"):
     """
     Generate latent comfort scores using the full posterior distributions from a Bayesian GLMM.
     This version handles both feature-based and manual priors.
@@ -1371,102 +1371,109 @@ def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, param
     # Average the scores for each bigram
     bigram_comfort_scores = {bigram: np.mean(scores) for bigram, scores in bigram_comfort_scores.items()}
     
+    # Convert dictionary to DataFrame and store as csv file
+    df = pd.DataFrame.from_dict(bigram_comfort_scores, orient='index', columns=['bigram_comfort_score'])
+    df.index.name = 'bigram'
+    df.to_csv(f"{output_filename}")
+    print(f"Bigram typing comfort scores saved to {output_filename}")
+
     return bigram_comfort_scores
 
-def save_glmm_results(trace, model, priors, base_filename):
+def save_glmm_results(trace, model, base_filename):
     # Save trace
     az.to_netcdf(trace, filename=f"{base_filename}_trace.nc")
     
-    # Save model
-    with model:
-        pm.save_trace(trace, directory=f"{base_filename}_model_trace")
+    # Save point estimates
+    point_estimates = az.summary(trace)
+    point_estimates.to_csv(f"{base_filename}_point_estimates.csv")
     
-    # Save priors
-    with open(f"{base_filename}_priors.json", "w") as f:
-        json.dump(priors, f)
+    # Save model configuration
+    model_config = {
+        'input_vars': [var.name for var in model.named_vars.values() if hasattr(var, 'distribution')],
+        'observed_vars': [var.name for var in model.observed_RVs],
+        'free_vars': [var.name for var in model.free_RVs],
+    }
     
-    # Save the entire model object (optional, as it can be large)
-    with open(f"{base_filename}_full_model.pkl", "wb") as f:
-        pickle.dump(model, f)
-   
-#=====================#
-# Layout optimization #
-#=====================#
-def is_unique(layout):
-    """ Check if all characters in the layout are unique. """
-    return len(layout) == len(set(layout))
+    # Save prior information
+    prior_info = {}
+    for var in model.named_vars.values():
+        if hasattr(var, 'distribution'):
+            prior_info[var.name] = {
+                'distribution': var.distribution.__class__.__name__,
+                'parameters': {k: str(v) for k, v in var.distribution.parameters.items() if k != 'name'}
+            }
+    
+    # Combine model config and prior info
+    model_info = {
+        'config': model_config,
+        'priors': prior_info
+    }
+    
+    with open(f"{base_filename}_model_info.json", "w") as f:
+        json.dump(model_info, f, indent=2)
 
-def evaluate_layout(layout, bigram_data, model, bigram_features):
-    """
-    Evaluate the layout by calculating its score using precomputed bigram features.
+def load_glmm_results(base_filename):
+    # Load trace
+    trace = az.from_netcdf(f"{base_filename}_trace.nc")
     
-    Parameters:
-    - layout: A string representing the keyboard layout.
-    - bigram_data: Data containing bigram preferences.
-    - model: Trained Ridge regression model.
-    - bigram_features: Dictionary of precomputed bigram features.
+    # Load point estimates
+    point_estimates = pd.read_csv(f"{base_filename}_point_estimates.csv", index_col=0)
     
-    Returns:
-    - score: The calculated score for the layout.
-    """
-    total_score = 0
-    layout_map = {char: idx for idx, char in enumerate(layout)}
+    # Load model info (including priors)
+    with open(f"{base_filename}_model_info.json", "r") as f:
+        model_info = json.load(f)
+    
+    return trace, point_estimates, model_info
 
-    # Iterate through each bigram in the data and calculate its score
-    for _, row in bigram_data.iterrows():
-        char1, char2 = row['bigram1'][0], row['bigram1'][1]  # Split the bigram into individual characters
+def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None, mirror_scores=True):
+    # Extract variable names from the trace
+    all_vars = list(trace.posterior.data_vars)
+    
+    # If params is not provided, use all parameters except 'participant_intercept' and 'sigma'
+    if params is None:
+        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
+    
+    # Extract posterior samples for all parameters
+    posterior_samples = {param: az.extract(trace, var_names=param).values for param in params}
+    
+    # Calculate comfort scores for each bigram
+    all_bigram_scores = {}
+    for bigram, features in all_bigram_features.iterrows():
+        # Calculate score using feature-based parameters
+        scores = np.zeros(len(next(iter(posterior_samples.values()))))
+        for param in params:
+            if param in features.index:
+                scores += posterior_samples[param] * features[param]
         
-        if char1 in layout_map and char2 in layout_map:
-            bigram = (char1, char2)
-
-            if bigram in bigram_features:
-                # Use precomputed features
-                feature_vector = bigram_features[bigram].reshape(1, -1)
-
-                # Predict the score for this bigram using the model
-                predicted_score = model.predict(feature_vector)
-
-                # Accumulate the score (e.g., sum predicted preferences)
-                total_score += predicted_score[0]
+        # Use the mean score across all posterior samples
+        all_bigram_scores[bigram] = np.mean(scores)
     
-    return total_score
-
-# Optimize the layout using differential evolution
-def optimize_layout(initial_layout, bigram_data, model, bigram_features):
-    """
-    Optimize the keyboard layout using differential evolution and precomputed bigram features.
+    # Normalize scores to 0-1 range
+    min_score = min(all_bigram_scores.values())
+    max_score = max(all_bigram_scores.values())
+    normalized_scores = {bigram: (score - min_score) / (max_score - min_score) 
+                         for bigram, score in all_bigram_scores.items()}
     
-    Parameters:
-    - initial_layout: The starting layout.
-    - bigram_data: Bigram preference data.
-    - model: Trained Ridge regression model.
-    - bigram_features: Dictionary of precomputed bigram features.
-    
-    Returns:
-    - optimized_layout: The optimized keyboard layout.
-    - improvement: The score improvement.
-    """
-    layout_chars = list(initial_layout)
-
-    def score_layout(layout):
-        layout_str = ''.join(layout.astype(str))  # Convert the array back to string format
+    # Create a mapping for the right-hand keys
+    if mirror_scores:
+        left_keys = "qwertasdfgzxcvb"
+        right_keys = "poiuy;lkjh/.,mn"
+        key_mapping = dict(zip(left_keys, right_keys))
         
-        if not is_unique(layout_str):  # Check if layout has repeated characters
-            return np.inf  # Penalize layouts with repeated characters
+        # Add scores for right-hand bigrams
+        right_scores = {}
+        for bigram, score in normalized_scores.items():
+            if isinstance(bigram, tuple) and len(bigram) == 2:
+                right_bigram = (key_mapping.get(bigram[0], bigram[0]), 
+                                key_mapping.get(bigram[1], bigram[1]))
+                right_scores[right_bigram] = score
         
-        # Use the updated evaluate_layout function with precomputed features
-        layout_score = evaluate_layout(layout_str, bigram_data, model, bigram_features)
-        return -layout_score  # Minimize the negative score for differential evolution
-
-    bounds = [(0, len(layout_chars) - 1)] * len(layout_chars)
+        # Combine left and right scores
+        all_scores = {**normalized_scores, **right_scores}
+    else:
+        all_scores = normalized_scores
     
-    result = differential_evolution(score_layout, bounds, maxiter=1000, popsize=15, tol=1e-6)
-    
-    optimized_layout = ''.join([layout_chars[int(round(i))] for i in result.x])  # Round and convert to indices
-    improvement = -result.fun
-    
-    return optimized_layout, improvement
-
+    return all_scores
 
 
 ####################################################################################################
@@ -1476,118 +1483,127 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
 #==============#
 if __name__ == "__main__":
 
-    # Run analysis on comparisons of repeat-key bigrams (only collected data on 4: "aa", "ss", "dd", "ff")
-    run_samekey_analysis = False
-
     # Run analyses on the feature space, and sensitivity and generalizability of priors
     run_analyze_feature_space = False
+    # The following can only run if run_analyze_feature_space = True
     run_sensitivity_analysis = False
     run_cross_validation = False
+    # Run the above on comparisons of repeat-key bigrams (only collected data on 4: "aa", "ss", "dd", "ff")
+    run_samekey_analysis = False
 
     # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
-    run_glmm = True
+    run_glmm = False
+
+    # Score all bigrams based on the output of the GLMM
+    score_all_bigrams = True
 
     # Incomplete
     run_optimize_layout = False
 
-    #=====================================#
-    # Load, prepare, and analyze features #
-    #=====================================#
-    print("\n ---- Load, prepare, and analyze features ---- \n")
-    layout_chars = list("qwertasdfgzxcvb")  #layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
+    #===========================================#
+    # Run feature analyses or GLMM on LEFT keys #
+    #===========================================#
+    left_layout_chars = list("qwertasdfgzxcvb")
 
-    # Precompute all bigram features and differences between the features of every pair of bigrams
-    all_bigrams, all_bigram_features, feature_names, samekey_bigrams, samekey_bigram_features, \
-        samekey_feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
-    all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
+    if run_analyze_feature_space or run_glmm:
 
-    # Load the CSV file into a pandas DataFrame
-    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
-    bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
+        #=================================================#
+        # Load, prepare, and analyze LEFT bigram features #
+        #=================================================#
+        print("\n ---- Load, prepare, and analyze features ---- \n")
 
-    # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
-    bigram_pairs = [ast.literal_eval(bigram_pair) for bigram_pair in bigram_data['bigram_pair']]
-    bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]     # Split each bigram in the pair into its individual characters
-    slider_values = bigram_data['abs_sliderValue']
-    typing_times = bigram_data['chosen_bigram_time']
-    # Extract participant IDs as codes and ensure a 1D numpy array of integers
-    participants = pd.Categorical(bigram_data['user_id']).codes
-    participants = participants.astype(int)  # Already flattened, so no need for .flatten()
+        # Precompute all bigram features and differences between the features of every pair of bigrams
+        all_bigrams, all_bigram_features, feature_names, samekey_bigrams, samekey_bigram_features, \
+            samekey_feature_names = precompute_all_bigram_features(left_layout_chars, column_map, row_map, finger_map)
+        all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
-    if run_samekey_analysis:
-        all_samekey_feature_differences = precompute_bigram_feature_differences(samekey_bigram_features)
-        # Filter out bigram pairs where either bigram is not in the precomputed features
-        bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_samekey_feature_differences]
-        target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
-        participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
+        # Load the CSV file into a pandas DataFrame
+        csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+        bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
-        # Create a DataFrame for the feature matrix, using precomputed features for the bigram pairs
-        feature_matrix_data = [all_samekey_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
-        feature_matrix = pd.DataFrame(feature_matrix_data, columns=samekey_feature_names, index=bigram_pairs)
-    else:
-        # Filter out bigram pairs where either bigram is not in the precomputed differences
-        bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_feature_differences]
-        target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
-        participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
+        # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
+        bigram_pairs = [ast.literal_eval(bigram_pair) for bigram_pair in bigram_data['bigram_pair']]
+        bigram_pairs = [((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1])) for bigram1, bigram2 in bigram_pairs]     # Split each bigram in the pair into its individual characters
+        slider_values = bigram_data['abs_sliderValue']
+        typing_times = bigram_data['chosen_bigram_time']
+        # Extract participant IDs as codes and ensure a 1D numpy array of integers
+        participants = pd.Categorical(bigram_data['user_id']).codes
+        participants = participants.astype(int)  # Already flattened, so no need for .flatten()
 
-        # Create a DataFrame for the feature matrix, using precomputed feature differences for the bigram pairs
-        feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
-        feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
+        if run_samekey_analysis:
+            all_samekey_feature_differences = precompute_bigram_feature_differences(samekey_bigram_features)
+            # Filter out bigram pairs where either bigram is not in the precomputed features
+            bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_samekey_feature_differences]
+            target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+            participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
 
-        #-------------------------
-        # Add feature interactions
-        #-------------------------
-        n_feature_interactions = 2
-        feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
-        feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
+            # Create a DataFrame for the feature matrix, using precomputed features for the bigram pairs
+            feature_matrix_data = [all_samekey_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
+            feature_matrix = pd.DataFrame(feature_matrix_data, columns=samekey_feature_names, index=bigram_pairs)
+        else:
+            # Filter out bigram pairs where either bigram is not in the precomputed differences
+            bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_feature_differences]
+            target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
+            participants = np.array([participants[idx] for idx, bigram in enumerate(bigram_pairs)])
 
-    #=====================================================================================================#
-    # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
-    #=====================================================================================================#
-    if run_analyze_feature_space:
+            # Create a DataFrame for the feature matrix, using precomputed feature differences for the bigram pairs
+            feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
+            feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
 
-        # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
-        plot_bigram_pair_graph = False
-        if plot_bigram_pair_graph:
-            plot_bigram_graph(bigram_pairs)
+            #-------------------------
+            # Add feature interactions
+            #-------------------------
+            n_feature_interactions = 2
+            feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
+            feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
 
-        pca, scaler, hull = analyze_feature_space(feature_matrix)
-        grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
-        new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
+        #=====================================================================================================#
+        # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
+        #=====================================================================================================#
+        if run_analyze_feature_space:
 
-        # Timing data should be in the last column (prior appended to all_priors in train_bayesian_glmm)
-        if n_feature_interactions > 0:
-            new_feature_differences = new_feature_differences[:, :-n_feature_interactions]  # Removes the last n columns
-        suggested_bigram_pairs = features_to_bigram_pairs(new_feature_differences, all_feature_differences)
+            # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
+            plot_bigram_pair_graph = False
+            if plot_bigram_pair_graph:
+                plot_bigram_graph(bigram_pairs)
 
-        print("Suggested new bigram pairs to collect data for:")
-        for pair in suggested_bigram_pairs:
-            print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+            pca, scaler, hull = analyze_feature_space(feature_matrix)
+            grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
+            new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
 
-        n_recommendations = 30
-        extended_suggestions = generate_extended_recommendations(new_feature_differences, all_feature_differences, 
-                                                                 suggested_bigram_pairs, n_recommendations)
+            # Timing data should be in the last column (prior appended to all_priors in train_bayesian_glmm)
+            if n_feature_interactions > 0:
+                new_feature_differences = new_feature_differences[:, :-n_feature_interactions]  # Removes the last n columns
+            suggested_bigram_pairs = features_to_bigram_pairs(new_feature_differences, all_feature_differences)
 
-        print("Extended list of suggested bigram pairs to collect data for:")
-        for i, pair in enumerate(extended_suggestions):
-            print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+            print("Suggested new bigram pairs to collect data for:")
+            for pair in suggested_bigram_pairs:
+                print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
 
-    # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
-    check_multicollinearity(feature_matrix)
+            n_recommendations = 30
+            extended_suggestions = generate_extended_recommendations(new_feature_differences, all_feature_differences, 
+                                                                     suggested_bigram_pairs, n_recommendations)
 
-    # Sensitivity analysis to determine how much each prior influences the results
-    if run_sensitivity_analysis:
-        sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
-                                                           selected_feature_names=None,
-                                                           typing_times=typing_times, 
-                                                           prior_means=[0, 50, 100], 
-                                                           prior_stds=[1, 10, 100])
-    if run_cross_validation:
-        cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
-                        feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
+            print("Extended list of suggested bigram pairs to collect data for:")
+            for i, pair in enumerate(extended_suggestions):
+                print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+
+            # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
+            check_multicollinearity(feature_matrix)
+
+            # Sensitivity analysis to determine how much each prior influences the results
+            if run_sensitivity_analysis:
+                sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
+                                                                selected_feature_names=None,
+                                                                typing_times=typing_times, 
+                                                                prior_means=[0, 50, 100], 
+                                                                prior_stds=[1, 10, 100])
+            if run_cross_validation:
+                cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
+                                feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
         
     #===========================================================#
     # Train a Bayesian GLMM and score using Bayesian posteriors #
@@ -1605,33 +1621,55 @@ if __name__ == "__main__":
             num_samples=2000, 
             chains=8)
 
-        # Plot the posterior summary
-        print(az.summary(trace))  
+        # Generate the summary of the posterior trace
+        summary = az.summary(trace)
+
+        # Define the number of rows to print
+        print_nrows = 15
+
+        # Print the first `print_nrows` rows of the summary
+        print(summary.head(print_nrows))
+        print("\n" + "=" * 50 + "\n")
+
+        # Plot the trace for visual inspection
         az.plot_trace(trace)
 
-        # Save trace, model, and priors
-        save_glmm_results(trace, model, priors, "glmm_results")
+        # Save trace, point estimates, model configuration, and prior information
+        save_glmm_results(trace, model, "output/glmm_results")
 
         print("\n ---- Score comfort using Bayesian posteriors ---- \n")
         # Generate bigram typing comfort scores using the Bayesian posteriors
-        bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None)
-        print(bigram_comfort_scores)
-
+        bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None,
+                                                                  output_filename = "output/bigram_typing_comfort_scores.csv")
         # Print the comfort score for a specific bigram
-        print(bigram_comfort_scores['df'])
+        #print(bigram_comfort_scores)
+        #print(bigram_comfort_scores['df'])
 
-    #==========================#
-    # Optimize keyboard layout #
-    #==========================#
-    if run_optimize_layout:
-        # Initial layout
-        initial_layout = layout_chars
+    #=========================================================================#
+    # Score all LEFT bigrams based on the output of the GLMM, mirror on RIGHT #
+    #=========================================================================#
+    if score_all_bigrams:
 
-        # Optimize the layout
-        #optimized_layout, improvement = optimize_layout(initial_layout, scored_bigram_data_df, model, bigram_features)
+        # Load the precomputed bigram features for all bigrams
+        all_bigrams, all_bigram_features, feature_names, _, _, _ = precompute_all_bigram_features(left_layout_chars, 
+                                                                        column_map, row_map, finger_map)
 
-        # Print results
-        #print(f"Initial layout: {initial_layout}")
-        #print(f"Optimized layout: {optimized_layout}")
-        #print(f"Score improvement: {improvement}")
+        # Load the left bigram comfort scores from the CSV file
+        comfort_scores = pd.read_csv("output/bigram_typing_comfort_scores.csv", index_col='bigram')
+
+        # Load the GLMM results
+        loaded_trace, loaded_point_estimates, loaded_model_info = load_glmm_results("output/glmm_results")
+
+        # Calculate comfort scores for all (left and mirrored right) bigrams
+        all_bigram_comfort_scores = calculate_all_bigram_comfort_scores(loaded_trace, all_bigram_features,
+                                                                        params=None, mirror_scores=True)
+
+        # Convert to DataFrame and save to CSV
+        all_scores_df = pd.DataFrame.from_dict(all_bigram_comfort_scores, orient='index', columns=['comfort_score'])
+        all_scores_df.index = all_scores_df.index.map(lambda x: ''.join(x) if isinstance(x, tuple) else x)  # Convert tuple index to string
+        all_scores_df.index.name = 'bigram'
+        output_filename_all_scores = "output/all_bigram_comfort_scores.csv"
+        all_scores_df.to_csv(f"{output_filename_all_scores}")
+
+        print(f"Comfort scores for all bigrams (including right-hand mirrors) saved to {output_filename_all_scores}")
 
