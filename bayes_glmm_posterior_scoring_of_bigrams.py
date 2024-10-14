@@ -14,6 +14,8 @@ import networkx as nx
 import pymc as pm
 import arviz as az
 import ast
+import json
+import pickle
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -1370,6 +1372,22 @@ def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, param
     bigram_comfort_scores = {bigram: np.mean(scores) for bigram, scores in bigram_comfort_scores.items()}
     
     return bigram_comfort_scores
+
+def save_glmm_results(trace, model, priors, base_filename):
+    # Save trace
+    az.to_netcdf(trace, filename=f"{base_filename}_trace.nc")
+    
+    # Save model
+    with model:
+        pm.save_trace(trace, directory=f"{base_filename}_model_trace")
+    
+    # Save priors
+    with open(f"{base_filename}_priors.json", "w") as f:
+        json.dump(priors, f)
+    
+    # Save the entire model object (optional, as it can be large)
+    with open(f"{base_filename}_full_model.pkl", "wb") as f:
+        pickle.dump(model, f)
    
 #=====================#
 # Layout optimization #
@@ -1462,12 +1480,12 @@ if __name__ == "__main__":
     run_samekey_analysis = False
 
     # Run analyses on the feature space, and sensitivity and generalizability of priors
-    run_analyze_feature_space = True
-    run_sensitivity_analysis = True
-    run_cross_validation = True
+    run_analyze_feature_space = False
+    run_sensitivity_analysis = False
+    run_cross_validation = False
 
     # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
-    run_glmm = False
+    run_glmm = True
 
     # Incomplete
     run_optimize_layout = False
@@ -1578,18 +1596,21 @@ if __name__ == "__main__":
         if run_samekey_analysis:
             selected_feature_names = None
         else:
-            selected_feature_names = ['same_finger', 'outward_roll', 'adjacent_fingers']
+            selected_feature_names = None  #['same', 'skip']
 
         trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
             selected_feature_names=selected_feature_names, 
             typing_times=typing_times,
             inference_method="mcmc", 
-            num_samples=1000, 
-            chains=4)
+            num_samples=2000, 
+            chains=8)
 
         # Plot the posterior summary
         print(az.summary(trace))  
         az.plot_trace(trace)
+
+        # Save trace, model, and priors
+        save_glmm_results(trace, model, priors, "glmm_results")
 
         print("\n ---- Score comfort using Bayesian posteriors ---- \n")
         # Generate bigram typing comfort scores using the Bayesian posteriors
@@ -1597,7 +1618,7 @@ if __name__ == "__main__":
         print(bigram_comfort_scores)
 
         # Print the comfort score for a specific bigram
-        print(bigram_comfort_scores['aa'])
+        print(bigram_comfort_scores['df'])
 
     #==========================#
     # Optimize keyboard layout #
