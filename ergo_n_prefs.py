@@ -3,14 +3,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from scipy.optimize import differential_evolution, minimize
 from sklearn.model_selection import GroupKFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from scipy.optimize import differential_evolution, minimize
+from scipy.spatial import ConvexHull
+from scipy.spatial.distance import cdist
+from itertools import product
 import networkx as nx
 import pymc as pm
-from itertools import permutations
-from itertools import product
-import ast
 import arviz as az
+import ast
 
 #=====================================#
 # Keyboard layout and finger mappings #
@@ -100,7 +103,7 @@ def same_key(char1, char2):
     else:
         return 0
 
-def adjacent_fingers(char1, char2, column_map, finger_map):
+def adjacent_finger(char1, char2, column_map, finger_map):
     """
     Check if adjacent fingers on the same hand type the two keys.
       1: adjacent fingers
@@ -110,6 +113,90 @@ def adjacent_fingers(char1, char2, column_map, finger_map):
         finger_difference = abs(finger_map[char2] - finger_map[char1])
         if finger_difference == 1:
             return 1
+        else:
+            return 0
+    else:
+        return 0
+
+def adj_finger_diff_row(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if adjacent fingers on the same hand type the two keys on different rows.
+      1: adjacent fingers, different rows
+      0: non-adjacent fingers and/or same row
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if adjacent_finger(char1, char2, column_map, finger_map) == 1 and \
+           rows_apart(char1, char2, column_map, row_map) > 0:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+
+def adj_finger_skip(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if adjacent fingers on the same hand type skip the home row.
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if adjacent_finger(char1, char2, column_map, finger_map) == 1 and \
+           rows_apart(char1, char2, column_map, row_map) == 2:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+
+def finger1skip2(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if adjacent fingers 1 & 2 on the same hand type two keys skipping the home row.
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if skip_home(char1, char2, column_map, row_map) == 1:
+            if (finger_map[char1] == 1 and finger_map[char2] == 2) or \
+               (finger_map[char1] == 2 and finger_map[char2] == 1):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger2skip3(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if adjacent fingers 2 & 3 on the same hand type two keys skipping the home row.
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if skip_home(char1, char2, column_map, row_map) == 1:
+            if (finger_map[char1] == 2 and finger_map[char2] == 3) or \
+               (finger_map[char1] == 3 and finger_map[char2] == 2):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger3skip4(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if adjacent fingers 3 & 4 on the same hand type two keys skipping the home row.
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if skip_home(char1, char2, column_map, row_map) == 1:
+            if (finger_map[char1] == 3 and finger_map[char2] == 4) or \
+               (finger_map[char1] == 4 and finger_map[char2] == 3):
+                return 1
+            else:
+                return 0
         else:
             return 0
     else:
@@ -177,6 +264,78 @@ def finger1_above(char1, char2, column_map, row_map, finger_map):
     else:
         return 0
 
+def finger2_above(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger2 types a key on a row above the other key typed by another finger on the same hand.
+      1: finger2 above
+      0: finger2 not above
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger2(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger3_above(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger3 types a key on a row above the other key typed by another finger on the same hand.
+      1: finger3 above
+      0: finger3 not above
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger3(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger4_above(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger4 types a key on a row above the other key typed by another finger on the same hand.
+      1: finger4 above
+      0: finger4 not above
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger4(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 4 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 4 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger1_below(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger1 types a key on a row below the other key typed by another finger on the same hand.
+      1: finger1 below
+      0: finger1 not below
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger1(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 1 and row_map[char1] < row_map[char2]) or \
+               (finger_map[char2] == 1 and row_map[char2] < row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
 def finger2_below(char1, char2, column_map, row_map, finger_map):
     """
     Check if finger2 types a key on a row below the other key typed by another finger on the same hand.
@@ -184,7 +343,7 @@ def finger2_below(char1, char2, column_map, row_map, finger_map):
       0: finger2 not below
     """
     if same_hand(char1, char2, column_map) == 1:
-        if (finger_map[char1] == 2 or finger_map[char2] == 2) and (finger_map[char1] != finger_map[char2]):
+        if finger2(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
             if (finger_map[char1] == 2 and row_map[char1] < row_map[char2]) or \
                (finger_map[char2] == 2 and row_map[char2] < row_map[char1]):
                 return 1
@@ -202,7 +361,7 @@ def finger3_below(char1, char2, column_map, row_map, finger_map):
       0: finger3 not below
     """
     if same_hand(char1, char2, column_map) == 1:
-        if (finger_map[char1] == 3 or finger_map[char2] == 3) and (finger_map[char1] != finger_map[char2]):
+        if finger3(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
             if (finger_map[char1] == 3 and row_map[char1] < row_map[char2]) or \
                (finger_map[char2] == 3 and row_map[char2] < row_map[char1]):
                 return 1
@@ -213,19 +372,174 @@ def finger3_below(char1, char2, column_map, row_map, finger_map):
     else:
         return 0
 
-def finger4_above(char1, char2, column_map, row_map, finger_map):
+def finger4_below(char1, char2, column_map, row_map, finger_map):
     """
-    Check if finger4 types a key on a row above the other key typed by another finger on the same hand.
-      1: finger4 above
-      0: finger4 not above
+    Check if finger4 types a key on a row below the other key typed by another finger on the same hand.
+      1: finger4 below
+      0: finger4 not below
     """
     if same_hand(char1, char2, column_map) == 1:
-        if (finger_map[char1] == 4 or finger_map[char2] == 4) and (finger_map[char1] != finger_map[char2]):
+        if finger4(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
+            if (finger_map[char1] == 4 and row_map[char1] < row_map[char2]) or \
+               (finger_map[char2] == 4 and row_map[char2] < row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger1above2(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger1 types a key on a row above finger2 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger1(char1, char2, finger_map) == 1 and finger2(char1, char2, finger_map) == 1:
+            if (finger_map[char1] == 1 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 1 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger2above1(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger2 types a key on a row above finger1 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger1(char1, char2, finger_map) == 1 and finger2(char1, char2, finger_map) == 1:
+            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger2above3(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger2 types a key on a row above finger3 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger2(char1, char2, finger_map) == 1 and finger3(char1, char2, finger_map) == 1:
+            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger3above2(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger3 types a key on a row above finger2 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger2(char1, char2, finger_map) == 1 and finger3(char1, char2, finger_map) == 1:
+            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger3above4(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger3 types a key on a row above finger4 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger3(char1, char2, finger_map) == 1 and finger4(char1, char2, finger_map) == 1:
+            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
+               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
+                return 1
+            else:
+                return 0
+        else:
+            return 0
+    else:
+        return 0
+
+def finger4above3(char1, char2, column_map, row_map, finger_map):
+    """
+    Check if finger4 types a key on a row above finger3 on the same hand.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if finger3(char1, char2, finger_map) == 1 and finger4(char1, char2, finger_map) == 1:
             if (finger_map[char1] == 4 and row_map[char1] > row_map[char2]) or \
                (finger_map[char2] == 4 and row_map[char2] > row_map[char1]):
                 return 1
             else:
                 return 0
+        else:
+            return 0
+    else:
+        return 0
+    
+def finger2or3down(char1, char2, column_map):
+    """
+    Check if finger 2 or 3 are on the bottom row.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        finger2or3_bottom = ["x", "c", ",", "."]
+        if char1 in finger2or3_bottom or char2 in finger2or3_bottom:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+    
+def finger1or4_top_above(char1, char2, column_map, row_map):
+    """
+    Check if finger 1 or 4 are on the top row and above the other finger.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        finger1or4_top = ["q", "r", "t", "y", "u", "p"]
+        if (char1 in finger1or4_top and row_map[char1] > row_map[char2]) or \
+           (char2 in finger1or4_top and row_map[char2] > row_map[char1]):
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+
+def finger2or3_bottom_below(char1, char2, column_map, row_map):
+    """
+    Check if finger 2 or 3 are on the bottom row and below the other finger.
+      1: yes
+      0: no 
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        finger2or3_bottom = ["x", "c", ",", "."]
+        if (char1 in finger2or3_bottom and row_map[char1] < row_map[char2]) or \
+           (char2 in finger2or3_bottom and row_map[char2] < row_map[char1]):
+            return 1
         else:
             return 0
     else:
@@ -290,6 +604,20 @@ def rows_apart(char1, char2, column_map, row_map):
     else:
         return 0
 
+def skip_home(char1, char2, column_map, row_map):
+    """
+    Skip home row?
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if abs(row_map[char2] - row_map[char1]) == 2:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+
 def columns_apart(char1, char2, column_map):
     """
     Measure how many columns apart the two characters are (typed by the same hand).
@@ -313,8 +641,7 @@ def outward_roll(char1, char2, column_map, finger_map):
       0: not outward
     """
     if same_hand(char1, char2, column_map) == 1:
-        if same_finger(char1, char2, column_map, finger_map) == 0 and \
-           middle_columns(char1, char2, column_map) == 0:
+        if same_finger(char1, char2, column_map, finger_map) == 0:
             if finger_map[char1] < finger_map[char2]:
                 return 1
             else:
@@ -324,7 +651,22 @@ def outward_roll(char1, char2, column_map, finger_map):
     else:
         return 0
     
-def middle_columns(char1, char2, column_map):
+def outward_skip(char1, char2, column_map, finger_map):
+    """
+    Check if the keys were typed in an outward rolling direction 
+    with the same hand and skipping the home row.
+      1: yes
+      0: no
+    """
+    if same_hand(char1, char2, column_map) == 1:
+        if outward_roll(char1, char2, column_map, finger_map) == 1 and skip_home(char1, char2, column_map, row_map) == 1:
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+    
+def middle_column(char1, char2, column_map):
     """
     Check if finger1 types a key in a middle column of the keyboard.
       1: Yes
@@ -348,22 +690,19 @@ def extract_features_samekey(char, finger_map):
 
 def extract_features(char1, char2, column_map, row_map, finger_map):
     features = {
-        #'same_hand': same_hand(char1, char2, column_map),
-        'same_finger': same_finger(char1, char2, column_map, finger_map),
-        'adjacent_fingers': adjacent_fingers(char1, char2, column_map, finger_map),
-        'finger1': finger1(char1, char2, finger_map),
-        'finger2': finger2(char1, char2, finger_map),
-        'finger3': finger3(char1, char2, finger_map),
-        'finger4': finger4(char1, char2, finger_map),
-        'finger1above': finger1_above(char1, char2, column_map, row_map, finger_map),
-        'finger2below': finger2_below(char1, char2, column_map, row_map, finger_map),
-        'finger3below': finger3_below(char1, char2, column_map, row_map, finger_map),
-        'finger4above': finger4_above(char1, char2, column_map, row_map, finger_map),
-        'finger_pairs': finger_pairs(char1, char2, column_map, finger_map),
-        'rows_apart': rows_apart(char1, char2, column_map, row_map),
-        'columns_apart': columns_apart(char1, char2, column_map),
-        'outward_roll': outward_roll(char1, char2, column_map, finger_map),
-        'middle_columns': middle_columns(char1, char2, column_map)
+        'ncols': columns_apart(char1, char2, column_map),
+        'nrows': rows_apart(char1, char2, column_map, row_map),
+        'out': outward_roll(char1, char2, column_map, finger_map),
+        'skip': skip_home(char1, char2, column_map, row_map),
+        '1or4_top_above': finger1or4_top_above(char1, char2, column_map, row_map),
+        '2or3_bot_below': finger2or3_bottom_below(char1, char2, column_map, row_map),
+        '1above': finger1_above(char1, char2, column_map, row_map, finger_map),
+        '4above': finger4_above(char1, char2, column_map, row_map, finger_map),
+        '2below': finger2_below(char1, char2, column_map, row_map, finger_map),
+        '3below': finger3_below(char1, char2, column_map, row_map, finger_map),
+        'center': middle_column(char1, char2, column_map),
+        'same': same_finger(char1, char2, column_map, finger_map),
+        'adj_skip': adj_finger_skip(char1, char2, column_map, row_map, finger_map)
     }
     feature_names = list(features.keys())
     
@@ -502,9 +841,9 @@ def plot_bigram_graph(bigram_pairs):
     plt.title("Bigram Connectivity Graph", fontsize=20)
     plt.show()
 
-#============================================================================#
-# Feature matrix multicollinearity, priors sensitivity, and cross-validation #
-#============================================================================#
+#===========================================================================================#
+# Feature space, feature matrix multicollinearity, priors sensitivity, and cross-validation #
+#===========================================================================================#
 def check_multicollinearity(feature_matrix):
     """
     Check for multicollinearity.
@@ -593,11 +932,15 @@ def perform_sensitivity_analysis(feature_matrix, target_vector, participants, se
                 num_samples=1000,
                 chains=4
             )
-            
+
+            # Generate summary
             summary = az.summary(trace)
             results[f"prior_N({mean},{std})"] = summary
-            
-            print(summary)
+
+            # Print the first X rows
+            print_nrows = np.shape(feature_matrix)[1] + 5
+            print(print_nrows)
+            print(summary.head(print_nrows))
             print("\n" + "="*50 + "\n")
     
     return results
@@ -711,6 +1054,154 @@ def bayesian_cv_pipeline(bayesian_glmm_func, bayesian_scoring_func, feature_matr
     print(f"Mean CV Score: {np.mean(cv_scores)}")
     return cv_scores
 
+def analyze_feature_space(feature_matrix):
+    # Standardize the features
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(feature_matrix)
+    
+    # Perform PCA to reduce to 2D for visualization
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(scaled_features)
+    
+    # Plot the 2D projection
+    plt.figure(figsize=(10, 8))
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
+    plt.title('2D PCA projection of feature space')
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    plt.show()
+    
+    # Calculate the convex hull of the data points
+    hull = ConvexHull(pca_result)
+    hull_area = hull.area
+    
+    # Calculate the density of points
+    point_density = len(pca_result) / hull_area
+    
+    print(f"Convex Hull Area: {hull_area}")
+    print(f"Point Density: {point_density}")
+    
+    return pca, scaler, hull
+
+def identify_underrepresented_areas(pca_result, num_grid=20):
+    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
+    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
+    
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, num_grid),
+                         np.linspace(y_min, y_max, num_grid))
+    
+    grid_points = np.c_[xx.ravel(), yy.ravel()]
+    
+    # Calculate distances to nearest data point for each grid point
+    from scipy.spatial.distance import cdist
+    distances = cdist(grid_points, pca_result).min(axis=1)
+    
+    # Reshape distances to match the grid
+    distances = distances.reshape(xx.shape)
+    
+    # Plot the distance heatmap
+    plt.figure(figsize=(10, 8))
+    plt.imshow(distances, extent=[x_min, x_max, y_min, y_max], origin='lower', cmap='viridis')
+    plt.colorbar(label='Distance to nearest data point')
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], c='red', s=20, alpha=0.5)
+    plt.title('Underrepresented Areas in Feature Space')
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    plt.show()
+    
+    return grid_points, distances
+
+def generate_new_features(grid_points, distances, pca, scaler, num_new=100):
+    # Sort grid points by distance (descending)
+    sorted_indices = np.argsort(distances.ravel())[::-1]
+    
+    # Select the grid points with the largest distances
+    selected_points = grid_points[sorted_indices[:num_new]]
+    
+    # Transform these points back to the original feature space
+    original_space_points = scaler.inverse_transform(pca.inverse_transform(selected_points))
+    
+    # Round the feature values to the nearest valid value (e.g., 0 or 1 for binary features)
+    rounded_points = np.round(original_space_points)
+    
+    return np.abs(rounded_points)
+
+def features_to_bigram_pairs(new_feature_differences, all_feature_differences):
+    """
+    Convert new feature differences to bigram pairs by finding the closest matching known bigram pair.
+    
+    Parameters:
+    - new_feature_differences: numpy array of new feature differences to convert
+    - all_feature_differences: numpy array of all known feature differences corresponding to all_bigram_pairs
+    
+    Returns:
+    - features_to_bigram_pairs: List of bigram pairs corresponding to the new feature differences
+    """
+    all_pairs = list(all_feature_differences.keys())  # Extract all pairs (keys)
+    all_values = np.array(list(all_feature_differences.values()))  # Extract all values
+
+    # Compute distances between new feature differences and all known feature differences
+    distances = cdist(new_feature_differences, all_values)
+    
+    # Find the index of the closest match for each new feature difference
+    closest_indices = np.argmin(distances, axis=1)
+    
+    # Map these indices to the corresponding known bigram pairs
+    suggested_bigram_pairs = list(set([all_pairs[i] for i in closest_indices]))
+    
+    return suggested_bigram_pairs
+
+def generate_extended_recommendations(new_feature_differences, all_feature_differences, suggested_bigram_pairs, n_total=30):
+    """
+    Generate bigram pair recommendations, including initial suggestions and additional ones.
+    
+    Parameters:
+    - new_feature_differences: numpy array of new feature differences
+    - all_feature_differences: dictionary of all known feature differences
+    - suggested_bigram_pairs: output from features_to_bigram_pairs
+    - n_total: total number of recommendations to generate
+    
+    Returns:
+    - List of suggested bigram pairs
+    """
+    all_pairs = list(all_feature_differences.keys())
+    all_values = np.array(list(all_feature_differences.values()))
+
+    # Ensure new_feature_differences is a numpy array
+    new_feature_differences = np.array(new_feature_differences)
+
+    # Step 1: Generate more diverse points in the feature space
+    mean = np.mean(all_values, axis=0)
+    cov = np.cov(all_values, rowvar=False)
+    additional_points = np.random.multivariate_normal(mean, cov, size=n_total*2)
+    
+    # Step 2: Combine with the original new points and cluster
+    combined_points = np.vstack([new_feature_differences, additional_points])
+    kmeans = KMeans(n_clusters=n_total, n_init=10)
+    kmeans.fit(combined_points)
+    
+    # Step 3: Select diverse points (cluster centers)
+    diverse_points = kmeans.cluster_centers_
+    
+    # Step 4: Find the closest known bigram pairs for these diverse points
+    distances = cdist(diverse_points, all_values)
+    closest_indices = np.argmin(distances, axis=1)
+    
+    # Step 5: Map these indices to the corresponding known bigram pairs
+    suggested_bigram_pairs = [all_pairs[i] for i in closest_indices if all_pairs[i] not in suggested_bigram_pairs]
+    
+    # Step 6: Remove duplicates while preserving order
+    seen = set()
+    unique_suggestions = []
+    for pair in suggested_bigram_pairs:
+        pair_tuple = tuple(sorted([tuple(pair[0]), tuple(pair[1])]))  # Sort to ensure consistent ordering
+        if pair_tuple not in seen:
+            seen.add(pair_tuple)
+            unique_suggestions.append(pair)
+    
+    return unique_suggestions[:n_total]
+  
 #====================================================#
 # Bayesian GLMM training, Bayesian posterior scoring #
 #====================================================#
@@ -958,14 +1449,18 @@ def optimize_layout(initial_layout, bigram_data, model, bigram_features):
     
     return optimized_layout, improvement
 
+
+
+####################################################################################################
+
 #==============#
 # Run the code #
 #==============#
 if __name__ == "__main__":
 
-    run_samekey_analysis = True
-
-    plot_bigram_pair_graph = False
+    run_samekey_analysis = False
+    plot_bigram_pair_graph = True
+    run_analyze_feature_space = True
     run_sensitivity_analysis = True
     run_cross_validation = True
     run_glmm = False
@@ -975,18 +1470,18 @@ if __name__ == "__main__":
     # Load, prepare, and analyze features #
     #=====================================#
     print("\n ---- Load, prepare, and analyze features ---- \n")
-    #layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
-    layout_chars = list("qwertasdfgzxcvb")
+    layout_chars = list("qwertasdfgzxcvb")  #layout_chars = list("qwertasdfgzxcvbyuiophjkl;nm,./")
 
     # Precompute all bigram features and differences between the features of every pair of bigrams
     all_bigrams, all_bigram_features, feature_names, samekey_bigrams, samekey_bigram_features, \
         samekey_feature_names = precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map)
     all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
-    all_samekey_feature_differences = precompute_bigram_feature_differences(samekey_bigram_features)
 
     # Load the CSV file into a pandas DataFrame
-    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_274of377participants_0improbable/tables/filtered_bigram_data.csv"
-    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_377participants/tables/filtered_bigram_data.csv"
+    csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+    #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
     bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
     # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
@@ -999,6 +1494,7 @@ if __name__ == "__main__":
     participants = participants.astype(int)  # Already flattened, so no need for .flatten()
 
     if run_samekey_analysis:
+        all_samekey_feature_differences = precompute_bigram_feature_differences(samekey_bigram_features)
         # Filter out bigram pairs where either bigram is not in the precomputed features
         bigram_pairs = [bigram for bigram in bigram_pairs if bigram in all_samekey_feature_differences]
         target_vector = np.array([slider_values.iloc[idx] for idx, bigram in enumerate(bigram_pairs)])
@@ -1017,15 +1513,41 @@ if __name__ == "__main__":
         feature_matrix_data = [all_feature_differences[(bigram1, bigram2)] for (bigram1, bigram2) in bigram_pairs] 
         feature_matrix = pd.DataFrame(feature_matrix_data, columns=feature_names, index=bigram_pairs)
 
+        #-------------------------
         # Add feature interactions
-        feature_matrix['finger1above2'] = feature_matrix['finger1above'] * feature_matrix['finger2below']
+        #-------------------------
+        n_feature_interactions = 2
+        feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
+        feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
 
-    #======================================================================================#
-    # Check feature matrix multicollinearity, priors sensitivity, and run cross-validation #
-    #======================================================================================#
+    #=====================================================================================================#
+    # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
+    #=====================================================================================================#
     # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
     if plot_bigram_pair_graph:
         plot_bigram_graph(bigram_pairs)
+
+    if run_analyze_feature_space:
+        pca, scaler, hull = analyze_feature_space(feature_matrix)
+        grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
+        new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
+
+        # Timing data should be in the last column (prior appended to all_priors in train_bayesian_glmm)
+        if n_feature_interactions > 0:
+            new_feature_differences = new_feature_differences[:, :-n_feature_interactions]  # Removes the last n columns
+        suggested_bigram_pairs = features_to_bigram_pairs(new_feature_differences, all_feature_differences)
+
+        print("Suggested new bigram pairs to collect data for:")
+        for pair in suggested_bigram_pairs:
+            print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+
+        n_recommendations = 30
+        extended_suggestions = generate_extended_recommendations(new_feature_differences, all_feature_differences, 
+                                                                 suggested_bigram_pairs, n_recommendations)
+
+        print("Extended list of suggested bigram pairs to collect data for:")
+        for i, pair in enumerate(extended_suggestions):
+            print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
 
     # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
     check_multicollinearity(feature_matrix)
