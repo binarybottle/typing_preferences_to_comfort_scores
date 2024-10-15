@@ -273,7 +273,7 @@ if __name__ == "__main__":
     keyboard_layout = "qwertyuiopasdfghjkl;zxcvbnm,./"
 
     # File with bigram comfort scores for left and right sides of a computer keyboard
-    bigram_scores_file = "output/all_bigram_comfort_scores.csv"
+    bigram_scores_file = "output_bayes_bigram_scoring/all_bigram_comfort_scores.csv"
     comfort_scores = pd.read_csv(f"{bigram_scores_file}", index_col='bigram')
     #print("Min comfort score:", comfort_scores['comfort_score'].min())
     #print("Max comfort score:", comfort_scores['comfort_score'].max())
