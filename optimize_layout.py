@@ -9,30 +9,43 @@ from collections import defaultdict
 #=========================================#
 # Functions to optimizge keyboard layouts #
 #=========================================#
-def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
-                             comfort_scores, plot_bigram_scores=False):
+def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, comfort_scores, alpha=0.5, 
+                             scaling_strategy="sqrt", offset=0.01, plot_filename=None):
     """
     Optimizes the computation of valid bigrams by caching character positions.
+    Provides three scaling options: square root, offset, or logarithmic scaling.
     """
     character_set = set(keyboard_layout)
     valid_bigrams = {}
 
-    # Normalize comfort scores
-    comfort_scores['normalized_comfort'] = (
-        (comfort_scores['comfort_score'] - comfort_scores['comfort_score'].min()) /
-        (comfort_scores['comfort_score'].max() - comfort_scores['comfort_score'].min())
-    )
+    # Define left and right sides of the keyboard
+    left_keys = set("qwertasdfgzxcvb")
+    right_keys = set("yuiophjkl;nm,./")
 
-    # Normalize bigram frequencies with handling of edge case (min == max)
-    freq_values = np.array(list(bigram_frequencies.values()))
-    min_freq, max_freq = freq_values.min(), freq_values.max()
-    if min_freq == max_freq:
-        normalized_frequencies = {bigram: 1.0 for bigram in bigram_frequencies}
-    else:
-        normalized_frequencies = {
-            bigram: (freq - min_freq) / (max_freq - min_freq)
-            for bigram, freq in bigram_frequencies.items()
-        }
+    # Set max comfort value for missing left-right bigrams
+    max_comfort = comfort_scores['comfort_score'].max()
+    for char1 in left_keys:
+        for char2 in right_keys:
+            bigram = char1 + char2
+            if bigram not in comfort_scores.index:
+                comfort_scores.loc[bigram] = max_comfort
+            #if bigram in comfort_scores.index:
+            #    print(f"{bigram}: {comfort_scores.loc[bigram, 'comfort_score']}")
+
+    # Normalize comfort scores with the chosen scaling strategy and offset
+    comfort_scores['normalized_comfort'] = normalize(
+        comfort_scores['comfort_score'], strategy=scaling_strategy, offset=offset
+    )
+    #print("Normalized comfort scores:")
+    #print(comfort_scores['normalized_comfort'].describe())
+
+    # Convert bigram frequencies into a Pandas Series for normalization
+    bigram_freq_series = pd.Series(bigram_frequencies)
+
+    # Normalize bigram frequencies with the same strategy and offset
+    normalized_frequencies = normalize(
+        bigram_freq_series, strategy=scaling_strategy, offset=offset
+    ).to_dict()
 
     # Cache character positions for faster lookup
     char_positions = {char: idx for idx, char in enumerate(keyboard_layout)}
@@ -49,48 +62,134 @@ def precompute_valid_bigrams(keyboard_layout, bigram_frequencies,
                 keyboard_layout[char_positions[char2]]
             )
 
-            # Retrieve normalized comfort score or use default 1.0
-            comfort = comfort_scores.loc[keyboard_bigram, 'normalized_comfort'] \
-                if keyboard_bigram in comfort_scores.index else 1.0
+            # Retrieve the normalized comfort score
+            comfort = comfort_scores['normalized_comfort'].get(keyboard_bigram, 1.0)
 
             # Store the valid bigram score
-            valid_bigrams[bigram] = normalized_freq * comfort
+            valid_bigrams[bigram] = alpha * normalized_freq + (1 - alpha) * comfort
 
-    # Plot the bigram scores if requested
-    if plot_bigram_scores:
-        # Prepare data for plotting
-        bigrams = list(valid_bigrams.keys())
-        combined_scores = list(valid_bigrams.values())
-        frequencies = [normalized_frequencies[bigram] for bigram in bigrams]
-        comforts = [
-            comfort_scores.loc[bigram, 'normalized_comfort'] if bigram in comfort_scores.index else 1.0
-            for bigram in bigrams
-        ]
-
-        # Plot the distributions as scatter plots
-        plt.figure(figsize=(14, 7))
-
-        # Scatter plot for normalized frequencies
-        plt.scatter(bigrams, frequencies, label='Normalized Frequencies', alpha=0.5)
-
-        # Scatter plot for normalized comforts
-        plt.scatter(bigrams, comforts, label='Normalized Comforts', alpha=0.5)
-
-        # Scatter plot for combined scores (Freq * Comfort)
-        plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', alpha=0.5)
-
-        # Configure plot appearance
-        plt.xticks(rotation=90)  # Rotate x-axis labels for readability
-        plt.xlabel('Bigrams')
-        plt.ylabel('Scores')
-        plt.title('Comparison of Bigram Scores, Frequencies, and Comforts')
-        plt.legend()
-        plt.tight_layout()
-
-        # Show the plot
-        plt.show()
+    # Optionally plot the bigram scores
+    if plot_filename is not None:
+        plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, "compare_"+plot_filename)
+        plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename)
 
     return valid_bigrams
+
+def normalize(series, strategy="sqrt", offset=0.01):
+    """Applies the selected normalization strategy to a Pandas Series."""
+    normalized = (series - series.min()) / (series.max() - series.min())
+
+    if strategy == "sqrt":
+        normalized = np.sqrt(normalized)
+    elif strategy == "log":
+        normalized = np.log1p(normalized)  # log(1 + x) to handle zero values
+
+    # Apply the offset once, at the end of normalization
+    return normalized + offset
+
+def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, plot_filename):
+    """Plots histograms comparing raw and normalized distributions of frequencies and comfort scores."""
+    # Prepare data for plotting
+    raw_frequencies = list(bigram_frequencies.values())
+    raw_comforts = comfort_scores['comfort_score'].values
+    normalized_comforts = comfort_scores['normalized_comfort'].values
+    normalized_freq_values = list(normalized_frequencies.values())
+
+    # Create a figure with two rows: Raw and Normalized histograms
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+
+    # Plot raw frequencies
+    axes[0, 0].hist(raw_frequencies, bins=30, alpha=0.7, color='skyblue')
+    axes[0, 0].set_title('Raw Frequencies')
+    axes[0, 0].set_xlabel('Frequency')
+    axes[0, 0].set_ylabel('Count')
+
+    # Plot raw comfort scores
+    axes[0, 1].hist(raw_comforts, bins=30, alpha=0.7, color='lightgreen')
+    axes[0, 1].set_title('Raw Comfort Scores')
+    axes[0, 1].set_xlabel('Comfort Score')
+    axes[0, 1].set_ylabel('Count')
+
+    # Plot normalized frequencies
+    axes[1, 0].hist(normalized_freq_values, bins=30, alpha=0.7, color='blue')
+    axes[1, 0].set_title('Normalized Frequencies')
+    axes[1, 0].set_xlabel('Normalized Frequency')
+    axes[1, 0].set_ylabel('Count')
+
+    # Plot normalized comfort scores
+    axes[1, 1].hist(normalized_comforts, bins=30, alpha=0.7, color='green')
+    axes[1, 1].set_title('Normalized Comfort Scores')
+    axes[1, 1].set_xlabel('Normalized Comfort Score')
+    axes[1, 1].set_ylabel('Count')
+
+    # Adjust layout and save the plot
+    plt.tight_layout()
+    plt.savefig(plot_filename, dpi=300)
+
+    
+def plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename):
+    """Plots the distributions of frequencies, comfort scores, and combined scores as histograms."""
+    # Prepare data for plotting
+    combined_scores = list(valid_bigrams.values())
+    frequencies = list(normalized_frequencies.values())
+    comforts = comfort_scores['normalized_comfort'].values
+
+    # Create a figure with three histograms side by side
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+
+    # Plot the histogram for normalized frequencies
+    axes[0].hist(frequencies, bins=30, alpha=0.7, color='blue')
+    axes[0].set_title('Normalized Frequencies')
+    axes[0].set_xlabel('Score')
+    axes[0].set_ylabel('Count')
+
+    # Plot the histogram for normalized comforts
+    axes[1].hist(comforts, bins=30, alpha=0.7, color='green')
+    axes[1].set_title('Normalized Comforts')
+    axes[1].set_xlabel('Score')
+
+    # Plot the histogram for combined scores (Freq * Comfort)
+    axes[2].hist(combined_scores, bins=30, alpha=0.7, color='red')
+    axes[2].set_title('Combined Scores (Freq * Comfort)')
+    axes[2].set_xlabel('Score')
+
+    # Adjust layout and save the plot
+    plt.tight_layout()
+    plt.savefig(plot_filename, dpi=300)
+    
+def plot_bigram_scores(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename):
+    """Plots the bigram scores, frequencies, and comforts as scatter plots."""
+    bigrams = list(valid_bigrams.keys())
+    combined_scores = list(valid_bigrams.values())
+    frequencies = [normalized_frequencies[bigram] for bigram in bigrams]
+    comforts = [
+        comfort_scores.loc[bigram, 'normalized_comfort'] if bigram in comfort_scores.index else 1.0
+        for bigram in bigrams
+    ]
+
+    # Plot the distributions as scatter plots
+    plt.figure(figsize=(14, 7))
+
+    # Scatter plot for normalized frequencies
+    plt.scatter(bigrams, frequencies, label='Normalized Frequencies', color="blue", alpha=0.7)
+
+    # Scatter plot for normalized comforts
+    plt.scatter(bigrams, comforts, label='Normalized Comforts', color="orange", alpha=0.7)
+
+    # Scatter plot for combined scores (Freq * Comfort)
+    plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', color="red", alpha=0.7)
+
+    # Configure plot appearance
+    plt.xticks(rotation=90)  # Rotate x-axis labels for readability
+    plt.xlabel('Bigrams')
+    plt.ylabel('Scores')
+    plt.title('Comparison of Bigram Scores, Frequencies, and Comforts')
+    plt.legend()
+    plt.tight_layout()
+
+    # Adjust layout and save the plot
+    plt.tight_layout()
+    plt.savefig(plot_filename, dpi=300)
 
 def optimize_subset(keys_to_replace, chars_to_arrange, valid_bigrams, keyboard_layout):
     """
@@ -176,13 +275,19 @@ if __name__ == "__main__":
     # File with bigram comfort scores for left and right sides of a computer keyboard
     bigram_scores_file = "output/all_bigram_comfort_scores.csv"
     comfort_scores = pd.read_csv(f"{bigram_scores_file}", index_col='bigram')
+    #print("Min comfort score:", comfort_scores['comfort_score'].min())
+    #print("Max comfort score:", comfort_scores['comfort_score'].max())
 
     from ngram_frequencies import onegram_frequencies, bigram_frequencies
 
-    plot_bigram_scores = True
+    alpha = 0.5
+    scaling_strategy = "sqrt" 
+    baseline_offset = 0.1
+    plot_filename = "scores_plot.png"
     valid_bigrams = precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
-                                             comfort_scores, plot_bigram_scores)
-    #print(f"Bigrams: {valid_bigrams}")
+                        comfort_scores, alpha, scaling_strategy, baseline_offset, plot_filename)
+
+    # Call the function with square root scaling
 
     #--------------------------------------------------------------#
     # Stage 1: select keys and characters to arrange in those keys #
