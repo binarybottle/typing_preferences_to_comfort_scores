@@ -6,74 +6,68 @@ import math
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-#=========================================#
-# Functions to optimizge keyboard layouts #
-#=========================================#
-def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, comfort_scores, alpha=0.5, 
-                             scaling_strategy="sqrt", offset=0.01, plot_filename=None):
+#====================================#
+# Functions to prepare bigram scores #
+#====================================#
+def precompute_valid_bigrams(qwerty_layout, qwerty_comfort_scores, bigram_frequencies, 
+                             scaling_strategy="sqrt", offset=0.01, plot=True, save_plot=None):
     """
-    Optimizes the computation of valid bigrams by caching character positions.
-    Provides three scaling options: square root, offset, or logarithmic scaling.
+    Precomputes normalized bigram frequencies and QWERTY comfort scores.
+    Also, optionally plots their distributions.
     """
-    character_set = set(keyboard_layout)
-    valid_bigrams = {}
-
-    # Define left and right sides of the keyboard
+    # Define left and right keys on the keyboard
     left_keys = set("qwertasdfgzxcvb")
     right_keys = set("yuiophjkl;nm,./")
 
-    # Set max comfort value for missing left-right bigrams
-    max_comfort = comfort_scores['comfort_score'].max()
-    for char1 in left_keys:
-        for char2 in right_keys:
-            bigram = char1 + char2
-            if bigram not in comfort_scores.index:
-                comfort_scores.loc[bigram] = max_comfort
-            #if bigram in comfort_scores.index:
-            #    print(f"{bigram}: {comfort_scores.loc[bigram, 'comfort_score']}")
+    # Ensure qwerty_comfort_scores is a DataFrame
+    if isinstance(qwerty_comfort_scores, dict):
+        qwerty_comfort_scores = pd.DataFrame.from_dict(qwerty_comfort_scores, orient='index', 
+                                                       columns=['comfort_score'])
 
-    # Normalize comfort scores with the chosen scaling strategy and offset
-    comfort_scores['normalized_comfort'] = normalize(
-        comfort_scores['comfort_score'], strategy=scaling_strategy, offset=offset
-    )
-    #print("Normalized comfort scores:")
-    #print(comfort_scores['normalized_comfort'].describe())
+    # Ensure that bigram_frequencies is a 1D dictionary
+    if isinstance(bigram_frequencies, pd.DataFrame):
+        bigram_frequencies = bigram_frequencies.squeeze().to_dict()
+    elif isinstance(bigram_frequencies, np.ndarray):
+        bigram_frequencies = dict(enumerate(bigram_frequencies.flatten()))
 
-    # Convert bigram frequencies into a Pandas Series for normalization
-    bigram_freq_series = pd.Series(bigram_frequencies)
+    # Assign the max comfort score to missing left-right bigrams
+    max_comfort = qwerty_comfort_scores['comfort_score'].max()
+    missing_bigrams = []
 
-    # Normalize bigram frequencies with the same strategy and offset
-    normalized_frequencies = normalize(
-        bigram_freq_series, strategy=scaling_strategy, offset=offset
-    ).to_dict()
-
-    # Cache character positions for faster lookup
-    char_positions = {char: idx for idx, char in enumerate(keyboard_layout)}
-
-    # Iterate through all valid bigrams using cached positions
-    for char1, char2 in itertools.permutations(character_set, 2):
+    for char1, char2 in itertools.permutations(qwerty_layout, 2):
         bigram = char1 + char2
-        if bigram in bigram_frequencies:
-            normalized_freq = normalized_frequencies[bigram]
+        if bigram not in qwerty_comfort_scores.index:
+            # Check if the bigram crosses between left and right sides
+            if (char1 in left_keys and char2 in right_keys) or (char1 in right_keys and char2 in left_keys):
+                # Assign max comfort value to missing left-right bigrams
+                qwerty_comfort_scores.loc[bigram] = max_comfort
+            else:
+                # Collect non-left-right bigrams for debugging
+                missing_bigrams.append(bigram)
 
-            # Construct the keyboard bigram from cached positions
-            keyboard_bigram = (
-                keyboard_layout[char_positions[char1]] +
-                keyboard_layout[char_positions[char2]]
-            )
+    # Raise a warning if unexpected missing bigrams are found
+    if missing_bigrams:
+        print(f"Warning: Unexpected missing bigrams detected: {missing_bigrams}")
 
-            # Retrieve the normalized comfort score
-            comfort = comfort_scores['normalized_comfort'].get(keyboard_bigram, 1.0)
+    # Normalize bigram frequencies
+    bigram_freq_series = pd.Series(bigram_frequencies)
+    normalized_frequencies = normalize(bigram_freq_series, scaling_strategy, offset).to_dict()
 
-            # Store the valid bigram score
-            valid_bigrams[bigram] = alpha * normalized_freq + (1 - alpha) * comfort
+    # Normalize comfort scores for QWERTY key pairs
+    qwerty_comfort_scores['normalized_comfort'] = normalize(qwerty_comfort_scores['comfort_score'], 
+                                                            scaling_strategy, offset)
 
-    # Optionally plot the bigram scores
-    if plot_filename is not None:
-        plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, "compare_histogram_"+plot_filename)
-        plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, "histogram_"+plot_filename)
-        plot_bigram_scores(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename)
-    return valid_bigrams
+    # Create a lookup dictionary for QWERTY key pair comfort scores
+    qwerty_comfort = {
+        char1 + char2: qwerty_comfort_scores.loc[char1 + char2, 'normalized_comfort']
+        for char1, char2 in itertools.permutations(qwerty_layout, 2)
+    }
+
+    # Optional: Plot raw and normalized distributions
+    if plot:
+        plot_comparison_histograms(bigram_frequencies, normalized_frequencies, qwerty_comfort_scores, save_plot)
+
+    return normalized_frequencies, qwerty_comfort
 
 def normalize(series, strategy="sqrt", offset=0.01):
     """Applies the selected normalization strategy to a Pandas Series."""
@@ -87,25 +81,25 @@ def normalize(series, strategy="sqrt", offset=0.01):
     # Apply the offset once, at the end of normalization
     return normalized + offset
 
-def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, plot_filename):
+def plot_comparison_histograms(bigram_frequencies, normalized_frequencies, qwerty_comfort_scores, save_plot):
     """Plots histograms comparing raw and normalized distributions of frequencies and comfort scores."""
     # Prepare data for plotting
     raw_frequencies = list(bigram_frequencies.values())
-    raw_comforts = comfort_scores['comfort_score'].values
-    normalized_comforts = comfort_scores['normalized_comfort'].values
     normalized_freq_values = list(normalized_frequencies.values())
+    raw_comforts = qwerty_comfort_scores['comfort_score'].values
+    normalized_comforts = qwerty_comfort_scores['normalized_comfort'].values
 
     # Create a figure with two rows: Raw and Normalized histograms
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
     # Plot raw frequencies
-    axes[0, 0].hist(raw_frequencies, bins=30, alpha=0.7, color='blue')
+    axes[0, 0].hist(raw_frequencies, bins=30, alpha=0.7, color='skyblue')
     axes[0, 0].set_title('Raw Frequencies')
     axes[0, 0].set_xlabel('Frequency')
     axes[0, 0].set_ylabel('Count')
 
     # Plot raw comfort scores
-    axes[0, 1].hist(raw_comforts, bins=30, alpha=0.7, color='orange')
+    axes[0, 1].hist(raw_comforts, bins=30, alpha=0.7, color='lightgreen')
     axes[0, 1].set_title('Raw Comfort Scores')
     axes[0, 1].set_xlabel('Comfort Score')
     axes[0, 1].set_ylabel('Count')
@@ -117,121 +111,54 @@ def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_fr
     axes[1, 0].set_ylabel('Count')
 
     # Plot normalized comfort scores
-    axes[1, 1].hist(normalized_comforts, bins=30, alpha=0.7, color='orange')
+    axes[1, 1].hist(normalized_comforts, bins=30, alpha=0.7, color='green')
     axes[1, 1].set_title('Normalized Comfort Scores')
     axes[1, 1].set_xlabel('Normalized Comfort Score')
     axes[1, 1].set_ylabel('Count')
 
     # Adjust layout and save the plot
     plt.tight_layout()
-    plt.savefig(plot_filename, dpi=300)
-   
-def plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename):
-    """Plots the distributions of frequencies, comfort scores, and combined scores as histograms."""
-    # Prepare data for plotting
-    combined_scores = list(valid_bigrams.values())
-    frequencies = list(normalized_frequencies.values())
-    comforts = comfort_scores['normalized_comfort'].values
+    if save_plot:
+        plt.savefig(save_plot, dpi=300)
+    plt.show()
 
-    # Create a figure with three histograms side by side
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
-
-    # Plot the histogram for normalized frequencies
-    axes[0].hist(frequencies, bins=30, alpha=0.7, color='blue')
-    axes[0].set_title('Normalized Frequencies')
-    axes[0].set_xlabel('Score')
-    axes[0].set_ylabel('Count')
-
-    # Plot the histogram for normalized comforts
-    axes[1].hist(comforts, bins=30, alpha=0.7, color='orange')
-    axes[1].set_title('Normalized Comforts')
-    axes[1].set_xlabel('Score')
-
-    # Plot the histogram for combined scores (Freq * Comfort)
-    axes[2].hist(combined_scores, bins=30, alpha=0.7, color='black')
-    axes[2].set_title('Combined Scores (Freq * Comfort)')
-    axes[2].set_xlabel('Score')
-
-    # Adjust layout and save the plot
-    plt.tight_layout()
-    plt.savefig(plot_filename, dpi=300)
-    
-def plot_bigram_scores(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename):
-    """Plots the bigram scores, frequencies, and comforts as scatter plots."""
-    bigrams = list(valid_bigrams.keys())
-    combined_scores = list(valid_bigrams.values())
-    frequencies = [normalized_frequencies[bigram] for bigram in bigrams]
-    comforts = [
-        comfort_scores.loc[bigram, 'normalized_comfort'] if bigram in comfort_scores.index else 1.0
-        for bigram in bigrams
-    ]
-
-    # Plot the distributions as scatter plots
-    plt.figure(figsize=(14, 7))
-
-    # Scatter plot for normalized frequencies
-    plt.scatter(bigrams, frequencies, label='Normalized Frequencies', color="blue", alpha=0.7)
-
-    # Scatter plot for normalized comforts
-    plt.scatter(bigrams, comforts, label='Normalized Comforts', color="orange", alpha=0.7)
-
-    # Scatter plot for combined scores (Freq * Comfort)
-    plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', color="black", alpha=0.7)
-
-    # Configure plot appearance
-    plt.xticks(rotation=90)  # Rotate x-axis labels for readability
-    plt.xlabel('Bigrams')
-    plt.ylabel('Scores')
-    plt.title('Comparison of Bigram Scores, Frequencies, and Comforts')
-    plt.legend()
-    plt.tight_layout()
-
-    # Adjust layout and save the plot
-    plt.tight_layout()
-    plt.savefig(plot_filename, dpi=300)
-
-def optimize_subset(keys_to_replace, chars_to_arrange, valid_bigrams, keyboard_layout):
+#========================================#
+# Functions to optimize keyboard layouts #
+#========================================#
+def optimize_subset(qwerty_subset_keys, normalized_frequencies, normalized_qwerty_comfort, alpha=0.5):
     """
-    Optimizes the arrangement of a subset of keys in the layout with a progress bar.
+    Optimize a subset of the layout using precomputed frequencies and QWERTY comfort scores.
     """
-    best_layout = None
-    best_score = -math.inf
+    best_layout = ''.join(qwerty_subset_keys)
+    best_score = -np.inf
 
-    # Calculate the total number of permutations
-    total_permutations = math.factorial(len(chars_to_arrange))
+    # Iterate over permutations of the subset keys
+    for permutation in itertools.permutations(qwerty_subset_keys):
+        layout = ''.join(permutation)
+        total_score = 0
 
-    # Iterate over all permutations with tqdm progress bar
-    for permutation in tqdm(itertools.permutations(chars_to_arrange), total=total_permutations, desc="Optimizing layout"):
-        # Create a new layout with the current permutation
-        temp_layout = list(keyboard_layout)
-        for key, char in zip(keys_to_replace, permutation):
-            pos = temp_layout.index(key)
-            temp_layout[pos] = char
+        # Calculate total score for this layout permutation
+        for i, char1 in enumerate(layout):
+            for j, char2 in enumerate(layout):
+                if i != j:  # Avoid same key pairs
+                    character_bigram = char1 + char2
+                    qwerty_bigram = qwerty_subset_keys[i] + qwerty_subset_keys[j]
 
-        # Identify positions of the replaced keys in the layout
-        key_positions = [keyboard_layout.index(key) for key in keys_to_replace]
+                    # Retrieve scores
+                    freq_score = normalized_frequencies.get(character_bigram, 0)
+                    comfort_score = normalized_qwerty_comfort.get(qwerty_bigram, 0)
 
-        # Calculate the layout score (inlined for performance)
-        score = 0
-        for i in key_positions:
-            for j in key_positions:  # Only compare with other relevant keys
-                if i != j:
-                    bigram = temp_layout[i] + temp_layout[j]
-                    bigram_score = valid_bigrams.get(bigram, 0)
-                    score += bigram_score
+                    # Accumulate score
+                    total_score += alpha * freq_score * (1 - alpha) * comfort_score
 
-                    # Debugging print to confirm only relevant bigrams are evaluated
-                    print(f"Evaluating relevant bigram: {bigram}, Score: {bigram_score}")
-        print(f"Temporary Layout: {''.join(temp_layout)} score: {score}")
-
-        # Track the best layout and score
-        if score > best_score:
-            best_score = score
-            best_layout = "".join(temp_layout)
+        # Update best layout if the score is better
+        if total_score > best_score:
+            best_score = total_score
+            best_layout = layout
 
     return best_layout, best_score
 
-def display_keyboard(layout, keys_to_replace, chars_to_arrange):
+def display_keyboard(layout, qwerty_keys, chars_to_arrange):
     """
     Displays the keyboard layout by splitting it into 3 rows of 10 keys.
     Uses '-' placeholders for all keys except the new characters.
@@ -240,7 +167,7 @@ def display_keyboard(layout, keys_to_replace, chars_to_arrange):
     filled_layout = ["-"] * 30
 
     # Place new characters at the correct positions
-    key_positions = [keyboard_layout.index(key) for key in keys_to_replace]
+    key_positions = [qwerty_layout.index(key) for key in qwerty_keys]
     for pos, new_char in zip(key_positions, chars_to_arrange):
         filled_layout[pos] = new_char
 
@@ -266,44 +193,42 @@ def display_keyboard(layout, keys_to_replace, chars_to_arrange):
 #==============#
 if __name__ == "__main__":
 
-    #------------------------------------------------------------#
-    # Load, normalize, and combine bigram scores and frequencies #
-    #------------------------------------------------------------#
-    keyboard_layout = "qwertyuiopasdfghjkl;zxcvbnm,./"
+    #---------------------------------------------------------------#
+    # Normalize Qwerty bigram frequencies and bigram comfort scores #
+    #---------------------------------------------------------------#
+    # Qwerty bigram comfort scores for left and right sides of a computer keyboard
+    qwerty_layout = "qwertyuiopasdfghjkl;zxcvbnm,./"
+    qwerty_comfort_scores_file = "output_bayes_bigram_scoring/all_bigram_comfort_scores.csv"
+    qwerty_comfort_scores = pd.read_csv(f"{qwerty_comfort_scores_file}", index_col='bigram')
 
-    # File with bigram comfort scores for left and right sides of a computer keyboard
-    bigram_scores_file = "output_bayes_bigram_scoring/all_bigram_comfort_scores.csv"
-    comfort_scores = pd.read_csv(f"{bigram_scores_file}", index_col='bigram')
-    #print("Min comfort score:", comfort_scores['comfort_score'].min())
-    #print("Max comfort score:", comfort_scores['comfort_score'].max())
+    # bigram frequencies
+    from ngram_frequencies import bigram_frequencies
 
-    from ngram_frequencies import onegram_frequencies, bigram_frequencies
-
-    alpha = 0.5
-    scaling_strategy = "sqrt" 
-    baseline_offset = 0.1
-    plot_filename = "scores.png"
-    valid_bigrams = precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
-                        comfort_scores, alpha, scaling_strategy, baseline_offset, plot_filename)
-
-    # Call the function with square root scaling
+    # Precompute bigram comfort scores and qwerty bigram frequencies with square root scaling and offset
+    normalized_frequencies, normalized_qwerty_comfort = precompute_valid_bigrams(qwerty_layout, 
+                                                            qwerty_comfort_scores, 
+                                                            bigram_frequencies, 
+                                                            scaling_strategy="sqrt", 
+                                                            offset=0.01, 
+                                                            plot=False, 
+                                                            save_plot="scores_histogram.png")
 
     #--------------------------------------------------------------#
     # Stage 1: select keys and characters to arrange in those keys #
     #--------------------------------------------------------------#
-    keys_to_replace = "asd"
+    qwerty_keys = "asd"
     chars_to_arrange = "eic"
-
-    print(f"Keys to replace: {keys_to_replace}")
-    print(f"Characters to arrange in the keys: {chars_to_arrange}")
+    print(f"Qwertyu key positions: {qwerty_keys}")
+    print(f"Characters to arrange: {chars_to_arrange}")
     
-    optimized_layout, score = optimize_subset(keys_to_replace, chars_to_arrange, valid_bigrams, keyboard_layout)
-    
-    # Print the original layout with new characters in their respective positions
-    print("Original positions of keys to arrange:")
-    print(display_keyboard(keyboard_layout, keys_to_replace, chars_to_arrange))
+    # Optimize a subset of the layout
+    alpha = 0.5  # alpha * normalized_freq + (1 - alpha) * comfort
+    best_layout, best_score = optimize_subset(qwerty_keys, 
+                                              normalized_frequencies, 
+                                              normalized_qwerty_comfort, 
+                                              alpha)
 
-    # Print the optimized layout, assuming optimized_layout is properly computed
-    print("\nOptimized Layout:")
-    print(display_keyboard(optimized_layout, keys_to_replace, chars_to_arrange))
+    print(f"Best Layout for Subset: {best_layout}")
+    print(f"Best Score: {best_score}")
+    print(display_keyboard(best_layout, qwerty_keys, chars_to_arrange))
 
