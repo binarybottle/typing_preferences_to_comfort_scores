@@ -70,9 +70,9 @@ def precompute_valid_bigrams(keyboard_layout, bigram_frequencies, comfort_scores
 
     # Optionally plot the bigram scores
     if plot_filename is not None:
-        plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, "compare_"+plot_filename)
-        plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename)
-
+        plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_frequencies, "compare_histogram_"+plot_filename)
+        plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, "histogram_"+plot_filename)
+        plot_bigram_scores(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename)
     return valid_bigrams
 
 def normalize(series, strategy="sqrt", offset=0.01):
@@ -99,13 +99,13 @@ def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_fr
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
     # Plot raw frequencies
-    axes[0, 0].hist(raw_frequencies, bins=30, alpha=0.7, color='skyblue')
+    axes[0, 0].hist(raw_frequencies, bins=30, alpha=0.7, color='blue')
     axes[0, 0].set_title('Raw Frequencies')
     axes[0, 0].set_xlabel('Frequency')
     axes[0, 0].set_ylabel('Count')
 
     # Plot raw comfort scores
-    axes[0, 1].hist(raw_comforts, bins=30, alpha=0.7, color='lightgreen')
+    axes[0, 1].hist(raw_comforts, bins=30, alpha=0.7, color='orange')
     axes[0, 1].set_title('Raw Comfort Scores')
     axes[0, 1].set_xlabel('Comfort Score')
     axes[0, 1].set_ylabel('Count')
@@ -117,7 +117,7 @@ def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_fr
     axes[1, 0].set_ylabel('Count')
 
     # Plot normalized comfort scores
-    axes[1, 1].hist(normalized_comforts, bins=30, alpha=0.7, color='green')
+    axes[1, 1].hist(normalized_comforts, bins=30, alpha=0.7, color='orange')
     axes[1, 1].set_title('Normalized Comfort Scores')
     axes[1, 1].set_xlabel('Normalized Comfort Score')
     axes[1, 1].set_ylabel('Count')
@@ -125,8 +125,7 @@ def plot_comparison_histograms(bigram_frequencies, comfort_scores, normalized_fr
     # Adjust layout and save the plot
     plt.tight_layout()
     plt.savefig(plot_filename, dpi=300)
-
-    
+   
 def plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_scores, plot_filename):
     """Plots the distributions of frequencies, comfort scores, and combined scores as histograms."""
     # Prepare data for plotting
@@ -144,12 +143,12 @@ def plot_bigram_scores_histogram(valid_bigrams, normalized_frequencies, comfort_
     axes[0].set_ylabel('Count')
 
     # Plot the histogram for normalized comforts
-    axes[1].hist(comforts, bins=30, alpha=0.7, color='green')
+    axes[1].hist(comforts, bins=30, alpha=0.7, color='orange')
     axes[1].set_title('Normalized Comforts')
     axes[1].set_xlabel('Score')
 
     # Plot the histogram for combined scores (Freq * Comfort)
-    axes[2].hist(combined_scores, bins=30, alpha=0.7, color='red')
+    axes[2].hist(combined_scores, bins=30, alpha=0.7, color='black')
     axes[2].set_title('Combined Scores (Freq * Comfort)')
     axes[2].set_xlabel('Score')
 
@@ -177,7 +176,7 @@ def plot_bigram_scores(valid_bigrams, normalized_frequencies, comfort_scores, pl
     plt.scatter(bigrams, comforts, label='Normalized Comforts', color="orange", alpha=0.7)
 
     # Scatter plot for combined scores (Freq * Comfort)
-    plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', color="red", alpha=0.7)
+    plt.scatter(bigrams, combined_scores, label='Combined Scores (Freq * Comfort)', color="black", alpha=0.7)
 
     # Configure plot appearance
     plt.xticks(rotation=90)  # Rotate x-axis labels for readability
@@ -283,7 +282,7 @@ if __name__ == "__main__":
     alpha = 0.5
     scaling_strategy = "sqrt" 
     baseline_offset = 0.1
-    plot_filename = "scores_plot.png"
+    plot_filename = "scores.png"
     valid_bigrams = precompute_valid_bigrams(keyboard_layout, bigram_frequencies, 
                         comfort_scores, alpha, scaling_strategy, baseline_offset, plot_filename)
 
