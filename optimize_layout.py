@@ -125,15 +125,15 @@ def plot_comparison_histograms(bigram_frequencies, normalized_frequencies, qwert
 #========================================#
 # Functions to optimize keyboard layouts #
 #========================================#
-def optimize_subset(qwerty_subset_keys, normalized_frequencies, normalized_qwerty_comfort, alpha=0.5):
+def optimize_subset(subset_keys, normalized_frequencies, normalized_qwerty_comfort, alpha=0.5):
     """
-    Optimize a subset of the layout using precomputed frequencies and QWERTY comfort scores.
+    Optimizes a subset of the layout using precomputed frequencies and QWERTY comfort scores.
     """
-    best_layout = ''.join(qwerty_subset_keys)
+    best_layout = ''.join(subset_keys)
     best_score = -np.inf
 
     # Iterate over permutations of the subset keys
-    for permutation in itertools.permutations(qwerty_subset_keys):
+    for permutation in itertools.permutations(subset_keys):
         layout = ''.join(permutation)
         total_score = 0
 
@@ -142,7 +142,7 @@ def optimize_subset(qwerty_subset_keys, normalized_frequencies, normalized_qwert
             for j, char2 in enumerate(layout):
                 if i != j:  # Avoid same key pairs
                     character_bigram = char1 + char2
-                    qwerty_bigram = qwerty_subset_keys[i] + qwerty_subset_keys[j]
+                    qwerty_bigram = subset_keys[i] + subset_keys[j]
 
                     # Retrieve scores
                     freq_score = normalized_frequencies.get(character_bigram, 0)
@@ -158,7 +158,33 @@ def optimize_subset(qwerty_subset_keys, normalized_frequencies, normalized_qwert
 
     return best_layout, best_score
 
-def display_keyboard(layout, qwerty_keys, chars_to_arrange):
+def apply_permutation(original_chars, optimized_chars, chars_to_arrange):
+    """
+    Applies the same permutation pattern used to convert original_chars to optimized_chars
+    on the chars_to_arrange.
+    """
+    # Determine the permutation order as indices
+    permutation_order = [original_chars.index(c) for c in optimized_chars]
+
+    # Apply the same permutation order to chars_to_arrange
+    rearranged_chars = ''.join(chars_to_arrange[i] for i in permutation_order)
+
+    return rearranged_chars
+
+def update_layout_display(original_layout, subset_positions, optimized_subset):
+    """
+    Updates the original layout with the optimized subset of characters.
+    """
+    # Convert the original layout to a list for easy modification
+    layout = list(original_layout)
+
+    # Replace the original characters with the optimized ones
+    for pos, char in zip(subset_positions, optimized_subset):
+        layout[pos] = char
+
+    return ''.join(layout)
+
+def display_keyboard(layout, qwerty_keys, optimized_chars):
     """
     Displays the keyboard layout by splitting it into 3 rows of 10 keys.
     Uses '-' placeholders for all keys except the new characters.
@@ -166,9 +192,11 @@ def display_keyboard(layout, qwerty_keys, chars_to_arrange):
     # Initialize the layout with '-' placeholders
     filled_layout = ["-"] * 30
 
-    # Place new characters at the correct positions
-    key_positions = [qwerty_layout.index(key) for key in qwerty_keys]
-    for pos, new_char in zip(key_positions, chars_to_arrange):
+    # Find the positions of the QWERTY keys in the original layout
+    key_positions = [layout.index(key) for key in qwerty_keys]
+
+    # Place the optimized characters at the correct positions
+    for pos, new_char in zip(key_positions, optimized_chars):
         filled_layout[pos] = new_char
 
     # Split the layout into 3 rows of 10 keys each
@@ -216,19 +244,27 @@ if __name__ == "__main__":
     #--------------------------------------------------------------#
     # Stage 1: select keys and characters to arrange in those keys #
     #--------------------------------------------------------------#
-    qwerty_keys = "asd"
-    chars_to_arrange = "eic"
+    qwerty_keys = "asdfjkl;"  # Subset of keys to replace
+    chars_to_arrange = "cieahtsn"  # Characters to rearrange
     print(f"Qwertyu key positions: {qwerty_keys}")
     print(f"Characters to arrange: {chars_to_arrange}")
     
-    # Optimize a subset of the layout
+    # Step 1: Optimize a subset of the layout
     alpha = 0.5  # alpha * normalized_freq + (1 - alpha) * comfort
-    best_layout, best_score = optimize_subset(qwerty_keys, 
-                                              normalized_frequencies, 
-                                              normalized_qwerty_comfort, 
-                                              alpha)
+    optimized_subset, best_score = optimize_subset(qwerty_keys, 
+                                                   normalized_frequencies, 
+                                                   normalized_qwerty_comfort, 
+                                                   alpha)
+    # Step 2: Apply the same permutation to the new characters
+    rearranged_chars = apply_permutation(qwerty_keys, optimized_subset, chars_to_arrange)
 
-    print(f"Best Layout for Subset: {best_layout}")
-    print(f"Best Score: {best_score}")
-    print(display_keyboard(best_layout, qwerty_keys, chars_to_arrange))
+    # Step 3: Update the layout with the optimized subset
+    subset_positions = [qwerty_layout.index(key) for key in qwerty_keys]
+    new_qwerty_layout = update_layout_display(qwerty_layout, subset_positions, optimized_subset)
 
+    print(f"Updated layout with score {best_score}:\n{new_qwerty_layout}")
+    print(f"{chars_to_arrange} => {rearranged_chars}")
+    print("Keyboard layout with characters to arrange:")
+    print(display_keyboard(qwerty_layout, qwerty_keys, chars_to_arrange))    
+    print("Keyboard layout with rearranged characters:")
+    print(display_keyboard(qwerty_layout, qwerty_keys, rearranged_chars))
