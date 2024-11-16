@@ -227,7 +227,9 @@ def plot_bigram_graph(bigram_pairs):
 
     # Display the graph
     plt.title("Bigram Connectivity Graph", fontsize=20)
-    plt.show()
+    #plt.show()
+    plt.savefig('output/bigram-connectivity-graph.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 #===========================================================================================#
 # Feature space, feature matrix multicollinearity, priors sensitivity, and cross-validation #
@@ -458,7 +460,10 @@ def analyze_feature_space(feature_matrix):
     plt.title('2D PCA projection of feature space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
-    plt.show()
+    #plt.show()
+    plt.savefig('output/feature-space-pca-projection.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
     
     # Calculate the convex hull of the data points
     hull = ConvexHull(pca_result)
@@ -496,7 +501,9 @@ def identify_underrepresented_areas(pca_result, num_grid=20):
     plt.title('Underrepresented Areas in Feature Space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
-    plt.show()
+    #plt.show()
+    plt.savefig('output/feature-space-underrepresented-areas.png', dpi=300, bbox_inches='tight')
+    plt.close()
     
     return grid_points, distances
 
@@ -594,11 +601,11 @@ def generate_extended_recommendations(new_feature_differences, all_feature_diffe
 # Bayesian GLMM training, Bayesian posterior scoring #
 #====================================================#
 def train_bayesian_glmm(feature_matrix, target_vector, participants=None, 
-                        selected_feature_names=None,
-                        typing_times=None, inference_method="mcmc", 
-                        num_samples=1000, chains=4):
+                       selected_feature_names=None,
+                       typing_times=None, inference_method="mcmc", 
+                       num_samples=1000, chains=4):
     """
-    Train a Bayesian GLMM with hierarchical modeling using custom and feature-based priors.
+    Train a Bayesian GLMM with improved error handling and fallback options.
     """
     print("\n ---- Train Bayesian GLMM ---- \n")
 
@@ -621,51 +628,75 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants=None,
 
     selected_features_matrix = feature_matrix[selected_feature_names]
 
-    # Define the model context block to avoid the context stack error
+    # Define the model context block
     with pm.Model() as model:
-        # Create feature-based priors dynamically
-        feature_priors = {}
-        for feature_name in selected_feature_names:
-            feature_priors[feature_name] = pm.Normal(
-                feature_name, 
-                mu=np.mean(selected_features_matrix[feature_name]), 
-                sigma=np.std(selected_features_matrix[feature_name])
-            )
+        try:
+            # Create feature-based priors dynamically
+            feature_priors = {}
+            for feature_name in selected_feature_names:
+                feature_priors[feature_name] = pm.Normal(
+                    feature_name, 
+                    mu=np.mean(selected_features_matrix[feature_name]), 
+                    sigma=np.std(selected_features_matrix[feature_name])
+                )
 
-        # Define custom priors
-        if typing_times is not None:
-            typing_time_prior = pm.Normal('typing_time', 
-                                          mu=np.mean(typing_times), 
-                                          sigma=np.std(typing_times))
+            # Define custom priors
+            if typing_times is not None:
+                typing_time_prior = pm.Normal('typing_time', 
+                                            mu=np.mean(typing_times), 
+                                            sigma=np.std(typing_times))
 
-        # Combine all priors (feature-based + custom)
-        all_priors = list(feature_priors.values())
-        if typing_times is not None:
-            all_priors.append(typing_time_prior)
+            # Combine all priors (feature-based + custom)
+            all_priors = list(feature_priors.values())
+            if typing_times is not None:
+                all_priors.append(typing_time_prior)
 
-        # Random effects: Participant-specific intercepts
-        participant_intercept = pm.Normal('participant_intercept', mu=0, sigma=1, 
-                                          shape=num_participants)
+            # Random effects: Participant-specific intercepts
+            participant_intercept = pm.Normal('participant_intercept', mu=0, sigma=1, 
+                                            shape=num_participants)
 
-        # Define the linear predictor (fixed + random effects)
-        fixed_effects = pm.math.dot(selected_features_matrix, pm.math.stack([feature_priors[name] for name in selected_feature_names]))
-        if typing_times is not None:
-            fixed_effects += typing_time_prior
+            # Define the linear predictor (fixed + random effects)
+            fixed_effects = pm.math.dot(selected_features_matrix, 
+                                      pm.math.stack([feature_priors[name] for name in selected_feature_names]))
+            if typing_times is not None:
+                fixed_effects += typing_time_prior
 
-        mu = (fixed_effects + participant_intercept[participants_contiguous]).reshape(target_vector.shape)
+            mu = (fixed_effects + participant_intercept[participants_contiguous]).reshape(target_vector.shape)
 
-        # Likelihood: Observed target vector
-        sigma = pm.HalfNormal('sigma', sigma=10)
-        y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma, observed=target_vector)
+            # Likelihood: Observed target vector
+            sigma = pm.HalfNormal('sigma', sigma=10)
+            y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma, observed=target_vector)
 
-        # Choose the inference method
-        if inference_method == "mcmc":
-            trace = pm.sample(num_samples, chains=chains, return_inferencedata=True)
-        elif inference_method == "variational":
-            approx = pm.fit(method="advi", n=num_samples)
-            trace = approx.sample(num_samples)
-        else:
-            raise ValueError("Inference method must be 'mcmc' or 'variational'.")
+            # Choose the inference method with fallback options
+            if inference_method == "mcmc":
+                try:
+                    # First attempt: Try with multiple chains
+                    trace = pm.sample(num_samples, chains=chains, return_inferencedata=True)
+                except Exception as e:
+                    print(f"Warning: Multi-chain sampling failed ({str(e)}). Trying single chain...")
+                    try:
+                        # Second attempt: Try with a single chain
+                        trace = pm.sample(num_samples, chains=1, return_inferencedata=True)
+                    except Exception as e:
+                        print(f"Warning: NUTS sampling failed ({str(e)}). Falling back to Metropolis...")
+                        # Third attempt: Fall back to Metropolis
+                        trace = pm.sample(num_samples, chains=1, step=pm.Metropolis(), 
+                                        return_inferencedata=True)
+            elif inference_method == "variational":
+                try:
+                    # Attempt variational inference
+                    approx = pm.fit(method="advi", n=num_samples)
+                    trace = approx.sample(num_samples)
+                except Exception as e:
+                    print(f"Warning: Variational inference failed ({str(e)}). Using MCMC...")
+                    # Fall back to MCMC
+                    trace = pm.sample(num_samples, chains=1, return_inferencedata=True)
+            else:
+                raise ValueError("Inference method must be 'mcmc' or 'variational'.")
+
+        except Exception as e:
+            print(f"Error in model training: {str(e)}")
+            raise
 
     return trace, model, all_priors
 
