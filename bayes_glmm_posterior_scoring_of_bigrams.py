@@ -16,7 +16,7 @@ import arviz as az
 import ast
 import json
 
-from bigram_features import *
+from bayes_glmm_features import *
 
 def extract_features_samekey(char, finger_map):
     features = {
@@ -31,66 +31,19 @@ def extract_features_samekey(char, finger_map):
 
 def extract_features(char1, char2, column_map, row_map, finger_map):
     features = {
-        #--------------------------#
-        # Qwerty frequency feature #
-        #--------------------------#
-        'freq': sum_qwerty_frequencies(char1, char2, qwerty_frequency_map),
-        #------------------------#
-        # Same/adjacent features #
-        #------------------------#
-#        'same': same_finger(char1, char2, column_map, finger_map),
-#        'adj': adjacent_finger(char1, char2, column_map, finger_map),
-#        'adj_step': adj_finger_diff_row(char1, char2, column_map, row_map, finger_map),
-#        'adj_skip': adj_finger_skip(char1, char2, column_map, row_map, finger_map),
-        #---------------------#
-        # Separation features #
-        #---------------------#
-#        'nrows': rows_apart(char1, char2, column_map, row_map),
-#        'skip': skip_home(char1, char2, column_map, row_map),
-#        'ncols': columns_apart(char1, char2, column_map),
-#        'distance_apart': distance_apart(char1, char2, column_map, key_metrics),
-#        'angle_apart': angle_apart(char1, char2, column_map, key_metrics),
-        #--------------------#
-        # Direction features #
-        #--------------------#
-#        'out': outward_roll(char1, char2, column_map, finger_map),
-#        'out_same_row': outward_roll_same_row(char1, char2, column_map, row_map, finger_map),
-#        'out_skip': outward_skip(char1, char2, column_map, finger_map),
-        #-------------------#
-        # Position features #
-        #-------------------#
-#        'middle': middle_column(char1, char2, column_map),
-        'engram_sum': sum_engram_position_values(char1, char2, column_map, engram_position_values),
-        'row_sum': sum_row_position_values(char1, char2, column_map, row_position_values),
-        'position_sum': sum_data_position_values(char1, char2, column_map, data_position_values)
-        #-----------------#
-        # Finger features #
-        #-----------------#
-        #'1skip2': finger1skip2(char1, char2, column_map, row_map, finger_map),
-        #'2skip3': finger2skip3(char1, char2, column_map, row_map, finger_map),
-        #'3skip4': finger3skip4(char1, char2, column_map, row_map, finger_map),
-        #'f1': finger1(char1, char2, finger_map),
-        #'f2': finger2(char1, char2, finger_map),
-        #'f3': finger3(char1, char2, finger_map),
-        #'f4': finger4(char1, char2, finger_map),
-    #    '1above': finger1_above(char1, char2, column_map, row_map, finger_map),
-        #'2above': finger2_above(char1, char2, column_map, row_map, finger_map),
-        #'3above': finger3_above(char1, char2, column_map, row_map, finger_map),
-    #    '4above': finger4_above(char1, char2, column_map, row_map, finger_map),
-        #'1below': finger1_below(char1, char2, column_map, row_map, finger_map),
-    #    '2below': finger2_below(char1, char2, column_map, row_map, finger_map),
-    #    '3below': finger3_below(char1, char2, column_map, row_map, finger_map),
-        #'4below': finger4_below(char1, char2, column_map, row_map, finger_map),
-        #'1above2': finger1above2(char1, char2, column_map, row_map, finger_map),
-        #'2above1': finger2above1(char1, char2, column_map, row_map, finger_map),
-        #'2above3': finger2above3(char1, char2, column_map, row_map, finger_map),
-        #'3above2': finger3above2(char1, char2, column_map, row_map, finger_map),
-        #'3above4': finger3above4(char1, char2, column_map, row_map, finger_map),
-        #'4above3': finger4above3(char1, char2, column_map, row_map, finger_map),
-        #'2or3down': finger2or3down(char1, char2, column_map),
-    #    '1or4_top_above': finger1or4_top_above(char1, char2, column_map, row_map),
-    #    '2or3_bot_below': finger2or3_bottom_below(char1, char2, column_map, row_map)
-        #'fpairs': finger_pairs(char1, char2, column_map, finger_map)
+        'ncols': columns_apart(char1, char2, column_map),
+        'nrows': rows_apart(char1, char2, column_map, row_map),
+        'out': outward_roll(char1, char2, column_map, finger_map),
+        'skip': skip_home(char1, char2, column_map, row_map),
+        '1or4_top_above': finger1or4_top_above(char1, char2, column_map, row_map),
+        '2or3_bot_below': finger2or3_bottom_below(char1, char2, column_map, row_map),
+        '1above': finger1_above(char1, char2, column_map, row_map, finger_map),
+        '4above': finger4_above(char1, char2, column_map, row_map, finger_map),
+        '2below': finger2_below(char1, char2, column_map, row_map, finger_map),
+        '3below': finger3_below(char1, char2, column_map, row_map, finger_map),
+        'center': middle_column(char1, char2, column_map),
+        'same': same_finger(char1, char2, column_map, finger_map),
+        'adj_skip': adj_finger_skip(char1, char2, column_map, row_map, finger_map)
     }
     feature_names = list(features.keys())
     
@@ -835,13 +788,11 @@ def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None,
         # Use the mean score across all posterior samples
         all_bigram_scores[bigram] = np.mean(scores)
     
-    # Normalize scores to 0-1 range, and subtract from 1
+    # Normalize scores to 0-1 range
     min_score = min(all_bigram_scores.values())
     max_score = max(all_bigram_scores.values())
-    normalized_scores = {bigram: 1 - (score - min_score) / (max_score - min_score) 
+    normalized_scores = {bigram: (score - min_score) / (max_score - min_score) 
                          for bigram, score in all_bigram_scores.items()}
-    #normalized_scores = {bigram: (score - min_score) / (max_score - min_score) 
-    #                     for bigram, score in all_bigram_scores.items()}
     
     # Create a mapping for the right-hand keys
     if mirror_scores:
@@ -873,7 +824,7 @@ def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None,
 if __name__ == "__main__":
 
     # Run analyses on the feature space, and sensitivity and generalizability of priors
-    run_analyze_feature_space = True
+    run_analyze_feature_space = False
     # The following can only run if run_analyze_feature_space = True
     run_sensitivity_analysis = False
     run_cross_validation = False
@@ -881,10 +832,10 @@ if __name__ == "__main__":
     run_samekey_analysis = False
 
     # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
-    run_glmm = True
+    run_glmm = False
 
     # Score all bigrams based on the output of the GLMM
-    score_all_bigrams = False
+    score_all_bigrams = True
 
     # Incomplete
     run_optimize_layout = False
@@ -907,10 +858,10 @@ if __name__ == "__main__":
         all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
         # Load the CSV file into a pandas DataFrame
-        csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+        csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+        #csv_file_path = "/Users/arno.klein/Downloads/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
         bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
         # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
@@ -945,9 +896,9 @@ if __name__ == "__main__":
             #-------------------------
             # Add feature interactions
             #-------------------------
-            n_feature_interactions = 0
-            #feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
-            #feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
+            n_feature_interactions = 2
+            feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
+            feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
 
         #=====================================================================================================#
         # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
@@ -1036,7 +987,6 @@ if __name__ == "__main__":
 
     #=========================================================================#
     # Score all LEFT bigrams based on the output of the GLMM, mirror on RIGHT #
-    # NOTE: Subtract score from 1
     #=========================================================================#
     if score_all_bigrams:
 
