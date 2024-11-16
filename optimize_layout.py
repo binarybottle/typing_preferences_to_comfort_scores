@@ -126,17 +126,22 @@ def plot_comparison_histograms(bigram_frequencies, normalized_frequencies, qwert
 #========================================#
 # Functions to optimize keyboard layouts #
 #========================================#
-def optimize_subset(qwerty_keys, chars_to_arrange, normalized_frequencies, normalized_qwerty_comfort, alpha=0.5):
+def optimize_subset(qwerty_keys, chars_to_arrange, normalized_frequencies, normalized_qwerty_comfort):
     """
     Optimizes a subset of the layout using precomputed frequencies and QWERTY comfort scores.
     """
     best_layout = ''.join(chars_to_arrange)
     best_score = -np.inf
 
+    print("\nDetailed optimization process:")
+    print("-------------------------------")
+
     # Iterate over permutations of the chars_to_arrange
     for permutation in itertools.permutations(chars_to_arrange):
         layout = ''.join(permutation)
         total_score = 0
+
+        print(f"\nEvaluating permutation: {layout}")
 
         # Calculate total score for this layout permutation
         for i, char1 in enumerate(layout):
@@ -149,13 +154,28 @@ def optimize_subset(qwerty_keys, chars_to_arrange, normalized_frequencies, norma
                     freq_score = normalized_frequencies.get(character_bigram, 0)
                     comfort_score = normalized_qwerty_comfort.get(qwerty_bigram, 0)
 
+                    # Calculate combined score for this bigram
+                    bigram_score = freq_score * comfort_score
+
+                    print(f"  Bigram: {character_bigram} (QWERTY: {qwerty_bigram})")
+                    print(f"    Frequency score: {freq_score:.4f}")
+                    print(f"    Comfort score: {comfort_score:.4f}")
+                    print(f"    Combined score: {bigram_score:.4f}")
+
                     # Accumulate score
-                    total_score += alpha * freq_score + (1 - alpha) * comfort_score
+                    total_score += bigram_score
+
+        print(f"  Total score for {layout}: {total_score:.4f}")
 
         # Update best layout if the score is better
         if total_score > best_score:
             best_score = total_score
             best_layout = layout
+            print(f"  New best layout: {best_layout} (score: {best_score:.4f})")
+
+    print("\nOptimization complete.")
+    print(f"Best layout: {best_layout}")
+    print(f"Best score: {best_score:.4f}")
 
     return best_layout, best_score
 
@@ -214,10 +234,11 @@ if __name__ == "__main__":
     #---------------------------------------------------------------#
     # Qwerty bigram comfort scores for left and right sides of a computer keyboard
     qwerty_layout = "qwertyuiopasdfghjkl;zxcvbnm,./"
-    qwerty_comfort_scores_file = "output_bayes_bigram_scoring/all_bigram_comfort_scores.csv"
+    qwerty_comfort_scores_file = "output/all_bigram_comfort_scores.csv"
     qwerty_comfort_scores = pd.read_csv(f"{qwerty_comfort_scores_file}", index_col='bigram')
+    print(qwerty_comfort_scores)
 
-    # bigram frequencies
+    # Bigram frequencies
     from ngram_frequencies import bigram_frequencies
 
     # Precompute bigram comfort scores and qwerty bigram frequencies with square root scaling and offset
@@ -232,18 +253,16 @@ if __name__ == "__main__":
     #--------------------------------------------------------------#
     # Stage 1: select keys and characters to arrange in those keys #
     #--------------------------------------------------------------#
-    qwerty_keys = "dfqz"  # Subset of keys to replace
-    chars_to_arrange = "qzea"  # Characters to rearrange
+    qwerty_keys = "asdf"  # Subset of keys to replace
+    chars_to_arrange = "icae"  # Characters to rearrange
     print(f"Qwertyu key positions: {qwerty_keys}")
     print(f"Characters to arrange: {chars_to_arrange}")
     
     # Step 1: Optimize a subset of the layout
-    alpha = 0.5  # alpha * normalized_freq + (1 - alpha) * comfort
     chars_rearranged, best_score = optimize_subset(qwerty_keys, 
                                                    chars_to_arrange,
                                                    normalized_frequencies, 
-                                                   normalized_qwerty_comfort, 
-                                                   alpha)
+                                                   normalized_qwerty_comfort)
 
     # Step 2: Determine the new order of QWERTY keys
     char_to_qwerty = dict(zip(chars_to_arrange, qwerty_keys))
