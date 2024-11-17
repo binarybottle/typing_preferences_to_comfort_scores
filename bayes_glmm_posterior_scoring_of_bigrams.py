@@ -61,8 +61,8 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
         #-------------------#
 #        'middle': middle_column(char1, char2, column_map),
         'engram_sum': sum_engram_position_values(char1, char2, column_map, engram_position_values),
-        'row_sum': sum_row_position_values(char1, char2, column_map, row_position_values),
-        'position_sum': sum_data_position_values(char1, char2, column_map, data_position_values)
+        'row_sum': sum_row_position_values(char1, char2, column_map, row_position_values)
+        #'position_sum': sum_data_position_values(char1, char2, column_map, data_position_values)
         #-----------------#
         # Finger features #
         #-----------------#
@@ -95,6 +95,7 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
     feature_names = list(features.keys())
     
     return features, feature_names
+
 
 #=================================================================#
 # Features for all bigrams and their differences in feature space #
@@ -700,20 +701,28 @@ def train_bayesian_glmm(feature_matrix, target_vector, participants=None,
 
     return trace, model, all_priors
 
+    
 def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None, 
+                                      features_for_design=None,
                                       output_filename="bigram_typing_comfort_scores.csv"):
     """
     Generate latent comfort scores using the full posterior distributions from a Bayesian GLMM.
     This version handles both feature-based and manual priors.
-    
+
+    We use Qwerty bigram frequency as a control variable to isolate ergonomic effects.
+    This accounts for any frequency-based confounding effects in the data,
+    gives cleaner estimates of the ergonomic features' true effects, and
+    model coefficients for other features represent their effects while holding frequency constant.
+
     Parameters:
-    - trace: The InferenceData object from the Bayesian GLMM (contains posterior samples).
-    - bigram_pairs: List of bigram pairs used in the comparisons.
-    - feature_matrix: The feature matrix used in the GLMM, indexed by bigram pairs.
-    - params: List of parameter names to use from the trace. If None, all suitable parameters will be used.
-   
+    - trace: The InferenceData object from the Bayesian GLMM
+    - bigram_pairs: List of bigram pairs used in the comparisons
+    - feature_matrix: The feature matrix used in the GLMM, indexed by bigram pairs
+    - params: List of parameter names to use from the trace
+    - features_for_design: List of features to use for scoring (excludes control variables)
+
     Returns:
-    - bigram_comfort_scores: Dictionary mapping each bigram to its latent comfort score.
+    - bigram_comfort_scores
     """
     # Extract variable names from the trace
     all_vars = list(trace.posterior.data_vars)
@@ -722,21 +731,19 @@ def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, param
     if params is None:
         params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
     
-    print(f"All parameters: {params}")
+    # If features_for_design not provided, use all params except known control variables
+    if features_for_design is None:
+        features_for_design = [p for p in params if p != 'freq']
     
-    # Separate parameters into those in the feature matrix and those that aren't
-    feature_params = [param for param in params if param in feature_matrix.columns]
-    manual_params = [param for param in params if param not in feature_matrix.columns]
+    print(f"Design features used for scoring: {features_for_design}")
     
-    print(f"Feature-based parameters: {feature_params}")
-    print(f"Manual parameters: {manual_params}")
-    
-    # Extract posterior samples for all parameters
-    posterior_samples = {param: az.extract(trace, var_names=param).values for param in params}
+    # Extract posterior samples for design features only
+    posterior_samples = {param: az.extract(trace, var_names=param).values 
+                        for param in params if param in features_for_design}
     
     # Convert feature matrix to numpy array and extract relevant columns
-    feature_array = feature_matrix[feature_params].values
-    
+    feature_array = feature_matrix[features_for_design].values
+
     # Create a dictionary to map bigram pairs to their index in the feature array
     bigram_to_index = {tuple(map(tuple, pair)): i for i, pair in enumerate(feature_matrix.index)}
     
@@ -843,7 +850,11 @@ def load_glmm_results(base_filename):
     
     return trace, point_estimates, model_info
 
-def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None, mirror_scores=True):
+def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None, 
+                                        features_for_design=None, mirror_scores=True):
+    """
+    Calculate comfort scores for all possible bigrams.
+    """
     # Extract variable names from the trace
     all_vars = list(trace.posterior.data_vars)
     
@@ -851,15 +862,22 @@ def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None,
     if params is None:
         params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
     
-    # Extract posterior samples for all parameters
-    posterior_samples = {param: az.extract(trace, var_names=param).values for param in params}
+    # If features_for_design not provided, use all params except known control variables
+    if features_for_design is None:
+        features_for_design = [p for p in params if p != 'freq']
+    
+    print(f"Design features used for scoring: {features_for_design}")
+    
+    # Extract posterior samples for design features only
+    posterior_samples = {param: az.extract(trace, var_names=param).values 
+                        for param in params if param in features_for_design}
     
     # Calculate comfort scores for each bigram
     all_bigram_scores = {}
     for bigram, features in all_bigram_features.iterrows():
-        # Calculate score using feature-based parameters
+        # Calculate score using only design features
         scores = np.zeros(len(next(iter(posterior_samples.values()))))
-        for param in params:
+        for param in features_for_design:
             if param in features.index:
                 scores += posterior_samples[param] * features[param]
         
@@ -903,16 +921,19 @@ def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None,
 #==============#
 if __name__ == "__main__":
 
+    selected_feature_names = ['freq', 'row_sum', 'engram_sum']  # freq is control
+    features_for_design = ['row_sum', 'engram_sum']
+
     # Run analyses on the feature space, and sensitivity and generalizability of priors
     run_analyze_feature_space = True
     # The following can only run if run_analyze_feature_space = True
-    run_sensitivity_analysis = False
+    run_sensitivity_analysis = True
     run_cross_validation = False
     # Run the above on comparisons of repeat-key bigrams (only collected data on 4: "aa", "ss", "dd", "ff")
     run_samekey_analysis = False
 
     # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
-    run_glmm = True
+    run_glmm = False
 
     # Score all bigrams based on the output of the GLMM
     score_all_bigrams = False
@@ -1017,7 +1038,7 @@ if __name__ == "__main__":
             # Sensitivity analysis to determine how much each prior influences the results
             if run_sensitivity_analysis:
                 sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
-                                                                selected_feature_names=None,
+                                                                selected_feature_names,
                                                                 typing_times=typing_times, 
                                                                 prior_means=[0, 50, 100], 
                                                                 prior_stds=[1, 10, 100])
@@ -1029,13 +1050,9 @@ if __name__ == "__main__":
     # Train a Bayesian GLMM and score using Bayesian posteriors #
     #===========================================================#
     if run_glmm:
-        if run_samekey_analysis:
-            selected_feature_names = None
-        else:
-            selected_feature_names = None  #['same', 'skip']
 
         trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
-            selected_feature_names=selected_feature_names, 
+            selected_feature_names, 
             typing_times=typing_times,
             inference_method="mcmc", 
             num_samples=2000, 
@@ -1060,6 +1077,7 @@ if __name__ == "__main__":
         print("\n ---- Score comfort using Bayesian posteriors ---- \n")
         # Generate bigram typing comfort scores using the Bayesian posteriors
         bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None,
+                                                                  features_for_design=features_for_design,
                                                                   output_filename = "output/bigram_typing_comfort_scores.csv")
         # Print the comfort score for a specific bigram
         #print(bigram_comfort_scores)
@@ -1082,8 +1100,8 @@ if __name__ == "__main__":
         loaded_trace, loaded_point_estimates, loaded_model_info = load_glmm_results("output/glmm_results")
 
         # Calculate comfort scores for all (left and mirrored right) bigrams
-        all_bigram_comfort_scores = calculate_all_bigram_comfort_scores(loaded_trace, all_bigram_features,
-                                                                        params=None, mirror_scores=True)
+        all_bigram_comfort_scores = calculate_all_bigram_comfort_scores(loaded_trace, all_bigram_features, params=None, 
+                                                                        features_for_design=features_for_design, mirror_scores=True)
 
         # Convert to DataFrame and save to CSV
         all_scores_df = pd.DataFrame.from_dict(all_bigram_comfort_scores, orient='index', columns=['comfort_score'])
