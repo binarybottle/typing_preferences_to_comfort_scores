@@ -9,32 +9,54 @@ from sklearn.cluster import KMeans
 from scipy.optimize import differential_evolution, minimize
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist
+import scipy.stats as stats
 from itertools import product
 import networkx as nx
 import pymc as pm
 import arviz as az
 import ast
+from ast import literal_eval
 import json
-
+import seaborn as sns
+    
 from bigram_features import *
 
-def extract_features_samekey(char, finger_map):
-    features = {
-        'finger1': int(finger_map[char] == 1),
-        'finger2': int(finger_map[char] == 2),
-        'finger3': int(finger_map[char] == 3),
-        'finger4': int(finger_map[char] == 4)
-    }
-    feature_names = list(features.keys())
-    
-    return features, feature_names
+#================================================#
+# Set which features to use and functions to run # 
+#================================================#
+# NOTE: Set feature interactions (n_feature_interactions below)
+left_layout_chars = list("qwertasdfgzxcvb")
+selected_feature_names = ['freq', 'row_sum', 'engram_sum']  # freq is a control
+features_for_design = ['row_sum', 'engram_sum']
 
+# Analyze feature-timing relationship (see results in output/timing_vs_frequency/timing_frequency_relationship.txt)
+run_analyze_timing_frequency_relationship = False 
+
+# Analyze the feature space, and sensitivity and generalizability of priors
+run_analyze_feature_space = True
+if run_analyze_feature_space:
+    run_recommend_bigram_pairs = True
+    run_sensitivity_analysis = True
+    run_cross_validation = True
+
+# Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
+run_glmm = False
+
+# Score all bigrams based on the output of the GLMM
+score_all_bigrams = False
+
+# Incomplete
+run_optimize_layout = False
+
+#==============================#
+# Functions to select features #
+#==============================#
 def extract_features(char1, char2, column_map, row_map, finger_map):
     features = {
         #--------------------------#
         # Qwerty frequency feature #
         #--------------------------#
-        'freq': sum_qwerty_frequencies(char1, char2, qwerty_frequency_map),
+        'freq': qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array),
         #------------------------#
         # Same/adjacent features #
         #------------------------#
@@ -96,10 +118,20 @@ def extract_features(char1, char2, column_map, row_map, finger_map):
     
     return features, feature_names
 
+def extract_features_samekey(char, finger_map):
+    features = {
+        'finger1': int(finger_map[char] == 1),
+        'finger2': int(finger_map[char] == 2),
+        'finger3': int(finger_map[char] == 3),
+        'finger4': int(finger_map[char] == 4)
+    }
+    feature_names = list(features.keys())
+    
+    return features, feature_names
 
-#=================================================================#
-# Features for all bigrams and their differences in feature space #
-#=================================================================#
+#======================================================================================#
+# Functions to compute features for all bigrams and their differences in feature space #
+#======================================================================================#
 def precompute_all_bigram_features(layout_chars, column_map, row_map, finger_map):
     """
     Precompute features for all possible bigrams based on the given layout characters.
@@ -232,9 +264,267 @@ def plot_bigram_graph(bigram_pairs):
     plt.savefig('output/bigram-connectivity-graph.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-#===========================================================================================#
-# Feature space, feature matrix multicollinearity, priors sensitivity, and cross-validation #
-#===========================================================================================#
+#====================================================#
+# Functions to analyze frequency-timing relationship #
+#====================================================#
+def analyze_timing_frequency_relationship(bigram_data, bigrams, bigram_frequencies_array):
+    """
+    Analyze relationship between normalized bigram frequency and typing time.
+        
+    - Works with individual bigrams rather than differences
+    - Analyzes both raw and log-transformed frequencies (frequency distributions are often skewed)
+    - Creates separate plots for raw and log frequencies
+    - Provides statistics about the relationship
+
+    To determine whether it makes sense to control for bigram frequency while focusing on ergonomic features,
+    we want to first determine:
+    - How strongly bigram frequency predicts typing time
+    - Whether the relationship is linear or non-linear
+    - How much variance in typing time is explained by frequency
+    - Whether controlling for frequency in your GLMM was important
+
+    Parameters:
+    - bigram_data: DataFrame containing bigram pair data and timing
+    - bigrams: List of bigrams ordered by frequency
+    - bigram_frequencies_array: Array of corresponding frequency values
+    """
+    # Extract chosen bigrams and their timing
+    frequencies = []
+    timings = []
+    bigram_list = []  # To track which bigrams we're analyzing
+    
+    # Process each row
+    for _, row in bigram_data.iterrows():
+        try:
+            # Get chosen bigram (already a string)
+            chosen_bigram = row['chosen_bigram'].lower().strip()
+            
+            if len(chosen_bigram) == 2:  # Ensure it's a valid bigram
+                # Get normalized frequency for the bigram
+                freq = qwerty_bigram_frequency(chosen_bigram[0], chosen_bigram[1], 
+                                            bigrams, bigram_frequencies_array)
+                frequencies.append(freq)
+                timings.append(row['chosen_bigram_time'])
+                bigram_list.append(chosen_bigram)
+                
+        except Exception as e:
+            print(f"Error processing row - chosen_bigram: {row.get('chosen_bigram', 'N/A')}, "
+                  f"error: {str(e)}")
+            continue
+    
+    print(f"Number of bigrams analyzed: {len(frequencies)}")
+    
+    # Convert to numpy arrays
+    frequencies = np.array(frequencies)
+    timings = np.array(timings)
+    
+    # Remove any NaN values
+    valid_mask = ~(np.isnan(frequencies) | np.isnan(timings))
+    frequencies = frequencies[valid_mask]
+    timings = timings[valid_mask]
+    bigram_list = [b for i, b in enumerate(bigram_list) if valid_mask[i]]
+    
+    print(f"Number of bigrams after removing NaN: {len(frequencies)}")
+    
+    # Print some summary statistics
+    print("\nFrequency Summary:")
+    print(f"Mean frequency: {np.mean(frequencies):.6f}")
+    print(f"Median frequency: {np.median(frequencies):.6f}")
+    print(f"Min frequency: {np.min(frequencies):.6f}")
+    print(f"Max frequency: {np.max(frequencies):.6f}")
+    
+    print("\nTiming Summary:")
+    print(f"Mean timing: {np.mean(timings):.2f} ms")
+    print(f"Median timing: {np.median(timings):.2f} ms")
+    print(f"Min timing: {np.min(timings):.2f} ms")
+    print(f"Max timing: {np.max(timings):.2f} ms")
+    
+    # Calculate correlations
+    raw_correlation, raw_p_value = stats.pearsonr(frequencies, timings)
+    log_frequencies = np.log10(frequencies + 1e-10)  # Add small constant to avoid log(0)
+    log_correlation, log_p_value = stats.pearsonr(log_frequencies, timings)
+    rank_correlation, rank_p_value = stats.spearmanr(frequencies, timings)
+    
+    # Linear regression using log frequencies
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score
+    
+    X = log_frequencies.reshape(-1, 1)
+    y = timings
+    reg = LinearRegression().fit(X, y)
+    r2 = r2_score(y, reg.predict(X))
+    
+    # Print results
+    print("\nCorrelation Results:")
+    print(f"Raw Frequency Correlation: {raw_correlation:.3f} (p={raw_p_value:.3e})")
+    print(f"Log Frequency Correlation: {log_correlation:.3f} (p={log_p_value:.3e})")
+    print(f"Spearman Rank Correlation: {rank_correlation:.3f} (p={rank_p_value:.3e})")
+    print(f"Log Frequency R²: {r2:.3f}")
+    print(f"Regression coefficient: {reg.coef_[0]:.3f}")
+    print(f"Intercept: {reg.intercept_:.3f}")
+    
+    # Create visualization
+    plt.figure(figsize=(12, 5))
+    
+    # Raw frequency plot
+    plt.subplot(1, 2, 1)
+    plt.scatter(frequencies, timings, alpha=0.5, label='Data points')
+    plt.xlabel('Normalized Bigram Frequency')
+    plt.ylabel('Typing Time (ms)')
+    plt.title('Raw Frequency vs Typing Time')
+    
+    # Add bigram labels for extreme points
+    n_labels = 5  # Number of extreme points to label
+    extreme_indices = np.argsort(frequencies)[-n_labels:]  # Highest frequencies
+    for idx in extreme_indices:
+        plt.annotate(bigram_list[idx], 
+                    (frequencies[idx], timings[idx]),
+                    xytext=(5, 5), textcoords='offset points')
+    
+    plt.text(0.05, 0.95, f'r: {raw_correlation:.3f}\np: {raw_p_value:.3e}', 
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # Log frequency plot
+    plt.subplot(1, 2, 2)
+    plt.scatter(log_frequencies, timings, alpha=0.5, label='Data points')
+    
+    # Regression line
+    x_range = np.linspace(log_frequencies.min(), log_frequencies.max(), 100)
+    plt.plot(x_range, reg.predict(x_range.reshape(-1, 1)), 
+             color='red', label='Regression line')
+    
+    plt.xlabel('Log10(Normalized Frequency)')
+    plt.ylabel('Typing Time (ms)')
+    plt.title('Log Frequency vs Typing Time')
+    plt.legend()
+    
+    plt.text(0.05, 0.95, 
+             f'r: {log_correlation:.3f}\nR²: {r2:.3f}\np: {log_p_value:.3e}', 
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.savefig('output/timing_frequency_relationship.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    return {
+        'raw_correlation': raw_correlation,
+        'raw_p_value': raw_p_value,
+        'log_correlation': log_correlation,
+        'log_p_value': log_p_value,
+        'rank_correlation': rank_correlation,
+        'rank_p_value': rank_p_value,
+        'r2': r2,
+        'regression_coefficient': reg.coef_[0],
+        'intercept': reg.intercept_,
+        'n_samples': len(timings),
+        'labeled_bigrams': [bigram_list[i] for i in extreme_indices]
+    }                     
+
+def compare_timing_by_frequency_groups(bigram_data, bigrams, bigram_frequencies_array, n_groups=4):
+    """
+    Compare typing times across different frequency groups.
+    
+    Parameters:
+    - bigram_data: DataFrame containing timing data
+    - bigrams: List of bigrams ordered by frequency
+    - bigram_frequencies_array: Array of corresponding frequency values
+    - n_groups: Number of frequency groups to create
+    """
+    import pandas as pd
+    import numpy as np
+    import scipy.stats as stats
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    # First get frequencies for each chosen bigram
+    freqs = []
+    times = []
+    bigram_texts = []
+    
+    for _, row in bigram_data.iterrows():
+        chosen_bigram = row['chosen_bigram'].lower().strip()
+        if len(chosen_bigram) == 2:
+            freq = qwerty_bigram_frequency(chosen_bigram[0], chosen_bigram[1], 
+                                         bigrams, bigram_frequencies_array)
+            freqs.append(freq)
+            times.append(row['chosen_bigram_time'])
+            bigram_texts.append(chosen_bigram)
+    
+    # Create DataFrame with unique index
+    analysis_df = pd.DataFrame({
+        'bigram': bigram_texts,
+        'frequency': freqs,
+        'timing': times,
+    })
+    
+    # Create frequency groups
+    analysis_df['frequency_group'] = pd.qcut(analysis_df['frequency'], 
+                                           n_groups, 
+                                           labels=['Very Low', 'Low', 'High', 'Very High'])
+    
+    # Calculate summary statistics by group
+    group_stats = analysis_df.groupby('frequency_group')['timing'].agg([
+        'count', 'mean', 'std', 'median', 'min', 'max'
+    ]).round(2)
+    
+    # Add frequency ranges for each group
+    freq_ranges = analysis_df.groupby('frequency_group')['frequency'].agg(['min', 'max']).round(4)
+    group_stats['freq_range'] = freq_ranges.apply(lambda x: f"{x['min']:.4f} - {x['max']:.4f}", axis=1)
+    
+    # Perform one-way ANOVA
+    groups = [group['timing'].values for name, group in analysis_df.groupby('frequency_group')]
+    f_stat, p_value = stats.f_oneway(*groups)
+    
+    # Print results
+    print("\n---- Frequency Group Analysis ----\n")
+    print("Group Statistics:")
+    print(group_stats)
+    print(f"\nOne-way ANOVA:")
+    print(f"F-statistic: {f_stat:.3f}")
+    print(f"p-value: {p_value:.3e}")
+    
+    # Create box plot
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(data=analysis_df, x='frequency_group', y='timing')
+    plt.title('Typing Time Distribution by Frequency Group')
+    plt.xlabel('Frequency Group')
+    plt.ylabel('Typing Time (ms)')
+    
+    # Add sample sizes to x-axis labels
+    sizes = analysis_df['frequency_group'].value_counts()
+    plt.gca().set_xticklabels([f'{tick.get_text()}\n(n={sizes[tick.get_text()]})' 
+                              for tick in plt.gca().get_xticklabels()])
+    
+    plt.savefig('output/timing_by_frequency_groups.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Create violin plot
+    plt.figure(figsize=(10, 6))
+    sns.violinplot(data=analysis_df, x='frequency_group', y='timing')
+    plt.title('Typing Time Distribution by Frequency Group (Violin Plot)')
+    plt.xlabel('Frequency Group')
+    plt.ylabel('Typing Time (ms)')
+    
+    # Add sample sizes to x-axis labels
+    plt.gca().set_xticklabels([f'{tick.get_text()}\n(n={sizes[tick.get_text()]})' 
+                              for tick in plt.gca().get_xticklabels()])
+    
+    plt.savefig('output/timing_by_frequency_groups_violin.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    return {
+        'group_stats': group_stats,
+        'anova_f_stat': f_stat,
+        'anova_p_value': p_value
+    }
+
+#=========================================================================================================#
+# Functions to evaluate feature space, feature matrix multicollinearity, priors sensitivity and stability #
+#=========================================================================================================#
 def check_multicollinearity(feature_matrix):
     """
     Check for multicollinearity.
@@ -478,6 +768,9 @@ def analyze_feature_space(feature_matrix):
     
     return pca, scaler, hull
 
+#===============================================================#
+# Functions to generate recommendations for new bigrams to test #
+#===============================================================#
 def identify_underrepresented_areas(pca_result, num_grid=20):
     x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
     y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
@@ -598,9 +891,9 @@ def generate_extended_recommendations(new_feature_differences, all_feature_diffe
     
     return unique_suggestions[:n_total]
   
-#====================================================#
-# Bayesian GLMM training, Bayesian posterior scoring #
-#====================================================#
+#============================================================================#
+# Functions to train a Bayesian GLMM, and generate Bayesian posterior scores #
+#============================================================================#
 def train_bayesian_glmm(feature_matrix, target_vector, participants=None, 
                        selected_feature_names=None,
                        typing_times=None, inference_method="mcmc", 
@@ -915,43 +1208,23 @@ def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None,
 
 
 ####################################################################################################
+#--------------------------------------------------------------------------------------------------#
+#--------------------------------------------------------------------------------------------------#
+####################################################################################################
 
-#==============#
-# Run the code #
-#==============#
+
 if __name__ == "__main__":
 
-    selected_feature_names = ['freq', 'row_sum', 'engram_sum']  # freq is control
-    features_for_design = ['row_sum', 'engram_sum']
-
-    # Run analyses on the feature space, and sensitivity and generalizability of priors
-    run_analyze_feature_space = True
-    # The following can only run if run_analyze_feature_space = True
-    run_sensitivity_analysis = True
-    run_cross_validation = False
-    # Run the above on comparisons of repeat-key bigrams (only collected data on 4: "aa", "ss", "dd", "ff")
-    run_samekey_analysis = False
-
-    # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
-    run_glmm = False
-
-    # Score all bigrams based on the output of the GLMM
-    score_all_bigrams = False
-
-    # Incomplete
-    run_optimize_layout = False
-
-    #===========================================#
+    #############################################
     # Run feature analyses or GLMM on LEFT keys #
-    #===========================================#
-    left_layout_chars = list("qwertasdfgzxcvb")
+    #############################################
+    run_samekey_analysis = False # compare repeat-key bigrams (data only for "aa", "ss", "dd", "ff")
+    if run_analyze_timing_frequency_relationship or run_analyze_feature_space or run_glmm:
 
-    if run_analyze_feature_space or run_glmm:
-
-        #=================================================#
-        # Load, prepare, and analyze LEFT bigram features #
-        #=================================================#
-        print("\n ---- Load, prepare, and analyze features ---- \n")
+        #=======================================#
+        # Load and prepare LEFT bigram features #
+        #=======================================#
+        print("\n ---- Load and prepare features ---- \n")
 
         # Precompute all bigram features and differences between the features of every pair of bigrams
         all_bigrams, all_bigram_features, feature_names, samekey_bigrams, samekey_bigram_features, \
@@ -1001,36 +1274,51 @@ if __name__ == "__main__":
             #feature_matrix['same_skip'] = feature_matrix['same'] * feature_matrix['skip']
             #feature_matrix['1_center'] = feature_matrix['same'] * feature_matrix['center']
 
-        #=====================================================================================================#
-        # Check feature space, feature matrix multicollinearity, priors sensitivity, and run cross-validation #
-        #=====================================================================================================#
+        #=======================================#
+        # Analyze frequency-timing relationship #
+        #=======================================#
+        if run_analyze_timing_frequency_relationship:
+
+            print("\n ---- Analyze frequency-timing relationship ---- \n")
+
+            correlation_results = analyze_timing_frequency_relationship(bigram_data, bigrams, bigram_frequencies_array)
+            group_comparison_results = compare_timing_by_frequency_groups(bigram_data, bigrams, bigram_frequencies_array, n_groups=4)
+
+        #=========================================================================================#
+        # Check feature space, feature matrix multicollinearity, priors sensitivity and stability #
+        #=========================================================================================#
         if run_analyze_feature_space:
 
-            # Plot a graph of all bigram pairs to make sure they are all connected for Bradley-Terry training
+            print("\n ---- Analyze feature space ---- \n")
+
+            # Plot a graph of all bigram pairs to see how well they are connected
             plot_bigram_pair_graph = False
             if plot_bigram_pair_graph:
                 plot_bigram_graph(bigram_pairs)
 
-            pca, scaler, hull = analyze_feature_space(feature_matrix)
-            grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
-            new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
+            if run_recommend_bigram_pairs:
 
-            # Timing data should be in the last column (prior appended to all_priors in train_bayesian_glmm)
-            if n_feature_interactions > 0:
-                new_feature_differences = new_feature_differences[:, :-n_feature_interactions]  # Removes the last n columns
-            suggested_bigram_pairs = features_to_bigram_pairs(new_feature_differences, all_feature_differences)
+                pca, scaler, hull = analyze_feature_space(feature_matrix)
+                grid_points, distances = identify_underrepresented_areas(pca.transform(scaler.transform(feature_matrix)))
+                new_feature_differences = generate_new_features(grid_points, distances, pca, scaler)
 
-            print("Suggested new bigram pairs to collect data for:")
-            for pair in suggested_bigram_pairs:
-                print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+                # Remove feature interactions 
+                # (timing should be in the last column (prior appended to all_priors in train_bayesian_glmm))
+                if n_feature_interactions > 0:
+                    new_feature_differences = new_feature_differences[:, :-n_feature_interactions]  # Removes the last n columns
+                suggested_bigram_pairs = features_to_bigram_pairs(new_feature_differences, all_feature_differences)
 
-            n_recommendations = 30
-            extended_suggestions = generate_extended_recommendations(new_feature_differences, all_feature_differences, 
-                                                                     suggested_bigram_pairs, n_recommendations)
+                print("Suggested new bigram pairs to collect data for:")
+                for pair in suggested_bigram_pairs:
+                    print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
 
-            print("Extended list of suggested bigram pairs to collect data for:")
-            for i, pair in enumerate(extended_suggestions):
-                print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
+                n_recommendations = 30
+                extended_suggestions = generate_extended_recommendations(new_feature_differences, all_feature_differences, 
+                                                                        suggested_bigram_pairs, n_recommendations)
+
+                print("Extended list of suggested bigram pairs to collect data for:")
+                for i, pair in enumerate(extended_suggestions):
+                    print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
 
             # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
             check_multicollinearity(feature_matrix)
@@ -1046,9 +1334,9 @@ if __name__ == "__main__":
                 cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
                                 feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
         
-    #===========================================================#
+    #############################################################
     # Train a Bayesian GLMM and score using Bayesian posteriors #
-    #===========================================================#
+    #############################################################
     if run_glmm:
 
         trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
@@ -1083,10 +1371,10 @@ if __name__ == "__main__":
         #print(bigram_comfort_scores)
         #print(bigram_comfort_scores['df'])
 
-    #=========================================================================#
+    ###########################################################################
     # Score all LEFT bigrams based on the output of the GLMM, mirror on RIGHT #
     # NOTE: Subtract score from 1
-    #=========================================================================#
+    ###########################################################################
     if score_all_bigrams:
 
         # Load the precomputed bigram features for all bigrams

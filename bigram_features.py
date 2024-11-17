@@ -1,5 +1,7 @@
 from math import atan2, degrees, sqrt
 
+from ngram_frequencies import * 
+
 #=====================================#
 # Keyboard layout and finger mappings #
 #=====================================#
@@ -11,16 +13,6 @@ qwerty_map = {
              'h', 'j', 'k', 'l', ';', 
              'n', 'm', ',', '.', '/']
 }
-
-qwerty_frequency_map = {
-    'e': 0.12492063, 't': 0.09275565, 'a': 0.08040605, 'o': 0.07640693, 'i': 0.07569278, 
-    'n': 0.07233629, 's': 0.06512767, 'r': 0.06279421, 'h': 0.05053301, 'l': 0.04068986,
-    'd': 0.03816958, 'c': 0.03343774, 'u': 0.02729702, 'm': 0.02511761, 'f': 0.02403123, 
-    'p': 0.02135891, 'g': 0.01869376, 'w': 0.01675664, 'y': 0.0166498 , 'b': 0.01484649, 
-    'v': 0.01053252, 'k': 0.00540513, 'x': 0.00234857, 'j': 0.00158774, 'q': 0.00120469, 
-    'z': 0.00089951
-}
-max_qwerty_frequency = qwerty_frequency_map['e']
 
 finger_map = {
     'q': 4, 'w': 3, 'e': 2, 'r': 1, 't': 1,
@@ -181,13 +173,37 @@ data_position_values = {
 # Features #
 #==========#
 
-#--------------------------#
-# Qwerty frequency feature #
-#--------------------------#
-def sum_qwerty_frequencies(char1, char2, qwerty_frequency_map):
-    """Sum 1 - qwerty_frequency_map values for the two characters."""
-    return 2 - (qwerty_frequency_map[char1]/max_qwerty_frequency + qwerty_frequency_map[char2]/max_qwerty_frequency)
-
+#---------------------------------#
+# Qwerty bigram frequency feature #
+#---------------------------------#
+def qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array):
+    """
+    Look up normalized frequency of a bigram from Norvig's analysis.
+    Normalizes by dividing by the maximum frequency ("th" = 0.0356).
+    
+    Parameters:
+    - char1: First character of bigram (case-insensitive)
+    - char2: Second character of bigram (case-insensitive)
+    - bigrams: List of bigrams ordered by frequency
+    - bigram_frequencies_array: Array of corresponding frequency values
+    
+    Returns:
+    - float: Normalized frequency of the bigram if found, 0.0 if not found
+             (value between 0 and 1, where "th" = 1.0)
+    """
+    # Maximum frequency is the first value in the array (corresponds to "th")
+    max_freq = bigram_frequencies_array[0]  # ~0.0356
+    
+    # Create bigram string and convert to lowercase
+    bigram = (char1 + char2).lower()
+    
+    # Look up bigram index in list and normalize
+    try:
+        idx = bigrams.index(bigram)
+        return float(bigram_frequencies_array[idx] / max_freq)
+    except ValueError:
+        return 0.0
+    
 #------------------------#
 # Same/adjacent features #
 #------------------------#
