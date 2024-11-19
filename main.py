@@ -13,10 +13,9 @@ from data_preprocessing import DataPreprocessor
 from feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
 from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results
 from visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
-                           plot_feature_space, plot_model_diagnostics, plot_bigram_graph)
+                         analyze_feature_space, plot_model_diagnostics)
 from bigram_features import (column_map, row_map, finger_map, engram_position_values,
-                             row_position_values, bigrams, bigram_frequencies_array)
-from visualization import analyze_feature_space
+                           row_position_values, bigrams, bigram_frequencies_array)
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
@@ -48,6 +47,24 @@ def main():
     logger.info("Starting keyboard layout analysis pipeline")
 
     try:
+        # Create all necessary directories
+        dirs_to_create = [
+            config['output']['model']['dir'],
+            config['output']['model']['visualizations']['mcmc'],
+            config['output']['model']['visualizations']['vi'],
+            config['output']['feature_space']['dir'],
+            config['output']['feature_space']['visualizations'],
+            config['output']['feature_space']['analysis'],
+            config['output']['timing_frequency']['dir'],
+            config['output']['timing_frequency']['visualizations'],
+            config['output']['timing_frequency']['analysis'],
+            Path(config['output']['comfort_scores']).parent,
+            Path(config['output']['logs']).parent
+        ]
+        
+        for dir_path in dirs_to_create:
+            Path(dir_path).mkdir(parents=True, exist_ok=True)
+
         # Initialize data preprocessor
         preprocessor = DataPreprocessor(config['data']['input_file'])
         preprocessor.load_data()
@@ -88,7 +105,7 @@ def main():
                 bigram_data=preprocessor.data,
                 bigrams=bigrams,
                 bigram_frequencies_array=bigram_frequencies_array,
-                output_path=config['analysis']['timing_frequency']['plot_path']
+                output_path=config['output']['timing_frequency']['relationship_plot']
             )
             
             # Create timing by frequency groups analysis
@@ -97,33 +114,25 @@ def main():
                 bigrams,
                 bigram_frequencies_array,
                 n_groups=config['analysis']['timing_frequency']['n_groups'],
-                output_base_path=config['analysis']['timing_frequency']['groups_plot_path']
+                output_base_path=config['output']['timing_frequency']['groups_plot']
             )
 
-        # Evaluate feature space and generate recommendations for new bigram pairs to test
+        # Evaluate feature space and generate recommendations
         if config['analysis']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             feature_space_results = analyze_feature_space(
                 feature_matrix=processed_data.feature_matrix,
-                output_dir=config['analysis']['feature_space']['output_dir'],
-                all_feature_differences=all_feature_differences,  # Pass this through
+                output_paths=config['output']['feature_space'],
+                all_feature_differences=all_feature_differences,
                 check_multicollinearity=config['analysis']['feature_space']['check_multicollinearity'],
                 recommend_bigrams=config['analysis']['feature_space']['recommend_bigrams'],
                 num_recommendations=config['analysis']['feature_space']['num_recommendations']
             )
-            
+
             if feature_space_results['multicollinearity']['high_correlations']:
                 logger.warning("Found high correlations between features:")
                 for corr in feature_space_results['multicollinearity']['high_correlations']:
                     logger.warning(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}")
-
-        # Create feature space visualizations if requested
-        if config['visualization']['enabled']:
-            logger.info("Creating feature space visualizations")
-            plot_feature_space(processed_data.feature_matrix,
-                             config['visualization']['feature_space_plot'])
-            plot_bigram_graph(processed_data.bigram_pairs,
-                            config['visualization']['bigram_graph'])
 
         # Train model if requested
         if config['model']['train']:
@@ -141,15 +150,13 @@ def main():
             )
 
             # Save model results
-            save_model_results(trace, model, config['output']['model_results'])
+            save_model_results(trace, model, config['output']['model']['results'])
 
-            # Plot model diagnostics
+            # Plot model diagnostics if visualization is enabled
             if config['visualization']['enabled']:
-                diagnostics_path = (config['visualization']['model_diagnostics_mcmc'] 
+                diagnostics_path = (config['output']['model']['visualizations']['mcmc']
                                   if config['model']['inference_method'] == 'mcmc'
-                                  else config['visualization']['model_diagnostics_vi'])
-                # Create directory if it doesn't exist
-                Path(diagnostics_path).parent.mkdir(parents=True, exist_ok=True)
+                                  else config['output']['model']['visualizations']['vi'])
                 plot_model_diagnostics(trace, 
                                      diagnostics_path,
                                      inference_method=config['model']['inference_method'])

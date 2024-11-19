@@ -22,6 +22,7 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from sklearn.cluster import KMeans
 import logging
+import json
 
 from bigram_features import qwerty_bigram_frequency
 
@@ -329,8 +330,8 @@ def plot_feature_space_density(pca_result: np.ndarray,
     return grid_points, distances
 
 def analyze_feature_space(feature_matrix: pd.DataFrame,
-                         output_dir: str,
-                         all_feature_differences: Dict,  # Add this parameter
+                         output_paths: Dict[str, str],
+                         all_feature_differences: Dict,
                          check_multicollinearity: bool = True,
                          recommend_bigrams: bool = True,
                          num_recommendations: int = 30) -> Dict:
@@ -339,29 +340,36 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
     
     Args:
         feature_matrix: DataFrame of features
-        output_dir: Directory for output files
+        output_paths: Dictionary containing all required output paths
+        all_feature_differences: Dictionary of feature differences
         check_multicollinearity: Whether to check for multicollinearity
         recommend_bigrams: Whether to generate bigram recommendations
         num_recommendations: Number of bigram pairs to recommend
-    """ 
+        
+    Returns:
+        Dictionary containing analysis results
+    """
     results = {}
     
-    # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Create directories
+    Path(output_paths['dir']).mkdir(parents=True, exist_ok=True)
+    Path(output_paths['visualizations']).mkdir(parents=True, exist_ok=True)
+    Path(output_paths['analysis']).mkdir(parents=True, exist_ok=True)
     
     # Check multicollinearity if requested
     if check_multicollinearity:
+        logger.info("Checking multicollinearity")
         multicollinearity_results = check_multicollinearity_vif(feature_matrix)
         results['multicollinearity'] = multicollinearity_results
         
         # Save VIF results
         vif_df = pd.DataFrame(multicollinearity_results['vif'])
-        vif_df.to_csv(f"{output_dir}/vif_results.csv", index=False)
+        vif_df.to_csv(f"{output_paths['analysis']}/vif_results.csv", index=False)
         
         # Save correlation results
         if multicollinearity_results['high_correlations']:
             corr_df = pd.DataFrame(multicollinearity_results['high_correlations'])
-            corr_df.to_csv(f"{output_dir}/high_correlations.csv", index=False)
+            corr_df.to_csv(f"{output_paths['analysis']}/high_correlations.csv", index=False)
     
     # Standardize features and perform PCA
     scaler = StandardScaler()
@@ -376,7 +384,7 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
     plt.title('2D PCA projection of feature space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
-    plt.savefig(f'{output_dir}/feature_space_pca.png', dpi=300, bbox_inches='tight')
+    plt.savefig(output_paths['pca_plot'], dpi=300, bbox_inches='tight')
     plt.close()
     
     # Calculate feature space metrics
@@ -392,7 +400,7 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
     # Identify underrepresented areas
     grid_points, distances = identify_underrepresented_areas(
         pca_result,
-        output_path=f'{output_dir}/underrepresented_areas.png'
+        output_path=f"{output_paths['visualizations']}/underrepresented_areas.png"
     )
     
     # Generate recommendations if requested
@@ -403,17 +411,36 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
             pca=pca,
             grid_points=grid_points,
             distances=distances,
-            all_feature_differences=all_feature_differences,  # Pass this through
+            all_feature_differences=all_feature_differences,
             num_recommendations=num_recommendations
         )
         results['recommendations'] = recommendations
         
         # Save recommendations
-        with open(f"{output_dir}/bigram_recommendations.txt", 'w') as f:
-            f.write("Recommended bigram pairs to collect data for:\n\n")
-            for i, pair in enumerate(recommendations, 1):
-                f.write(f"{i}. {pair[0][0]}{pair[0][1]} vs {pair[1][0]}{pair[1][1]}\n")
+        with open(output_paths['recommendations'], 'w') as f:
+            for pair in recommendations:
+                f.write(f"{pair[0][0]}{pair[0][1]}, {pair[1][0]}{pair[1][1]}\n")
+
+    # Plot bigram graph
+    plot_bigram_graph(recommendations, output_paths['bigram_graph'])
     
+    # Save all metrics and results
+    metrics_df = pd.DataFrame({
+        'metric': ['hull_area', 'point_density'],
+        'value': [hull_area, point_density]
+    })
+    metrics_df.to_csv(f"{output_paths['analysis']}/feature_space_metrics.csv", index=False)
+
+    # Save PCA explained variance
+    pca_results = {
+        'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
+        'explained_variance': pca.explained_variance_.tolist(),
+        'n_components': pca.n_components_
+    }
+    with open(f"{output_paths['analysis']}/pca_results.json", 'w') as f:
+        json.dump(pca_results, f, indent=2)
+
+    logger.info("Feature space analysis completed")
     return results
 
 def check_multicollinearity_vif(feature_matrix: pd.DataFrame) -> Dict:

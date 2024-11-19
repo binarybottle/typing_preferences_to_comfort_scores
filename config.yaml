@@ -21,6 +21,39 @@ features:
   add_interactions: false
   interaction_pairs: []
 
+# Output directory structure
+output:
+  base_dir: "output"
+  logs: "output/logs"
+  
+  # Model outputs
+  model:
+    dir: "output/model"
+    results: "output/model/glmm_results"
+    visualizations:
+      mcmc: "output/model/visualizations/mcmc"
+      vi: "output/model/visualizations/vi"
+  
+  # Feature space outputs
+  feature_space:
+    dir: "output/feature_space"
+    visualizations: "output/feature_space/visualizations"
+    analysis: "output/feature_space/analysis"
+    recommendations: "output/feature_space/recommendations.txt"
+    pca_plot: "output/feature_space/visualizations/pca_projection.png"
+    bigram_graph: "output/feature_space/visualizations/bigram_graph.png"
+  
+  # Timing frequency analysis outputs
+  timing_frequency:
+    dir: "output/timing_frequency"
+    visualizations: "output/timing_frequency/visualizations"
+    analysis: "output/timing_frequency/analysis"
+    relationship_plot: "output/timing_frequency/visualizations/relationship.png"
+    groups_plot: "output/timing_frequency/visualizations/groups"
+  
+  # Comfort scores
+  comfort_scores: "output/scores/bigram_comfort_scores.csv"
+
 # Analysis settings
 analysis:
   feature_space:
@@ -28,20 +61,18 @@ analysis:
     check_multicollinearity: true
     recommend_bigrams: true
     num_recommendations: 30
-    output_dir: "output/feature_space"
+  
   timing_frequency:
     enabled: true
     n_groups: 4
-    plot_path: "output/analysis/timing_frequency_relationship.png"
-    groups_plot_path: "output/analysis/timing_by_frequency_groups"
 
 # Model settings
 model:
   train: true
   #inference_method: 'mcmc'
   inference_method: 'variational'
-  num_samples: 10 #2000
-  chains: 2 #8
+  num_samples: 10  #2000
+  chains: 2  #8
 
 # Scoring settings
 scoring:
@@ -51,15 +82,6 @@ scoring:
 # Visualization settings
 visualization:
   enabled: true
-  feature_space_plot: "output/visualizations/feature_space.png"
-  bigram_graph: "output/visualizations/bigram_graph.png"
-  model_diagnostics_mcmc: "output/visualizations/model_diagnostics_mcmc"  # When using MCMC
-  model_diagnostics_vi: "output/visualizations/model_diagnostics_vi"      # When using variational inference
-
-# Output settings
-output:
-  model_results: "output/model/glmm_results"
-  comfort_scores: "output/scores/bigram_comfort_scores.csv"
 
 # Logging settings
 logging:
