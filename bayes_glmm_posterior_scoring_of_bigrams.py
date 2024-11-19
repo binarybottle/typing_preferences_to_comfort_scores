@@ -24,10 +24,16 @@ from bigram_features import *
 #================================================#
 # Set which features to use and functions to run # 
 #================================================#
+csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+#csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
+#csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+#csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+
 # NOTE: Set feature interactions (n_feature_interactions below)
 left_layout_chars = list("qwertasdfgzxcvb")
-selected_feature_names = ['freq', 'row_sum', 'engram_sum']  # freq is a control
-features_for_design = ['row_sum', 'engram_sum']
+design_features = ['row_sum', 'engram_sum']
+control_features = ['freq']
+feature_names = design_features + control_features
 
 # Analyze feature-timing relationship (see results in output/timing_vs_frequency/timing_frequency_relationship.txt)
 run_analyze_timing_frequency_relationship = False 
@@ -35,9 +41,9 @@ run_analyze_timing_frequency_relationship = False
 # Analyze the feature space, and sensitivity and generalizability of priors
 run_analyze_feature_space = True
 if run_analyze_feature_space:
-    run_recommend_bigram_pairs = True
+    run_recommend_bigram_pairs = False
     run_sensitivity_analysis = True
-    run_cross_validation = True
+    run_cross_validation = False
 
 # Run Bayesian GLMM and posterior scoring to estimate latent typing comfort for every bigram
 run_glmm = False
@@ -208,62 +214,6 @@ def precompute_bigram_feature_differences(bigram_features):
       
     return bigram_feature_differences
 
-def plot_bigram_graph(bigram_pairs):
-    """
-    Plot a graph of all bigrams as nodes with edges connecting bigrams that are in pairs.
-    
-    Parameters:
-    - bigram_pairs: List of bigram pairs (e.g., [(('a', 'r'), ('s', 't')), ...])
-    """
-    # Create a graph
-    G = nx.Graph()
-
-    # Create a mapping of tuple bigrams to string representations
-    for bigram1, bigram2 in bigram_pairs:
-        bigram1_str = ''.join(bigram1)  # Convert tuple ('a', 'r') to string "ar"
-        bigram2_str = ''.join(bigram2)  # Convert tuple ('s', 't') to string "st"
-        
-        # Add edges between bigram string representations
-        G.add_edge(bigram1_str, bigram2_str)
-
-    # Get all connected components (subgraphs)
-    components = [G.subgraph(c).copy() for c in nx.connected_components(G)]
-    
-    # Initialize figure
-    plt.figure(figsize=(14, 14))
-
-    # Layout positioning of all components
-    pos = {}
-    grid_size = int(np.ceil(np.sqrt(len(components))))  # Arrange components in a grid
-    spacing = 5.0  # Adjust this value for more space between clusters
-
-    # Iterate over each component and apply a layout
-    for i, component in enumerate(components):
-        # Apply spring layout to the current component
-        component_pos = nx.spring_layout(component, k=1.0, seed=i)  # Use different seed for each component
-        
-        # Determine the grid position for this component
-        x_offset = (i % grid_size) * spacing  # X-axis grid position
-        y_offset = (i // grid_size) * spacing  # Y-axis grid position
-
-        # Shift the component positions to avoid overlap
-        for node in component_pos:
-            component_pos[node][0] += x_offset
-            component_pos[node][1] += y_offset
-
-        # Update the global position dictionary
-        pos.update(component_pos)
-    
-    # Draw the entire graph with the adjusted positions
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', font_weight='bold', 
-            node_size=500, font_size=14, edge_color='gray', linewidths=1.5, width=2.0)
-
-    # Display the graph
-    plt.title("Bigram Connectivity Graph", fontsize=20)
-    #plt.show()
-    plt.savefig('output/bigram-connectivity-graph.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
 #====================================================#
 # Functions to analyze frequency-timing relationship #
 #====================================================#
@@ -302,7 +252,7 @@ def analyze_timing_frequency_relationship(bigram_data, bigrams, bigram_frequenci
             if len(chosen_bigram) == 2:  # Ensure it's a valid bigram
                 # Get normalized frequency for the bigram
                 freq = qwerty_bigram_frequency(chosen_bigram[0], chosen_bigram[1], 
-                                            bigrams, bigram_frequencies_array)
+                                               bigrams, bigram_frequencies_array)
                 frequencies.append(freq)
                 timings.append(row['chosen_bigram_time'])
                 bigram_list.append(chosen_bigram)
@@ -462,14 +412,12 @@ def compare_timing_by_frequency_groups(bigram_data, bigrams, bigram_frequencies_
     })
     
     # Create frequency groups
-    analysis_df['frequency_group'] = pd.qcut(analysis_df['frequency'], 
-                                           n_groups, 
-                                           labels=['Very Low', 'Low', 'High', 'Very High'])
+    analysis_df['frequency_group'] = pd.qcut(analysis_df['frequency'], n_groups, 
+                                             labels=['Very Low', 'Low', 'High', 'Very High'])
     
     # Calculate summary statistics by group
     group_stats = analysis_df.groupby('frequency_group')['timing'].agg([
-        'count', 'mean', 'std', 'median', 'min', 'max'
-    ]).round(2)
+        'count', 'mean', 'std', 'median', 'min', 'max']).round(2)
     
     # Add frequency ranges for each group
     freq_ranges = analysis_df.groupby('frequency_group')['frequency'].agg(['min', 'max']).round(4)
@@ -522,9 +470,9 @@ def compare_timing_by_frequency_groups(bigram_data, bigrams, bigram_frequencies_
         'anova_p_value': p_value
     }
 
-#=========================================================================================================#
-# Functions to evaluate feature space, feature matrix multicollinearity, priors sensitivity and stability #
-#=========================================================================================================#
+#=============================================================================#
+# Functions to evaluate feature matrix multicollinearity and priors stability #
+#=============================================================================#
 def check_multicollinearity(feature_matrix):
     """
     Check for multicollinearity.
@@ -580,51 +528,6 @@ def check_multicollinearity(feature_matrix):
 
     # Display the VIF for each feature
     print(vif_data)
-
-def perform_sensitivity_analysis(feature_matrix, target_vector, participants, selected_feature_names=None,
-                                 typing_times=None, prior_means=[0, 50, 100], prior_stds=[1, 10, 100]):
-    """
-    Perform sensitivity analysis by varying the prior on typing_time.
-    
-    Args:
-    feature_matrix, target_vector, participants: As in the original model
-    selected_feature_names: names of features to include as priors (if None, use all)
-    typing_times: Typing time data
-    prior_means, prior_stds: Lists of means and standard deviations to try for the typing_time prior
-    
-    Returns:
-    A dictionary of results for each prior configuration
-    """
-    print("\n ---- Analyze sensitivity of the GLMM results on each prior ---- \n")
-    
-    results = {}
-    
-    for mean in prior_means:
-        for std in prior_stds:
-            print(f"Running model with typing_time prior: N({mean}, {std})")
-            
-            trace, model, priors = train_bayesian_glmm(
-                feature_matrix=feature_matrix,
-                target_vector=target_vector,
-                participants=participants,
-                selected_feature_names=selected_feature_names,
-                typing_times=typing_times,
-                inference_method="mcmc",
-                num_samples=1000,
-                chains=4
-            )
-
-            # Generate summary
-            summary = az.summary(trace)
-            results[f"prior_N({mean},{std})"] = summary
-
-            # Print the first X rows
-            print_nrows = np.shape(feature_matrix)[1] + 5
-            print(print_nrows)
-            print(summary.head(print_nrows))
-            print("\n" + "="*50 + "\n")
-    
-    return results
 
 def bayesian_pairwise_scoring(y_true, y_pred):
     """
@@ -735,6 +638,9 @@ def bayesian_cv_pipeline(bayesian_glmm_func, bayesian_scoring_func, feature_matr
     print(f"Mean CV Score: {np.mean(cv_scores)}")
     return cv_scores
 
+#===============================================================================================#
+# Functions to evaluate feature space and generate recommendations for new bigram pairs to test #
+#===============================================================================================#
 def analyze_feature_space(feature_matrix):
     # Standardize the features
     scaler = StandardScaler()
@@ -768,9 +674,6 @@ def analyze_feature_space(feature_matrix):
     
     return pca, scaler, hull
 
-#===============================================================#
-# Functions to generate recommendations for new bigrams to test #
-#===============================================================#
 def identify_underrepresented_areas(pca_result, num_grid=20):
     x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
     y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
@@ -890,212 +793,464 @@ def generate_extended_recommendations(new_feature_differences, all_feature_diffe
             unique_suggestions.append(pair)
     
     return unique_suggestions[:n_total]
-  
-#============================================================================#
-# Functions to train a Bayesian GLMM, and generate Bayesian posterior scores #
-#============================================================================#
-def train_bayesian_glmm(feature_matrix, target_vector, participants=None, 
-                       selected_feature_names=None,
-                       typing_times=None, inference_method="mcmc", 
-                       num_samples=1000, chains=4):
+
+def plot_bigram_graph(bigram_pairs):
     """
-    Train a Bayesian GLMM with improved error handling and fallback options.
+    Plot a graph of all bigrams as nodes with edges connecting bigrams that are in pairs.
+    
+    Parameters:
+    - bigram_pairs: List of bigram pairs (e.g., [(('a', 'r'), ('s', 't')), ...])
+    """
+    # Create a graph
+    G = nx.Graph()
+
+    # Create a mapping of tuple bigrams to string representations
+    for bigram1, bigram2 in bigram_pairs:
+        bigram1_str = ''.join(bigram1)  # Convert tuple ('a', 'r') to string "ar"
+        bigram2_str = ''.join(bigram2)  # Convert tuple ('s', 't') to string "st"
+        
+        # Add edges between bigram string representations
+        G.add_edge(bigram1_str, bigram2_str)
+
+    # Get all connected components (subgraphs)
+    components = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+    
+    # Initialize figure
+    plt.figure(figsize=(14, 14))
+
+    # Layout positioning of all components
+    pos = {}
+    grid_size = int(np.ceil(np.sqrt(len(components))))  # Arrange components in a grid
+    spacing = 5.0  # Adjust this value for more space between clusters
+
+    # Iterate over each component and apply a layout
+    for i, component in enumerate(components):
+        # Apply spring layout to the current component
+        component_pos = nx.spring_layout(component, k=1.0, seed=i)  # Use different seed for each component
+        
+        # Determine the grid position for this component
+        x_offset = (i % grid_size) * spacing  # X-axis grid position
+        y_offset = (i // grid_size) * spacing  # Y-axis grid position
+
+        # Shift the component positions to avoid overlap
+        for node in component_pos:
+            component_pos[node][0] += x_offset
+            component_pos[node][1] += y_offset
+
+        # Update the global position dictionary
+        pos.update(component_pos)
+    
+    # Draw the entire graph with the adjusted positions
+    nx.draw(G, pos, with_labels=True, node_color='lightblue', font_weight='bold', 
+            node_size=500, font_size=14, edge_color='gray', linewidths=1.5, width=2.0)
+
+    # Display the graph
+    plt.title("Bigram Connectivity Graph", fontsize=20)
+    #plt.show()
+    plt.savefig('output/bigram-connectivity-graph.png', dpi=300, bbox_inches='tight')
+    plt.close()
+ 
+#===================================================================#
+# Functions to evaluate priors sensitivity after selecting features #
+#===================================================================#
+def perform_sensitivity_analysis(feature_matrix, target_vector, participants,
+                                 design_features=['row_sum', 'engram_sum'],
+                                 control_features=['freq'],
+                                 prior_scale_factors=[0.5, 1.0, 2.0]):
+    """
+    Analyze sensitivity while explicitly handling control variables differently.
+    
+    Parameters:
+    - feature_matrix: DataFrame of feature values
+    - target_vector: Array of comfort scores
+    - participants: Array of participant IDs
+    - design_features: Features used for layout optimization
+    - control_features: Features used as controls (e.g., frequency)
+    - prior_scale_factors: Factors to multiply prior SDs by
+    """
+    print("\nDesign features:", design_features)
+    print("Control features:", control_features)
+
+    # Validate inputs before proceeding
+    validate_inputs(feature_matrix, target_vector, participants)
+    
+    # Combine features but track their roles
+    all_features = design_features + control_features
+    feature_roles = {f: 'design' for f in design_features}
+    feature_roles.update({f: 'control' for f in control_features})
+    
+    # Store results
+    parameter_estimates = {}
+    convergence_metrics = {}
+    sampling_issues = {}
+    
+    # Get baseline standard deviations
+    baseline_sds = {feature: np.std(feature_matrix[feature]) 
+                   for feature in all_features}
+    
+    # Test different prior scales
+    for scale in prior_scale_factors:
+        config_name = f"scale_{scale:.1f}"
+        print(f"\nTesting prior scale factor: {scale}")
+        
+        # Print prior SDs being tested, separated by feature type
+        print("\nDesign feature prior standard deviations:")
+        for feature in design_features:
+            print(f"{feature}: {baseline_sds[feature] * scale:.3f}")
+        print("\nControl feature prior standard deviations:")
+        for feature in control_features:
+            print(f"{feature}: {baseline_sds[feature] * scale:.3f}")
+        
+        try:
+            # Run GLMM with current prior settings
+            with pm.Model() as model:
+                # Feature priors with scaled standard deviations
+                feature_priors = {}
+                for feature in all_features:
+                    feature_priors[feature] = pm.Normal(
+                        feature, 
+                        mu=np.mean(feature_matrix[feature]),
+                        sigma=np.std(feature_matrix[feature]) * scale
+                    )
+                
+                # Random effects for participants
+                unique_participants = len(np.unique(participants))
+                participant_intercept = pm.Normal('participant_intercept', 
+                                               mu=0, sigma=1,
+                                               shape=unique_participants)
+                
+                # Linear predictor
+                features = feature_matrix[all_features]
+                fixed_effects = pm.math.dot(features, 
+                                          pm.math.stack([feature_priors[name] 
+                                                       for name in all_features]))
+                
+                mu = (fixed_effects + participant_intercept[participants]).reshape(target_vector.shape)
+                
+                # Likelihood
+                sigma = pm.HalfNormal('sigma', sigma=10)
+                y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma, observed=target_vector)
+                
+                # Sample
+                trace = pm.sample(1000, chains=2, return_inferencedata=True)
+                
+                # Extract and store results
+                summary = az.summary(trace)
+                parameter_estimates[config_name] = summary
+                
+                # Store convergence metrics
+                convergence_metrics[config_name] = {
+                    'r_hat': summary['r_hat'].values,
+                    'ess_bulk': summary['ess_bulk'].values,
+                    'ess_tail': summary['ess_tail'].values
+                }
+                
+                # Print feature effects, separated by type
+                print("\nDesign feature effects:")
+                for feature in design_features:
+                    mean = summary.loc[feature, 'mean']
+                    sd = summary.loc[feature, 'sd']
+                    hdi = az.hdi(trace, var_names=[feature])
+                    print(f"\n{feature}:")
+                    print(f"  Mean: {mean:.3f} ± {sd:.3f}")
+                    print(f"  95% HDI: [{hdi[0,0]:.3f}, {hdi[0,1]:.3f}]")
+                
+                print("\nControl feature effects:")
+                for feature in control_features:
+                    mean = summary.loc[feature, 'mean']
+                    sd = summary.loc[feature, 'sd']
+                    hdi = az.hdi(trace, var_names=[feature])
+                    print(f"\n{feature}:")
+                    print(f"  Mean: {mean:.3f} ± {sd:.3f}")
+                    print(f"  95% HDI: [{hdi[0,0]:.3f}, {hdi[0,1]:.3f}]")
+                
+        except Exception as e:
+            print(f"Error with scale factor {scale}: {str(e)}")
+            sampling_issues[config_name] = str(e)
+            continue
+    
+    # Analyze stability separately for design and control features
+    design_stability = calculate_stability_metrics(parameter_estimates, design_features)
+    control_stability = calculate_stability_metrics(parameter_estimates, control_features)
+    
+    # Create separate visualizations for design and control features
+    figs = create_sensitivity_plots(parameter_estimates, design_features, control_features)
+    
+    # Print stability summary, focusing on design features
+    print("\nStability Analysis Summary:")
+    print("\nDesign feature effects across prior scales:")
+    for feature in design_features:
+        metrics = design_stability[feature]
+        print(f"\n{feature}:")
+        print(f"  Direction consistency: {metrics['direction_consistency']*100:.1f}%")
+        print(f"  Relative variation: {metrics['relative_variation']:.3f}")
+        print(f"  Range of means: [{metrics['min_mean']:.3f}, {metrics['max_mean']:.3f}]")
+    
+    # Save results
+    results = {
+        'parameter_estimates': parameter_estimates,
+        'convergence_metrics': convergence_metrics,
+        'design_stability': design_stability,
+        'control_stability': control_stability,
+        'sampling_issues': sampling_issues,
+        'figures': figs
+    }
+    
+    return results
+
+def calculate_stability_metrics(parameter_estimates, features):
+    """Calculate metrics showing how stable each feature's effect is."""
+    stability_metrics = {}
+    
+    for feature in features:
+        # Collect estimates across prior scales
+        means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
+        sds = [est.loc[feature, 'sd'] for est in parameter_estimates.values()]
+        
+        # Calculate metrics
+        stability_metrics[feature] = {
+            'direction_consistency': np.mean(np.sign(means) == np.sign(np.mean(means))),
+            'relative_variation': np.std(means) / np.abs(np.mean(means)),
+            'min_mean': np.min(means),
+            'max_mean': np.max(means),
+            'mean_of_means': np.mean(means),
+            'sd_of_means': np.std(means),
+            'mean_of_sds': np.mean(sds)
+        }
+    
+    return stability_metrics
+
+def create_sensitivity_plots(parameter_estimates, design_features, control_features=None):
+    """Create visualizations of how estimates vary with prior scales."""
+    figs = {}
+    
+    # Effect size plot for design features
+    plt.figure(figsize=(12, 6))
+    data = []
+    labels = []
+    for feature in design_features:
+        means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
+        data.append(means)
+        labels.append(feature)
+    
+    plt.subplot(2, 1, 1)
+    plt.boxplot(data, labels=labels)
+    plt.title('Design Feature Effect Estimates')
+    plt.ylabel('Effect Size')
+    plt.grid(True, alpha=0.3)
+    
+    # If control features provided, plot them too
+    if control_features:
+        data = []
+        labels = []
+        for feature in control_features:
+            means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
+            data.append(means)
+            labels.append(feature)
+        
+        plt.subplot(2, 1, 2)
+        plt.boxplot(data, labels=labels)
+        plt.title('Control Feature Effect Estimates')
+        plt.ylabel('Effect Size')
+        plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('output/prior_sensitivity_effects.png', dpi=300, bbox_inches='tight')
+    figs['effects'] = plt.gcf()
+    plt.close()
+    
+    return figs
+
+#===========================================================================#
+# Functions to train a Bayesian GLMM and generate Bayesian posterior scores #
+#===========================================================================#
+def validate_inputs(feature_matrix, target_vector, participants):
+    """Validate inputs for GLMM fitting."""
+    if len(feature_matrix) != len(target_vector):
+        raise ValueError("Feature matrix and target vector must have same length")
+    if participants is not None and len(participants) != len(target_vector):
+        raise ValueError("Participants array must match target vector length")
+    if np.any(pd.isnull(feature_matrix)):
+        raise ValueError("Feature matrix contains null values")
+    return True
+
+def train_bayesian_glmm(feature_matrix, target_vector, participants=None, 
+                       design_features=['row_sum', 'engram_sum'],
+                       control_features=['freq'],
+                       typing_times=None, 
+                       inference_method="mcmc", 
+                       num_samples=1000, 
+                       chains=4):
+    """
+    Train a Bayesian GLMM that includes both design features and control variables.
+    
+    Parameters:
+    ----------
+    feature_matrix : DataFrame
+        Contains all features (both design and control)
+    target_vector : array-like
+        Target variable to predict
+    participants : array-like, optional
+        Participant IDs for random effects
+    design_features : list
+        Features used for layout optimization (e.g., row_sum, engram_sum)
+    control_features : list 
+        Features to control for but not use in optimization (e.g., frequency)
+    typing_times : array-like, optional
+        Optional timing data to include
+    inference_method : str
+        Either "mcmc" or "variational"
+    num_samples : int
+        Number of posterior samples
+    chains : int
+        Number of chains for MCMC
+        
+    Returns:
+    -------
+    trace : ArviZ InferenceData
+        Posterior samples
+    model : PyMC Model
+        Compiled model
+    all_priors : list
+        List of all prior distributions used
     """
     print("\n ---- Train Bayesian GLMM ---- \n")
+    print("Design features:", design_features)
+    print("Control features:", control_features)
+    
+    # Validate inputs before proceeding
+    if not all(f in feature_matrix.columns for f in design_features + control_features):
+        missing = [f for f in design_features + control_features if f not in feature_matrix.columns]
+        raise ValueError(f"Features missing from matrix: {missing}")
+        
+    # Basic input validation
+    validate_inputs(feature_matrix, target_vector, participants)
 
-    # Ensure that selected features are provided, or default to all features
-    if selected_feature_names is None:
-        selected_feature_names = feature_matrix.columns.tolist()
-
-    # Handle the case where participants is None
+    # Handle participants
     if participants is None:
         print("Warning: participants is None. Using range(len(target_vector)) as default.")
         participants = np.arange(len(target_vector))
 
-    # Get the unique participants in this subset of data
+    # Get unique participants and create contiguous indices
     unique_participants = np.unique(participants)
     num_participants = len(unique_participants)
-    
-    # Create a mapping from original indices to contiguous indices
     participant_map = {p: i for i, p in enumerate(unique_participants)}
     participants_contiguous = np.array([participant_map[p] for p in participants])
 
-    selected_features_matrix = feature_matrix[selected_feature_names]
-
+    # All features to include in model
+    all_features = design_features + control_features
+    
     # Define the model context block
     with pm.Model() as model:
         try:
             # Create feature-based priors dynamically
             feature_priors = {}
-            for feature_name in selected_feature_names:
-                feature_priors[feature_name] = pm.Normal(
-                    feature_name, 
-                    mu=np.mean(selected_features_matrix[feature_name]), 
-                    sigma=np.std(selected_features_matrix[feature_name])
+            for feature in all_features:
+                feature_priors[feature] = pm.Normal(
+                    feature, 
+                    mu=np.mean(feature_matrix[feature]),
+                    sigma=np.std(feature_matrix[feature])
                 )
 
-            # Define custom priors
+            # Add typing time prior if provided
             if typing_times is not None:
                 typing_time_prior = pm.Normal('typing_time', 
-                                            mu=np.mean(typing_times), 
-                                            sigma=np.std(typing_times))
-
-            # Combine all priors (feature-based + custom)
-            all_priors = list(feature_priors.values())
-            if typing_times is not None:
-                all_priors.append(typing_time_prior)
+                                          mu=np.mean(typing_times),
+                                          sigma=np.std(typing_times))
+                all_priors = list(feature_priors.values()) + [typing_time_prior]
+            else:
+                all_priors = list(feature_priors.values())
 
             # Random effects: Participant-specific intercepts
-            participant_intercept = pm.Normal('participant_intercept', mu=0, sigma=1, 
-                                            shape=num_participants)
+            participant_intercept = pm.Normal('participant_intercept', 
+                                           mu=0, 
+                                           sigma=1,
+                                           shape=num_participants)
 
-            # Define the linear predictor (fixed + random effects)
-            fixed_effects = pm.math.dot(selected_features_matrix, 
-                                      pm.math.stack([feature_priors[name] for name in selected_feature_names]))
+            # Linear predictor combining design and control features
+            features = feature_matrix[all_features]
+            fixed_effects = pm.math.dot(features, 
+                                      pm.math.stack([feature_priors[name] 
+                                                   for name in all_features]))
+            
+            # Add typing time effects if provided
             if typing_times is not None:
                 fixed_effects += typing_time_prior
 
-            mu = (fixed_effects + participant_intercept[participants_contiguous]).reshape(target_vector.shape)
+            # Add random effects
+            mu = (fixed_effects + 
+                 participant_intercept[participants_contiguous]).reshape(target_vector.shape)
 
             # Likelihood: Observed target vector
             sigma = pm.HalfNormal('sigma', sigma=10)
             y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma, observed=target_vector)
 
-            # Choose the inference method with fallback options
+            # Choose inference method with fallback options
             if inference_method == "mcmc":
                 try:
-                    # First attempt: Try with multiple chains
-                    trace = pm.sample(num_samples, chains=chains, return_inferencedata=True)
+                    # First attempt: Try with specified chains
+                    trace = pm.sample(num_samples, 
+                                    chains=chains,
+                                    cores=min(chains, 2),  # Limit cores to avoid memory issues
+                                    return_inferencedata=True,
+                                    progressbar=True)
                 except Exception as e:
-                    print(f"Warning: Multi-chain sampling failed ({str(e)}). Trying single chain...")
+                    print(f"Warning: Multi-chain sampling failed. Error: {str(e)}")
+                    print("Trying single chain...")
                     try:
-                        # Second attempt: Try with a single chain
-                        trace = pm.sample(num_samples, chains=1, return_inferencedata=True)
+                        # Second attempt: Try with single chain
+                        trace = pm.sample(num_samples, 
+                                        chains=1,
+                                        return_inferencedata=True,
+                                        progressbar=True)
                     except Exception as e:
-                        print(f"Warning: NUTS sampling failed ({str(e)}). Falling back to Metropolis...")
+                        print(f"Warning: NUTS sampling failed. Error: {str(e)}")
+                        print("Falling back to Metropolis...")
                         # Third attempt: Fall back to Metropolis
-                        trace = pm.sample(num_samples, chains=1, step=pm.Metropolis(), 
-                                        return_inferencedata=True)
+                        trace = pm.sample(num_samples, 
+                                        chains=1,
+                                        step=pm.Metropolis(),
+                                        return_inferencedata=True,
+                                        progressbar=True)
             elif inference_method == "variational":
                 try:
                     # Attempt variational inference
                     approx = pm.fit(method="advi", n=num_samples)
                     trace = approx.sample(num_samples)
                 except Exception as e:
-                    print(f"Warning: Variational inference failed ({str(e)}). Using MCMC...")
-                    # Fall back to MCMC
-                    trace = pm.sample(num_samples, chains=1, return_inferencedata=True)
+                    print(f"Warning: Variational inference failed. Error: {str(e)}")
+                    print("Falling back to single-chain MCMC...")
+                    trace = pm.sample(num_samples, 
+                                    chains=1,
+                                    return_inferencedata=True)
             else:
-                raise ValueError("Inference method must be 'mcmc' or 'variational'.")
+                raise ValueError("inference_method must be 'mcmc' or 'variational'")
 
         except Exception as e:
             print(f"Error in model training: {str(e)}")
             raise
 
+    # Print summary statistics for each feature type
+    summary = az.summary(trace)
+    print("\nDesign Feature Effects:")
+    for feature in design_features:
+        mean = summary.loc[feature, 'mean']
+        sd = summary.loc[feature, 'sd']
+        hdi = az.hdi(trace, var_names=[feature])
+        print(f"\n{feature}:")
+        print(f"  Mean: {mean:.3f} ± {sd:.3f}")
+        print(f"  95% HDI: [{hdi[0,0]:.3f}, {hdi[0,1]:.3f}]")
+    
+    print("\nControl Feature Effects:")
+    for feature in control_features:
+        mean = summary.loc[feature, 'mean']
+        sd = summary.loc[feature, 'sd']
+        hdi = az.hdi(trace, var_names=[feature])
+        print(f"\n{feature}:")
+        print(f"  Mean: {mean:.3f} ± {sd:.3f}")
+        print(f"  95% HDI: [{hdi[0,0]:.3f}, {hdi[0,1]:.3f}]")
+
     return trace, model, all_priors
-
-    
-def calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None, 
-                                      features_for_design=None,
-                                      output_filename="bigram_typing_comfort_scores.csv"):
-    """
-    Generate latent comfort scores using the full posterior distributions from a Bayesian GLMM.
-    This version handles both feature-based and manual priors.
-
-    We use Qwerty bigram frequency as a control variable to isolate ergonomic effects.
-    This accounts for any frequency-based confounding effects in the data,
-    gives cleaner estimates of the ergonomic features' true effects, and
-    model coefficients for other features represent their effects while holding frequency constant.
-
-    Parameters:
-    - trace: The InferenceData object from the Bayesian GLMM
-    - bigram_pairs: List of bigram pairs used in the comparisons
-    - feature_matrix: The feature matrix used in the GLMM, indexed by bigram pairs
-    - params: List of parameter names to use from the trace
-    - features_for_design: List of features to use for scoring (excludes control variables)
-
-    Returns:
-    - bigram_comfort_scores
-    """
-    # Extract variable names from the trace
-    all_vars = list(trace.posterior.data_vars)
-    
-    # If params is not provided, use all parameters except 'participant_intercept' and 'sigma'
-    if params is None:
-        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
-    
-    # If features_for_design not provided, use all params except known control variables
-    if features_for_design is None:
-        features_for_design = [p for p in params if p != 'freq']
-    
-    print(f"Design features used for scoring: {features_for_design}")
-    
-    # Extract posterior samples for design features only
-    posterior_samples = {param: az.extract(trace, var_names=param).values 
-                        for param in params if param in features_for_design}
-    
-    # Convert feature matrix to numpy array and extract relevant columns
-    feature_array = feature_matrix[features_for_design].values
-
-    # Create a dictionary to map bigram pairs to their index in the feature array
-    bigram_to_index = {tuple(map(tuple, pair)): i for i, pair in enumerate(feature_matrix.index)}
-    
-    # Calculate comfort scores for each bigram pair
-    bigram_pair_scores = {}
-    mismatches = []
-    for bigram_pair in bigram_pairs:
-        bigram_pair_tuple = tuple(map(tuple, bigram_pair))
-        if bigram_pair_tuple in bigram_to_index:
-            row_index = bigram_to_index[bigram_pair_tuple]
-            bigram_features = feature_array[row_index]
-            
-            # Calculate score using feature-based parameters
-            scores = np.zeros(len(next(iter(posterior_samples.values()))))
-            for i, param in enumerate(feature_params):
-                scores += posterior_samples[param] * bigram_features[i]
-            
-            # Add contribution from manual parameters
-            for param in manual_params:
-                scores += posterior_samples[param]
-            
-            # Use the mean score across all posterior samples
-            bigram_pair_scores[bigram_pair] = np.mean(scores)
-        else:
-            mismatches.append(bigram_pair)
-    
-    if not bigram_pair_scores:
-        raise ValueError("No valid bigram pair scores could be calculated.")
-    
-    # Normalize scores to 0-1 range
-    min_score = min(bigram_pair_scores.values())
-    max_score = max(bigram_pair_scores.values())
-    normalized_scores = {bigram_pair: (score - min_score) / (max_score - min_score) 
-                         for bigram_pair, score in bigram_pair_scores.items()}
-    
-    # Calculate comfort scores for individual bigrams
-    bigram_comfort_scores = {}
-    for bigram_pair, score in normalized_scores.items():
-        bigram1, bigram2 = bigram_pair
-        bigram1 = ''.join(bigram1)
-        bigram2 = ''.join(bigram2)
-        
-        if bigram1 not in bigram_comfort_scores:
-            bigram_comfort_scores[bigram1] = []
-        if bigram2 not in bigram_comfort_scores:
-            bigram_comfort_scores[bigram2] = []
-        bigram_comfort_scores[bigram1].append(score)
-        bigram_comfort_scores[bigram2].append(1 - score)  # Invert score for the second bigram
-    
-    # Average the scores for each bigram
-    bigram_comfort_scores = {bigram: np.mean(scores) for bigram, scores in bigram_comfort_scores.items()}
-    
-    # Convert dictionary to DataFrame and store as csv file
-    df = pd.DataFrame.from_dict(bigram_comfort_scores, orient='index', columns=['bigram_comfort_score'])
-    df.index.name = 'bigram'
-    df.to_csv(f"{output_filename}")
-    print(f"Bigram typing comfort scores saved to {output_filename}")
-
-    return bigram_comfort_scores
 
 def save_glmm_results(trace, model, base_filename):
     # Save trace
@@ -1143,27 +1298,23 @@ def load_glmm_results(base_filename):
     
     return trace, point_estimates, model_info
 
-def calculate_all_bigram_comfort_scores(trace, all_bigram_features, params=None, 
+def calculate_all_bigram_comfort_scores(trace, all_bigram_features, 
                                         features_for_design=None, mirror_scores=True):
     """
     Calculate comfort scores for all possible bigrams.
     """
-    # Extract variable names from the trace
-    all_vars = list(trace.posterior.data_vars)
-    
-    # If params is not provided, use all parameters except 'participant_intercept' and 'sigma'
-    if params is None:
-        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
-    
-    # If features_for_design not provided, use all params except known control variables
+    # If features_for_design not provided, use all params from the trace
+    # except 'participant_intercept', 'sigma', and known control variables ('freq')
     if features_for_design is None:
+        all_vars = list(trace.posterior.data_vars)
+        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]       
         features_for_design = [p for p in params if p != 'freq']
     
     print(f"Design features used for scoring: {features_for_design}")
     
     # Extract posterior samples for design features only
     posterior_samples = {param: az.extract(trace, var_names=param).values 
-                        for param in params if param in features_for_design}
+                        for param in features_for_design}
     
     # Calculate comfort scores for each bigram
     all_bigram_scores = {}
@@ -1232,10 +1383,6 @@ if __name__ == "__main__":
         all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
         # Load the CSV file into a pandas DataFrame
-        csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_bigram_data.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
-        #csv_file_path = "/Users/arno.klein/Documents/osf/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
         bigram_data = pd.read_csv(csv_file_path)  # print(bigram_data.columns)
 
         # Prepare bigram data (format, including strings to actual tuples, conversion to numeric codes)
@@ -1284,9 +1431,9 @@ if __name__ == "__main__":
             correlation_results = analyze_timing_frequency_relationship(bigram_data, bigrams, bigram_frequencies_array)
             group_comparison_results = compare_timing_by_frequency_groups(bigram_data, bigrams, bigram_frequencies_array, n_groups=4)
 
-        #=========================================================================================#
-        # Check feature space, feature matrix multicollinearity, priors sensitivity and stability #
-        #=========================================================================================#
+        #============================================================================================#
+        # Analyze feature matrix multicollinearity, priors stability, and recommend new bigram pairs #
+        #============================================================================================#
         if run_analyze_feature_space:
 
             print("\n ---- Analyze feature space ---- \n")
@@ -1296,6 +1443,21 @@ if __name__ == "__main__":
             if plot_bigram_pair_graph:
                 plot_bigram_graph(bigram_pairs)
 
+            #-----------------------------------------------------------------------------------------------#
+            # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features #
+            #-----------------------------------------------------------------------------------------------#
+            check_multicollinearity(feature_matrix)
+
+            #------------------------------------------------------#
+            # Run cross-validation to evaluate stability of priors #
+            #------------------------------------------------------#
+            if run_cross_validation:
+                cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
+                                feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
+
+            #------------------------------------------------------#
+            # Recommend additional bigram pairs to collect data on #
+            #------------------------------------------------------#
             if run_recommend_bigram_pairs:
 
                 pca, scaler, hull = analyze_feature_space(feature_matrix)
@@ -1320,31 +1482,46 @@ if __name__ == "__main__":
                 for i, pair in enumerate(extended_suggestions):
                     print(f"{pair[0][0] + pair[0][1]}, {pair[1][0] + pair[1][1]}")
 
-            # Check multicollinearity: Run VIF on the feature matrix to identify highly correlated features
-            check_multicollinearity(feature_matrix)
-
-            # Sensitivity analysis to determine how much each prior influences the results
-            if run_sensitivity_analysis:
-                sensitivity_results = perform_sensitivity_analysis(feature_matrix, target_vector, participants, 
-                                                                selected_feature_names,
-                                                                typing_times=typing_times, 
-                                                                prior_means=[0, 50, 100], 
-                                                                prior_stds=[1, 10, 100])
-            if run_cross_validation:
-                cv_scores = bayesian_cv_pipeline(train_bayesian_glmm, calculate_bayesian_comfort_scores, 
-                                feature_matrix, target_vector, participants, bigram_pairs, n_splits=5)
-        
     #############################################################
     # Train a Bayesian GLMM and score using Bayesian posteriors #
     #############################################################
     if run_glmm:
 
-        trace, model, priors = train_bayesian_glmm(feature_matrix, target_vector, participants, 
-            selected_feature_names, 
+        #======================================================================================#
+        # Perform sensitivity analysis to determine how much each prior influences the results #
+        #======================================================================================#
+        if run_sensitivity_analysis:
+            # Use these consistently in function calls
+            sensitivity_results = perform_sensitivity_analysis(eature_matrix, target_vector, 
+                participants, design_features, control_features, prior_scale_factors=[0.5, 1.0, 2.0])
+            
+            # Examine results separately for design and control features
+            for feature in design_features:
+                metrics = sensitivity_results['design_stability'][feature]
+                print(f"\n{feature} stability (design feature):")
+                print(f"Direction consistency: {metrics['direction_consistency']*100:.1f}%")
+                print(f"Effect size range: [{metrics['min_mean']:.3f}, {metrics['max_mean']:.3f}]")
+            
+            for feature in control_features:
+                metrics = sensitivity_results['control_stability'][feature]
+                print(f"\n{feature} stability (control feature):")
+                print(f"Direction consistency: {metrics['direction_consistency']*100:.1f}%")
+                print(f"Effect size range: [{metrics['min_mean']:.3f}, {metrics['max_mean']:.3f}]")
+
+        #============#
+        # Train GLMM #
+        #============#
+        trace, model, priors = train_bayesian_glmm(
+            feature_matrix=feature_matrix,
+            target_vector=target_vector,
+            participants=participants,
+            design_features=design_features,
+            control_features=control_features,
             typing_times=typing_times,
-            inference_method="mcmc", 
-            num_samples=2000, 
-            chains=8)
+            inference_method="mcmc",
+            num_samples=2000,
+            chains=8
+        )
 
         # Generate the summary of the posterior trace
         summary = az.summary(trace)
@@ -1362,8 +1539,10 @@ if __name__ == "__main__":
         # Save trace, point estimates, model configuration, and prior information
         save_glmm_results(trace, model, "output/glmm_results")
 
+        #=====================================================================#
+        # Generate bigram typing comfort scores using the Bayesian posteriors #
+        #=====================================================================#
         print("\n ---- Score comfort using Bayesian posteriors ---- \n")
-        # Generate bigram typing comfort scores using the Bayesian posteriors
         bigram_comfort_scores = calculate_bayesian_comfort_scores(trace, bigram_pairs, feature_matrix, params=None,
                                                                   features_for_design=features_for_design,
                                                                   output_filename = "output/bigram_typing_comfort_scores.csv")
