@@ -1,0 +1,68 @@
+# Configuration for keyboard layout analysis pipeline
+
+# Data settings
+data:
+  input_file: "data/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+  #input_file: "data/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
+  #input_file: "data/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+  #input_file: "data/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+
+# Keyboard layout settings
+layout:
+  left_chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
+
+# Feature settings
+features:
+  design:
+    - 'row_sum'
+    - 'engram_sum'
+  control:
+    - 'freq'
+  add_interactions: false
+  interaction_pairs: []
+
+# Analysis settings
+analysis:
+  feature_space:
+    enabled: true
+    check_multicollinearity: true
+    recommend_bigrams: true
+    num_recommendations: 30
+    output_dir: "output/feature_space"
+  timing_frequency:
+    enabled: true
+    n_groups: 4
+    plot_path: "output/analysis/timing_frequency_relationship.png"
+    groups_plot_path: "output/analysis/timing_by_frequency_groups"
+
+# Model settings
+model:
+  train: true
+  #inference_method: 'mcmc'
+  inference_method: 'variational'
+  num_samples: 10 #2000
+  chains: 2 #8
+
+# Scoring settings
+scoring:
+  enabled: true
+  mirror_scores: true
+
+# Visualization settings
+visualization:
+  enabled: true
+  feature_space_plot: "output/visualizations/feature_space.png"
+  bigram_graph: "output/visualizations/bigram_graph.png"
+  model_diagnostics_mcmc: "output/visualizations/model_diagnostics_mcmc"  # When using MCMC
+  model_diagnostics_vi: "output/visualizations/model_diagnostics_vi"      # When using variational inference
+
+# Output settings
+output:
+  model_results: "output/model/glmm_results"
+  comfort_scores: "output/scores/bigram_comfort_scores.csv"
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "output/logs/pipeline.log"
