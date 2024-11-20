@@ -352,58 +352,55 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
     results = {}
     
     # Create directories
-    Path(output_paths['dir']).mkdir(parents=True, exist_ok=True)
-    Path(output_paths['visualizations']).mkdir(parents=True, exist_ok=True)
-    Path(output_paths['analysis']).mkdir(parents=True, exist_ok=True)
-    
-    # Check multicollinearity if requested
+    Path(output_paths['files']['analysis']).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_paths['visualizations']['pca']).parent.mkdir(parents=True, exist_ok=True)
+
     if check_multicollinearity:
-        logger.info("Checking multicollinearity")
         multicollinearity_results = check_multicollinearity_vif(feature_matrix)
         results['multicollinearity'] = multicollinearity_results
-        
-        # Save VIF results
         vif_df = pd.DataFrame(multicollinearity_results['vif'])
-        vif_df.to_csv(f"{output_paths['analysis']}/vif_results.csv", index=False)
+        vif_df.to_csv(output_paths['files']['vif'], index=False)
         
-        # Save correlation results
         if multicollinearity_results['high_correlations']:
             corr_df = pd.DataFrame(multicollinearity_results['high_correlations'])
-            corr_df.to_csv(f"{output_paths['analysis']}/high_correlations.csv", index=False)
-    
-    # Standardize features and perform PCA
+            corr_df.to_csv(output_paths['files']['correlations'], index=False)
+
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(feature_matrix)
-    
     pca = PCA(n_components=2)
     pca_result = pca.fit_transform(scaled_features)
-    
+
+    # Calculate metrics
+    hull = ConvexHull(pca_result)
+    hull_area = hull.area
+    point_density = len(pca_result) / hull_area
+    results['feature_space_metrics'] = {
+        'hull_area': hull_area,
+        'point_density': point_density
+    }
+
+    # Save metrics
+    metrics_df = pd.DataFrame({
+        'metric': ['hull_area', 'point_density'],
+        'value': [hull_area, point_density]
+    })
+    metrics_df.to_csv(output_paths['files']['analysis'], index=False)
+
     # Plot PCA projection
     plt.figure(figsize=(10, 8))
     plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
     plt.title('2D PCA projection of feature space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
-    plt.savefig(output_paths['pca_plot'], dpi=300, bbox_inches='tight')
+    plt.savefig(output_paths['visualizations']['pca'])
     plt.close()
-    
-    # Calculate feature space metrics
-    hull = ConvexHull(pca_result)
-    hull_area = hull.area
-    point_density = len(pca_result) / hull_area
-    
-    results['feature_space_metrics'] = {
-        'hull_area': hull_area,
-        'point_density': point_density
-    }
-    
+
     # Identify underrepresented areas
     grid_points, distances = identify_underrepresented_areas(
         pca_result,
-        output_path=f"{output_paths['visualizations']}/underrepresented_areas.png"
+        output_paths['visualizations']['underrepresented']  # Fixed path
     )
-    
-    # Generate recommendations if requested
+
     if recommend_bigrams:
         recommendations = generate_bigram_recommendations(
             pca_result=pca_result,
@@ -416,31 +413,13 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
         )
         results['recommendations'] = recommendations
         
-        # Save recommendations
-        with open(output_paths['recommendations'], 'w') as f:
+        with open(output_paths['files']['recommendations'], 'w') as f:
             for pair in recommendations:
                 f.write(f"{pair[0][0]}{pair[0][1]}, {pair[1][0]}{pair[1][1]}\n")
 
-    # Plot bigram graph
-    plot_bigram_graph(recommendations, output_paths['bigram_graph'])
-    
-    # Save all metrics and results
-    metrics_df = pd.DataFrame({
-        'metric': ['hull_area', 'point_density'],
-        'value': [hull_area, point_density]
-    })
-    metrics_df.to_csv(f"{output_paths['analysis']}/feature_space_metrics.csv", index=False)
+        # Plot bigram graph
+        plot_bigram_graph(recommendations, output_paths['visualizations']['bigram_graph'])
 
-    # Save PCA explained variance
-    pca_results = {
-        'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
-        'explained_variance': pca.explained_variance_.tolist(),
-        'n_components': pca.n_components_
-    }
-    with open(f"{output_paths['analysis']}/pca_results.json", 'w') as f:
-        json.dump(pca_results, f, indent=2)
-
-    logger.info("Feature space analysis completed")
     return results
 
 def check_multicollinearity_vif(feature_matrix: pd.DataFrame) -> Dict:
@@ -550,54 +529,29 @@ def generate_bigram_recommendations(pca_result: np.ndarray,
     
     return recommended_pairs
 
-def plot_bigram_graph(bigram_pairs: List[Tuple[str, str]],
-                      output_path: str) -> None:
-    """
-    Plot a graph showing bigram connectivity.
-    
-    Args:
-        bigram_pairs: List of bigram pairs
-        output_path: Path to save the plot
-    """
-    # Create graph
+def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
+    """Plot a comprehensive graph of bigram connectivity."""
     G = nx.Graph()
     
-    # Add edges
+    # Add all edges
     for bigram1, bigram2 in bigram_pairs:
         bigram1_str = ''.join(bigram1)
         bigram2_str = ''.join(bigram2)
         G.add_edge(bigram1_str, bigram2_str)
     
-    # Get connected components
-    components = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+    # Use a better layout algorithm
+    pos = nx.spring_layout(G, k=1.5, iterations=50)
     
-    plt.figure(figsize=(14, 14))
+    plt.figure(figsize=(15, 15))
+    nx.draw(G, pos, with_labels=True, 
+            node_color='lightblue',
+            node_size=500,
+            font_size=8,
+            font_weight='bold',
+            width=1.0)
     
-    # Layout positioning
-    pos = {}
-    grid_size = int(np.ceil(np.sqrt(len(components))))
-    spacing = 5.0
-    
-    # Position components
-    for i, component in enumerate(components):
-        component_pos = nx.spring_layout(component, k=1.0, seed=i)
-        
-        x_offset = (i % grid_size) * spacing
-        y_offset = (i // grid_size) * spacing
-        
-        for node in component_pos:
-            component_pos[node][0] += x_offset
-            component_pos[node][1] += y_offset
-            
-        pos.update(component_pos)
-    
-    # Draw graph
-    nx.draw(G, pos, with_labels=True, node_color='lightblue',
-            font_weight='bold', node_size=500, font_size=14,
-            edge_color='gray', linewidths=1.5, width=2.0)
-    
-    plt.title("Bigram Connectivity Graph", fontsize=20)
-    plt.savefig(output_path)
+    plt.title("Bigram Connectivity Graph")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_model_diagnostics(trace: az.InferenceData,
@@ -754,3 +708,24 @@ def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+def save_analysis_results(results: Dict, output_path: str) -> None:
+    """Save analysis results in a simple text format."""
+    with open(output_path, 'w') as f:
+        f.write(" ---- Load, prepare, and analyze features ---- \n\n")
+        
+        # Feature space metrics
+        f.write(f"Convex Hull Area: {results['feature_space_metrics']['hull_area']}\n")
+        f.write(f"Point Density: {results['feature_space_metrics']['point_density']}\n\n")
+        
+        # Correlation results
+        if 'multicollinearity' in results:
+            f.write(" ---- Check feature matrix multicollinearity ---- \n\n")
+            f.write("High correlations between features:\n")
+            for corr in results['multicollinearity']['high_correlations']:
+                f.write(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}\n")
+            f.write("\n")
+            
+            f.write("VIF Results:\n")
+            for vif in results['multicollinearity']['vif']:
+                f.write(f"{vif['Feature']}: {vif['VIF']:.3f} ({vif['Status']})\n")
