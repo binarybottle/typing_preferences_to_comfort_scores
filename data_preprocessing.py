@@ -3,7 +3,7 @@ Data Preprocessing Module
 
 This module handles data loading, cleaning, and preparation for keyboard layout analysis.
 """
-
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from typing import Tuple, List, Dict, Optional, Any
@@ -318,53 +318,62 @@ class DataPreprocessor:
             logger.error(f"Error loading processed data: {str(e)}")
             raise
 
-def create_data_splits(data: ProcessedData, 
-                      test_size: float = 0.2,
-                      random_state: Optional[int] = None) -> Tuple[ProcessedData, ProcessedData]:
+def manage_data_splits(data: ProcessedData, 
+                      config: Dict,
+                      force_new_split: bool = False) -> Tuple[ProcessedData, ProcessedData]:
     """
-    Split data into training and testing sets.
+    Manage train/test splits, ensuring consistency across runs.
     
     Args:
         data: ProcessedData object containing all data
-        test_size: Proportion of data to use for testing
-        random_state: Random seed for reproducibility
+        config: Configuration dictionary
+        force_new_split: If True, create new split even if existing split exists
         
     Returns:
         Tuple of (train_data, test_data)
     """
-    logger.info(f"Creating data splits with test_size={test_size}")
-    try:
-        np.random.seed(random_state)
-        
-        # Get indices for split
+    splits_file = Path(config['data']['splits_file'])
+    
+    if not force_new_split and splits_file.exists():
+        # Load existing splits
+        logger.info("Loading existing train/test split indices")
+        splits = np.load(splits_file)
+        train_indices = splits['train_indices']
+        test_indices = splits['test_indices']
+    else:
+        # Create and save new splits
+        logger.info("Creating new train/test split")
         n_samples = len(data.target_vector)
         indices = np.random.permutation(n_samples)
-        test_size = int(test_size * n_samples)
+        test_size = int(config['feature_evaluation']['test_size'] * n_samples)
         test_indices = indices[:test_size]
         train_indices = indices[test_size:]
         
-        # Create training data
-        train_data = ProcessedData(
-            bigram_pairs=[data.bigram_pairs[i] for i in train_indices],
-            feature_matrix=data.feature_matrix.iloc[train_indices],
-            target_vector=data.target_vector[train_indices],
-            participants=data.participants[train_indices],
-            typing_times=data.typing_times[train_indices] if data.typing_times is not None else None
-        )
-        
-        # Create test data
-        test_data = ProcessedData(
-            bigram_pairs=[data.bigram_pairs[i] for i in test_indices],
-            feature_matrix=data.feature_matrix.iloc[test_indices],
-            target_vector=data.target_vector[test_indices],
-            participants=data.participants[test_indices],
-            typing_times=data.typing_times[test_indices] if data.typing_times is not None else None
-        )
-        
-        logger.info(f"Created splits - Train: {len(train_data.target_vector)}, "
-                   f"Test: {len(test_data.target_vector)}")
-        
-        return train_data, test_data
-    except Exception as e:
-        logger.error(f"Error creating data splits: {str(e)}")
-        raise
+        # Save splits
+        splits_file.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(splits_file, 
+                 train_indices=train_indices,
+                 test_indices=test_indices)
+    
+    # Create training data
+    train_data = ProcessedData(
+        bigram_pairs=[data.bigram_pairs[i] for i in train_indices],
+        feature_matrix=data.feature_matrix.iloc[train_indices],
+        target_vector=data.target_vector[train_indices],
+        participants=data.participants[train_indices],
+        typing_times=data.typing_times[train_indices] if data.typing_times is not None else None
+    )
+    
+    # Create test data
+    test_data = ProcessedData(
+        bigram_pairs=[data.bigram_pairs[i] for i in test_indices],
+        feature_matrix=data.feature_matrix.iloc[test_indices],
+        target_vector=data.target_vector[test_indices],
+        participants=data.participants[test_indices],
+        typing_times=data.typing_times[test_indices] if data.typing_times is not None else None
+    )
+    
+    logger.info(f"Using data split - Train: {len(train_data.target_vector)}, "
+               f"Test: {len(test_data.target_vector)}")
+    
+    return train_data, test_data

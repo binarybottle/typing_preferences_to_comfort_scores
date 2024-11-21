@@ -8,8 +8,9 @@ from pathlib import Path
 import yaml
 from typing import Dict, Any
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
-from data_preprocessing import DataPreprocessor
+from data_preprocessing import DataPreprocessor, manage_data_splits
 from bigram_feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
 from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results
 from analysis_visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
@@ -17,6 +18,7 @@ from analysis_visualization import (plot_timing_frequency_relationship, plot_tim
                                   save_feature_space_analysis_results, plot_model_diagnostics)
 from bigram_features import (column_map, row_map, finger_map, engram_position_values,
                            row_position_values, bigrams, bigram_frequencies_array)
+from feature_evaluation import evaluate_feature_sets
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
@@ -97,7 +99,38 @@ def main():
         # Get processed data
         processed_data = preprocessor.get_processed_data()
 
-        # Run timing-frequency analysis if enabled
+        # If feature evaluation is enabled, do it before any model training
+        if config['feature_evaluation']['enabled']:
+            logger.info("Starting feature evaluation")
+            
+            # Get consistent train/test split
+            train_data, test_data = manage_data_splits(processed_data, config)
+            
+            # Create required directories
+            Path(config['feature_evaluation']['analysis_dir']).mkdir(parents=True, exist_ok=True)
+            Path(config['feature_evaluation']['plots_dir']).mkdir(parents=True, exist_ok=True)
+            
+            # Run feature evaluation
+            feature_eval_results = evaluate_feature_sets(
+                feature_matrix=train_data.feature_matrix,
+                target_vector=train_data.target_vector,
+                participants=train_data.participants,
+                candidate_features=config['feature_evaluation']['candidate_features'],
+                feature_names=feature_names,
+                output_dir=Path(config['feature_evaluation']['dir']),
+                n_splits=config['feature_evaluation']['n_splits'],
+                n_samples=config['feature_evaluation']['n_samples']
+            )
+            
+            logger.info("Feature evaluation completed")
+            
+            # Use test_data for final model evaluation
+            evaluation_data = test_data
+        else:
+            # If not doing feature evaluation, use all data for model
+            evaluation_data = processed_data
+
+        # Continue with existing pipeline using evaluation_data instead of processed_data
         if config['output']['timing_frequency']['enabled']:
             logger.info("Analyzing timing-frequency relationship")
             timing_results = plot_timing_frequency_relationship(

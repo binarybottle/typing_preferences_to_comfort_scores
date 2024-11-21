@@ -2,10 +2,11 @@
 
 # Data settings
 data:
-  input_file: "data/output_all4studies_406participants/tables/filtered_bigram_data.csv"
-  #input_file: "data/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
-  #input_file: "data/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
-  #input_file: "data/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+  input_file: "data/input/output_all4studies_406participants/tables/filtered_bigram_data.csv"
+  #input_file: "data/input/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
+  #input_file: "data/oinput/utput_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
+  #input_file: "data/input/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+  splits_file: "data/splits/train_test_indices.npz"  # New entry
 
 # Keyboard layout settings
 layout:
@@ -20,6 +21,21 @@ features:
     - 'freq'
   add_interactions: false
   interaction_pairs: []
+
+# Feature evaluation settings
+feature_evaluation:
+  enabled: true
+  dir: "output/feature_evaluation"
+  analysis_dir: "output/feature_evaluation/analysis"
+  plots_dir: "output/feature_evaluation/plots"
+  n_splits: 5
+  n_samples: 1000
+  candidate_features:
+    - ['row_sum', 'engram_sum']
+    - ['row_sum', 'engram_sum', 'freq']
+    - ['row_sum']
+    - ['engram_sum']
+  test_size: 0.2  # For train/test split
 
 # Output directory structure
 output:
