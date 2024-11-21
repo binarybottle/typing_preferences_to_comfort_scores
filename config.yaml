@@ -31,6 +31,7 @@ output:
     dir: "output/model"
     results: "output/model/results"
     visualizations:
+      dir: "output/model/visualizations"
       mcmc: "output/model/visualizations/mcmc"
       vi: "output/model/visualizations/vi"
   
@@ -68,8 +69,7 @@ output:
 # Model settings
 model:
   train: true
-  #inference_method: 'mcmc'
-  inference_method: 'variational'
+  inference_method: 'variational'  # or 'mcmc'
   num_samples: 20  #2000
   chains: 2  #8
 
@@ -86,4 +86,4 @@ visualization:
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "output/logs/pipeline.log"  # Changed from 'logs' to 'file'
+  file: "output/logs/pipeline.log"

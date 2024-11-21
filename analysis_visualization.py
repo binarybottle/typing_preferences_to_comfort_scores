@@ -1,7 +1,7 @@
 """
-Visualization Module
+Analysis and Visualization Module
 
-This module provides functions for visualizing keyboard layout analysis results,
+This module provides functions for analyzing and visualizing keyboard typing data,
 including feature space analysis, timing relationships, and model diagnostics.
 """
 from pathlib import Path
@@ -36,6 +36,9 @@ def set_plotting_style():
     plt.rcParams['figure.dpi'] = 300
     plt.rcParams['savefig.dpi'] = 300
 
+#==============================================================================================#
+# Functions to analyze and visualize the relationship between bigram frequency and typing time #
+#==============================================================================================#
 def plot_timing_frequency_relationship(bigram_data: pd.DataFrame,
                                      bigrams: List[str],
                                      bigram_frequencies_array: np.ndarray,
@@ -249,92 +252,48 @@ def plot_timing_by_frequency_groups(bigram_data: pd.DataFrame,
         'anova_p_value': p_value
     }
 
-def plot_feature_space(feature_matrix: pd.DataFrame,
-                       output_path: str) -> Tuple[PCA, ConvexHull]:
+def save_timing_analysis(timing_results: Dict,
+                        group_comparison_results: Dict,
+                        output_path: str) -> None:
     """
-    Create PCA visualization of the feature space.
+    Save timing and frequency analysis results to a file.
     
     Args:
-        feature_matrix: DataFrame containing feature values
-        output_path: Path to save the plot
+        timing_results: Dictionary containing timing-frequency correlation statistics
+        group_comparison_results: Dictionary containing group comparison statistics
+        output_path: Path to save the analysis results
+    """
+    with open(output_path, 'w') as f:
+        # Write timing-frequency relationship results
+        f.write("=== Timing-Frequency Relationship Analysis ===\n\n")
+        f.write("Raw Correlation Analysis:\n")
+        f.write(f"Correlation coefficient: {timing_results['raw_correlation']:.3f}\n")
+        f.write(f"P-value: {timing_results['raw_p_value']:.3e}\n\n")
         
-    Returns:
-        Tuple containing fitted PCA object and computed ConvexHull
-    """
-    # Standardize features
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(feature_matrix)
-    
-    # Perform PCA
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(scaled_features)
-    
-    # Plot
-    plt.figure(figsize=(10, 8))
-    plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
-    plt.title('2D PCA projection of feature space')
-    plt.xlabel('First Principal Component')
-    plt.ylabel('Second Principal Component')
-    
-    # Calculate convex hull
-    hull = ConvexHull(pca_result)
-    
-    # Plot hull boundary
-    for simplex in hull.simplices:
-        plt.plot(pca_result[simplex, 0], pca_result[simplex, 1], 'r-', alpha=0.5)
-    
-    plt.savefig(output_path)
-    plt.close()
-    
-    return pca, hull
-
-def plot_feature_space_density(pca_result: np.ndarray,
-                               output_path: str,
-                               num_grid: int = 20) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Create density plot showing underrepresented areas in feature space.
-    
-    Args:
-        pca_result: PCA-transformed feature data
-        output_path: Path to save the plot
-        num_grid: Number of grid points for density estimation
+        f.write("Log-transformed Analysis:\n")
+        f.write(f"Correlation coefficient: {timing_results['log_correlation']:.3f}\n")
+        f.write(f"R-squared: {timing_results['r2']:.3f}\n")
+        f.write(f"P-value: {timing_results['log_p_value']:.3e}\n")
+        f.write(f"Regression coefficient: {timing_results['regression_coefficient']:.3f}\n")
+        f.write(f"Intercept: {timing_results['intercept']:.3f}\n\n")
         
-    Returns:
-        Tuple containing grid points and distances
-    """
-    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
-    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
-    
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, num_grid),
-                        np.linspace(y_min, y_max, num_grid))
-    
-    grid_points = np.c_[xx.ravel(), yy.ravel()]
-    
-    # Calculate distances
-    distances = cdist(grid_points, pca_result).min(axis=1)
-    distances = distances.reshape(xx.shape)
-    
-    # Plot
-    plt.figure(figsize=(10, 8))
-    plt.imshow(distances, extent=[x_min, x_max, y_min, y_max],
-               origin='lower', cmap='viridis')
-    plt.colorbar(label='Distance to nearest data point')
-    plt.scatter(pca_result[:, 0], pca_result[:, 1], c='red', s=20, alpha=0.5)
-    plt.title('Underrepresented Areas in Feature Space')
-    plt.xlabel('First Principal Component')
-    plt.ylabel('Second Principal Component')
-    
-    plt.savefig(output_path)
-    plt.close()
-    
-    return grid_points, distances
-
+        # Write group comparison results
+        f.write("=== Frequency Group Analysis ===\n\n")
+        f.write("Group Statistics:\n")
+        f.write(group_comparison_results['group_stats'].to_string())
+        f.write("\n\nOne-way ANOVA Results:\n")
+        f.write(f"F-statistic: {group_comparison_results['anova_f_stat']:.3f}\n")
+        f.write(f"P-value: {group_comparison_results['anova_p_value']:.3e}\n")
+        
+#==========================================================================================#
+# Functions to analyze and visualize bigram pair feature space, and generate pairs to test #
+#==========================================================================================#
 def analyze_feature_space(feature_matrix: pd.DataFrame,
-                         output_paths: Dict[str, str],
-                         all_feature_differences: Dict,
-                         check_multicollinearity: bool = True,
-                         recommend_bigrams: bool = True,
-                         num_recommendations: int = 30) -> Dict:
+                          output_paths: Dict[str, str],
+                          all_feature_differences: Dict,
+                          check_multicollinearity: bool = True,
+                          recommend_bigrams: bool = True,
+                          num_recommendations: int = 30) -> Dict:
     """
     Comprehensive feature space analysis including multicollinearity and recommendations.
     
@@ -458,6 +417,101 @@ def check_multicollinearity_vif(feature_matrix: pd.DataFrame) -> Dict:
     
     return results
 
+def plot_feature_space(feature_matrix: pd.DataFrame,
+                       output_path: str) -> Tuple[PCA, ConvexHull]:
+    """
+    Create PCA visualization of the feature space.
+    
+    Args:
+        feature_matrix: DataFrame containing feature values
+        output_path: Path to save the plot
+        
+    Returns:
+        Tuple containing fitted PCA object and computed ConvexHull
+    """
+    # Standardize features
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(feature_matrix)
+    
+    # Perform PCA
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(scaled_features)
+    
+    # Plot
+    plt.figure(figsize=(10, 8))
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
+    plt.title('2D PCA projection of feature space')
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    
+    # Calculate convex hull
+    hull = ConvexHull(pca_result)
+    
+    # Plot hull boundary
+    for simplex in hull.simplices:
+        plt.plot(pca_result[simplex, 0], pca_result[simplex, 1], 'r-', alpha=0.5)
+    
+    plt.savefig(output_path)
+    plt.close()
+    
+    return pca, hull
+
+def plot_feature_space_density(pca_result: np.ndarray,
+                               output_path: str,
+                               num_grid: int = 20) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Create density plot showing underrepresented areas in feature space.
+    
+    Args:
+        pca_result: PCA-transformed feature data
+        output_path: Path to save the plot
+        num_grid: Number of grid points for density estimation
+        
+    Returns:
+        Tuple containing grid points and distances
+    """
+    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
+    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
+    
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, num_grid),
+                        np.linspace(y_min, y_max, num_grid))
+    
+    grid_points = np.c_[xx.ravel(), yy.ravel()]
+    
+    # Calculate distances
+    distances = cdist(grid_points, pca_result).min(axis=1)
+    distances = distances.reshape(xx.shape)
+    
+    # Plot
+    plt.figure(figsize=(10, 8))
+    plt.imshow(distances, extent=[x_min, x_max, y_min, y_max],
+               origin='lower', cmap='viridis')
+    plt.colorbar(label='Distance to nearest data point')
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], c='red', s=20, alpha=0.5)
+    plt.title('Underrepresented Areas in Feature Space')
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    
+    plt.savefig(output_path)
+    plt.close()
+    
+    return grid_points, distances
+    
+def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
+    with open(output_path, 'w') as f:
+        f.write(" ---- Load, prepare, and analyze features ---- \n\n")
+        f.write(f"Convex Hull Area: {results['feature_space_metrics']['hull_area']}\n")
+        f.write(f"Point Density: {results['feature_space_metrics']['point_density']}\n\n")
+        
+        f.write(" ---- Check feature matrix multicollinearity ---- \n\n")
+        f.write("Correlation matrix:\n")
+        if 'multicollinearity' in results:
+            for vif in results['multicollinearity']['vif']:
+                f.write(f"{vif['Feature']:<20} VIF: {vif['VIF']:.3f} ({vif['Status']})\n")
+            f.write("\nHigh correlations (>0.7):\n")
+            for corr in results['multicollinearity']['high_correlations']:
+                f.write(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}\n")
+
 def identify_underrepresented_areas(pca_result: np.ndarray,
                                   output_path: str,
                                   num_grid: int = 20) -> Tuple[np.ndarray, np.ndarray]:
@@ -530,30 +584,30 @@ def generate_bigram_recommendations(pca_result: np.ndarray,
     return recommended_pairs
 
 def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
-    """Plot a comprehensive graph of bigram connectivity."""
     G = nx.Graph()
+    for pair in bigram_pairs:
+        bigram1 = pair[0]
+        bigram2 = pair[1]
+        # Add both bigrams as nodes
+        G.add_node(''.join(bigram1))
+        G.add_node(''.join(bigram2))
+        # Add edge between them
+        G.add_edge(''.join(bigram1), ''.join(bigram2))
     
-    # Add all edges
-    for bigram1, bigram2 in bigram_pairs:
-        bigram1_str = ''.join(bigram1)
-        bigram2_str = ''.join(bigram2)
-        G.add_edge(bigram1_str, bigram2_str)
-    
-    # Use a better layout algorithm
-    pos = nx.spring_layout(G, k=1.5, iterations=50)
-    
-    plt.figure(figsize=(15, 15))
+    pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+    plt.figure(figsize=(20, 20))
     nx.draw(G, pos, with_labels=True, 
             node_color='lightblue',
-            node_size=500,
-            font_size=8,
+            node_size=1000,
+            font_size=10,
             font_weight='bold',
             width=1.0)
-    
-    plt.title("Bigram Connectivity Graph")
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
+#==========================================================#
+# Functions to analyze and visualize model characteristics #
+#==========================================================#
 def plot_model_diagnostics(trace: az.InferenceData,
                          output_base_path: str,
                          inference_method: str = "mcmc") -> None:
@@ -709,23 +763,3 @@ def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
     plt.savefig(output_path)
     plt.close()
 
-def save_analysis_results(results: Dict, output_path: str) -> None:
-    """Save analysis results in a simple text format."""
-    with open(output_path, 'w') as f:
-        f.write(" ---- Load, prepare, and analyze features ---- \n\n")
-        
-        # Feature space metrics
-        f.write(f"Convex Hull Area: {results['feature_space_metrics']['hull_area']}\n")
-        f.write(f"Point Density: {results['feature_space_metrics']['point_density']}\n\n")
-        
-        # Correlation results
-        if 'multicollinearity' in results:
-            f.write(" ---- Check feature matrix multicollinearity ---- \n\n")
-            f.write("High correlations between features:\n")
-            for corr in results['multicollinearity']['high_correlations']:
-                f.write(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}\n")
-            f.write("\n")
-            
-            f.write("VIF Results:\n")
-            for vif in results['multicollinearity']['vif']:
-                f.write(f"{vif['Feature']}: {vif['VIF']:.3f} ({vif['Status']})\n")

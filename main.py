@@ -10,10 +10,11 @@ from typing import Dict, Any
 import pandas as pd
 
 from data_preprocessing import DataPreprocessor
-from feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
+from bigram_feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
 from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results
-from visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
-                           analyze_feature_space, plot_model_diagnostics, save_analysis_results)
+from analysis_visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
+                                    save_timing_analysis, analyze_feature_space, 
+                                    save_feature_space_analysis_results, plot_model_diagnostics)
 from bigram_features import (column_map, row_map, finger_map, engram_position_values,
                            row_position_values, bigrams, bigram_frequencies_array)
 
@@ -59,6 +60,8 @@ def main():
             
             # Model directories
             config['output']['model']['dir'],
+            config['output']['model']['results'],
+            config['output']['model']['visualizations']['dir'],
             config['output']['model']['visualizations']['mcmc'],
             config['output']['model']['visualizations']['vi'],
             
@@ -137,6 +140,10 @@ def main():
                 output_base_path=config['output']['timing_frequency']['visualizations']['groups']
             )
 
+            save_timing_analysis(timing_results, 
+                    group_comparison_results,
+                    config['output']['timing_frequency']['files']['analysis'])
+
         # Evaluate feature space and generate recommendations
         if config['output']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
@@ -150,8 +157,8 @@ def main():
             )
 
             # Save analysis results
-            save_analysis_results(feature_space_results, 
-                                config['output']['feature_space']['files']['analysis'])
+            save_feature_space_analysis_results(feature_space_results, 
+                                                config['output']['feature_space']['files']['analysis'])
 
             if feature_space_results['multicollinearity']['high_correlations']:
                 logger.warning("Found high correlations between features:")
