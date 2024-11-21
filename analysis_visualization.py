@@ -284,46 +284,25 @@ def save_timing_analysis(timing_results: Dict,
         f.write("\n\nOne-way ANOVA Results:\n")
         f.write(f"F-statistic: {group_comparison_results['anova_f_stat']:.3f}\n")
         f.write(f"P-value: {group_comparison_results['anova_p_value']:.3e}\n")
-        
+
 #==========================================================================================#
 # Functions to analyze and visualize bigram pair feature space, and generate pairs to test #
 #==========================================================================================#
 def analyze_feature_space(feature_matrix: pd.DataFrame,
-                          output_paths: Dict[str, str],
-                          all_feature_differences: Dict,
-                          check_multicollinearity: bool = True,
-                          recommend_bigrams: bool = True,
-                          num_recommendations: int = 30) -> Dict:
+                         output_paths: Dict[str, str],
+                         all_feature_differences: Dict,
+                         check_multicollinearity: bool = True,
+                         recommend_bigrams: bool = True,
+                         num_recommendations: int = 30) -> Dict:
     """
     Comprehensive feature space analysis including multicollinearity and recommendations.
-    
-    Args:
-        feature_matrix: DataFrame of features
-        output_paths: Dictionary containing all required output paths
-        all_feature_differences: Dictionary of feature differences
-        check_multicollinearity: Whether to check for multicollinearity
-        recommend_bigrams: Whether to generate bigram recommendations
-        num_recommendations: Number of bigram pairs to recommend
-        
-    Returns:
-        Dictionary containing analysis results
     """
     results = {}
     
     # Create directories
-    Path(output_paths['files']['analysis']).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_paths['visualizations']['pca']).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_paths['analysis']).parent.mkdir(parents=True, exist_ok=True)
 
-    if check_multicollinearity:
-        multicollinearity_results = check_multicollinearity_vif(feature_matrix)
-        results['multicollinearity'] = multicollinearity_results
-        vif_df = pd.DataFrame(multicollinearity_results['vif'])
-        vif_df.to_csv(output_paths['files']['vif'], index=False)
-        
-        if multicollinearity_results['high_correlations']:
-            corr_df = pd.DataFrame(multicollinearity_results['high_correlations'])
-            corr_df.to_csv(output_paths['files']['correlations'], index=False)
-
+    # PCA and scaling
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(feature_matrix)
     pca = PCA(n_components=2)
@@ -338,26 +317,32 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
         'point_density': point_density
     }
 
-    # Save metrics
-    metrics_df = pd.DataFrame({
-        'metric': ['hull_area', 'point_density'],
-        'value': [hull_area, point_density]
-    })
-    metrics_df.to_csv(output_paths['files']['analysis'], index=False)
+    # Check multicollinearity if requested
+    if check_multicollinearity:
+        multicollinearity_results = check_multicollinearity_vif(feature_matrix)
+        results['multicollinearity'] = multicollinearity_results
 
-    # Plot PCA projection
+    # Get axis limits for consistent plotting
+    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
+    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
+
+    # Plot PCA projection with consistent scale
     plt.figure(figsize=(10, 8))
     plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
     plt.title('2D PCA projection of feature space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
-    plt.savefig(output_paths['visualizations']['pca'])
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.savefig(output_paths['pca'])
     plt.close()
 
-    # Identify underrepresented areas
+    # Identify underrepresented areas with same scale
     grid_points, distances = identify_underrepresented_areas(
-        pca_result,
-        output_paths['visualizations']['underrepresented']  # Fixed path
+        pca_result=pca_result,
+        output_path=output_paths['underrepresented'],
+        x_lims=(x_min, x_max),
+        y_lims=(y_min, y_max)
     )
 
     if recommend_bigrams:
@@ -372,12 +357,16 @@ def analyze_feature_space(feature_matrix: pd.DataFrame,
         )
         results['recommendations'] = recommendations
         
-        with open(output_paths['files']['recommendations'], 'w') as f:
+        # Save recommendations
+        with open(output_paths['recommendations'], 'w') as f:
             for pair in recommendations:
                 f.write(f"{pair[0][0]}{pair[0][1]}, {pair[1][0]}{pair[1][1]}\n")
 
-        # Plot bigram graph
-        plot_bigram_graph(recommendations, output_paths['visualizations']['bigram_graph'])
+        # Plot bigram graph using all pairs from input data
+        plot_bigram_graph(feature_matrix.index, output_paths['bigram_graph'])
+
+    # Save comprehensive analysis including VIF results
+    save_feature_space_analysis_results(results, output_paths['analysis'])
 
     return results
 
@@ -514,26 +503,27 @@ def save_feature_space_analysis_results(results: Dict, output_path: str) -> None
 
 def identify_underrepresented_areas(pca_result: np.ndarray,
                                   output_path: str,
+                                  x_lims: Tuple[float, float],
+                                  y_lims: Tuple[float, float],
                                   num_grid: int = 20) -> Tuple[np.ndarray, np.ndarray]:
     """Identify and visualize underrepresented areas in feature space."""
-    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
-    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
-    
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, num_grid),
-                        np.linspace(y_min, y_max, num_grid))
+    xx, yy = np.meshgrid(np.linspace(x_lims[0], x_lims[1], num_grid),
+                        np.linspace(y_lims[0], y_lims[1], num_grid))
     
     grid_points = np.c_[xx.ravel(), yy.ravel()]
     distances = cdist(grid_points, pca_result).min(axis=1)
     distances = distances.reshape(xx.shape)
     
     plt.figure(figsize=(10, 8))
-    plt.imshow(distances, extent=[x_min, x_max, y_min, y_max],
+    plt.imshow(distances, extent=[x_lims[0], x_lims[1], y_lims[0], y_lims[1]],
                origin='lower', cmap='viridis')
     plt.colorbar(label='Distance to nearest data point')
     plt.scatter(pca_result[:, 0], pca_result[:, 1], c='red', s=20, alpha=0.5)
     plt.title('Underrepresented Areas in Feature Space')
     plt.xlabel('First Principal Component')
     plt.ylabel('Second Principal Component')
+    plt.xlim(x_lims)
+    plt.ylim(y_lims)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -584,24 +574,32 @@ def generate_bigram_recommendations(pca_result: np.ndarray,
     return recommended_pairs
 
 def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
+    """Create graph visualization of bigram relationships."""
     G = nx.Graph()
+    
+    # Add all bigrams and their connections
     for pair in bigram_pairs:
-        bigram1 = pair[0]
-        bigram2 = pair[1]
+        bigram1, bigram2 = pair
         # Add both bigrams as nodes
         G.add_node(''.join(bigram1))
         G.add_node(''.join(bigram2))
         # Add edge between them
         G.add_edge(''.join(bigram1), ''.join(bigram2))
     
-    pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+    # Layout with more space and iterations for better visualization
+    pos = nx.spring_layout(G, k=2.5, iterations=100, seed=42)
+    
     plt.figure(figsize=(20, 20))
-    nx.draw(G, pos, with_labels=True, 
+    nx.draw(G, pos, 
+            with_labels=True,
             node_color='lightblue',
             node_size=1000,
             font_size=10,
             font_weight='bold',
-            width=1.0)
+            width=1.0,
+            edge_color='gray',
+            alpha=0.7)
+    
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -611,109 +609,48 @@ def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
 def plot_model_diagnostics(trace: az.InferenceData,
                          output_base_path: str,
                          inference_method: str = "mcmc") -> None:
-    """
-    Create diagnostic plots for the Bayesian model.
-    
-    Args:
-        trace: ArviZ InferenceData object
-        output_base_path: Base path for saving plots
-        inference_method: Type of inference used ('mcmc' or 'variational')
-    """
-    # Check what groups are available in the trace
-    available_groups = list(trace.groups())
-    logger.info(f"Available groups in trace: {available_groups}")
-
+    """Create diagnostic plots for the Bayesian model."""
     # Get variables excluding participant-specific ones
     var_names = [v for v in trace.posterior.data_vars 
                  if not v.startswith('participant_')]
-    logger.info(f"Plotting diagnostics for {len(var_names)} variables")
-
-    # Plot main variables separately
+    
+    # Plot main variables
     main_vars = ['row_sum', 'engram_sum', 'freq', 'sigma']
+    
+    # Base filenames with inference method
+    diagnostics_base = output_base_path.format(inference_method=inference_method)
+    
     try:
-        # Posterior plots for main variables
+        # Posterior plots
         az.plot_posterior(trace, var_names=main_vars)
         plt.suptitle(f'Posterior Distributions - Main Variables ({inference_method})')
         plt.tight_layout()
-        plt.savefig(f'{output_base_path}_posterior_main.png')
+        plt.savefig(diagnostics_base)
         plt.close()
 
-        # Forest plot for main variables
+        # Forest plot
         az.plot_forest(trace, var_names=main_vars)
         plt.suptitle(f'Forest Plot - Main Variables ({inference_method})')
         plt.tight_layout()
-        plt.savefig(f'{output_base_path}_forest_main.png')
+        plt.savefig(diagnostics_base.replace('diagnostics', 'forest'))
         plt.close()
-    except Exception as e:
-        logger.warning(f"Could not create main variable plots: {str(e)}")
 
-    # Participant effects summary
-    try:
+        # Participant effects plot if available
         participant_vars = [v for v in trace.posterior.data_vars 
                           if v.startswith('participant_')]
         if participant_vars:
-            # Create summary statistics
             participant_summary = az.summary(trace, var_names=participant_vars)
-            participant_summary.to_csv(f'{output_base_path}_participant_effects.csv')
-            
-            # Plot distribution
             plt.figure(figsize=(10, 6))
             means = [participant_summary.loc[var, 'mean'] for var in participant_vars]
             plt.hist(means, bins=30)
             plt.title(f'Distribution of Participant Effects ({inference_method})')
             plt.xlabel('Effect Size')
             plt.ylabel('Count')
-            plt.savefig(f'{output_base_path}_participant_effects_dist.png')
+            plt.savefig(diagnostics_base.replace('diagnostics', 'participant_effects'))
             plt.close()
+
     except Exception as e:
-        logger.warning(f"Could not create participant effects plots: {str(e)}")
-
-    # Create summary statistics
-    try:
-        summary = az.summary(trace)
-        summary.to_csv(f'{output_base_path}_summary.csv')
-    except Exception as e:
-        logger.warning(f"Could not create summary statistics: {str(e)}")
-
-    # MCMC-specific plots
-    if inference_method == 'mcmc' and 'sample_stats' in available_groups:
-        try:
-            # Trace plot for main variables
-            az.plot_trace(trace, var_names=main_vars)
-            plt.suptitle('Trace Plots - Main Variables')
-            plt.tight_layout()
-            plt.savefig(f'{output_base_path}_trace_main.png')
-            plt.close()
-
-            # Energy plot if available
-            try:
-                az.plot_energy(trace)
-                plt.suptitle('Energy Plot')
-                plt.tight_layout()
-                plt.savefig(f'{output_base_path}_energy.png')
-                plt.close()
-            except Exception as e:
-                logger.warning(f"Could not create energy plot: {str(e)}")
-
-            # Pair plot for main variables
-            az.plot_pair(trace, var_names=main_vars)
-            plt.suptitle('Pair Plot - Main Variables')
-            plt.tight_layout()
-            plt.savefig(f'{output_base_path}_pair_main.png')
-            plt.close()
-        except Exception as e:
-            logger.warning(f"Could not create MCMC-specific plots: {str(e)}")
-
-    # Variational inference specific diagnostics
-    elif inference_method == 'variational':
-        try:
-            # Could add VI-specific diagnostics here if needed
-            logger.info("No additional VI-specific diagnostics implemented")
-            pass
-        except Exception as e:
-            logger.warning(f"Could not create VI-specific plots: {str(e)}")
-
-    logger.info(f"Diagnostic plots creation completed for {inference_method} inference")
+        logger.warning(f"Could not create some diagnostic plots: {str(e)}")
 
 def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
                               design_features: List[str],

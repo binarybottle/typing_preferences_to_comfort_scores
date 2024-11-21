@@ -30,10 +30,10 @@ output:
   model:
     dir: "output/model"
     results: "output/model/results"
-    visualizations:
-      dir: "output/model/visualizations"
-      mcmc: "output/model/visualizations/mcmc"
-      vi: "output/model/visualizations/vi"
+    diagnostics: "output/model/diagnostics_{inference_method}.png"
+    forest: "output/model/forest_{inference_method}.png"
+    posterior: "output/model/posterior_{inference_method}.png"
+    participant_effects: "output/model/participant_effects_{inference_method}.png"
   
   # Feature space analysis
   feature_space:
@@ -42,26 +42,20 @@ output:
     recommend_bigrams: true
     num_recommendations: 30
     dir: "output/feature_space"
-    files:
-      analysis: "output/feature_space/analysis.txt"
-      recommendations: "output/feature_space/recommendations.txt"
-      vif: "output/feature_space/vif.txt"
-      correlations: "output/feature_space/correlations.txt"
-    visualizations:
-      pca: "output/feature_space/visualizations/pca_projection.png"
-      bigram_graph: "output/feature_space/visualizations/bigram_graph.png"
-      underrepresented: "output/feature_space/visualizations/underrepresented_areas.png"
+    analysis: "output/feature_space/analysis.txt"
+    recommendations: "output/feature_space/recommendations.txt"
+    pca: "output/feature_space/pca.png"
+    bigram_graph: "output/feature_space/bigram_graph.png"
+    underrepresented: "output/feature_space/underrepresented.png"
   
   # Timing frequency analysis
   timing_frequency:
     enabled: true
     n_groups: 4
     dir: "output/timing_frequency"
-    files:
-      analysis: "output/timing_frequency/analysis.txt"
-    visualizations:
-      relationship: "output/timing_frequency/visualizations/relationship.png"
-      groups: "output/timing_frequency/visualizations/groups"
+    analysis: "output/timing_frequency/analysis.txt"
+    relationship: "output/timing_frequency/relationship.png"
+    groups: "output/timing_frequency/groups"
   
   # Comfort scores
   comfort_scores: "output/scores/bigram_comfort_scores.csv"

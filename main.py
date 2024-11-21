@@ -13,8 +13,8 @@ from data_preprocessing import DataPreprocessor
 from bigram_feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
 from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results
 from analysis_visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
-                                    save_timing_analysis, analyze_feature_space, 
-                                    save_feature_space_analysis_results, plot_model_diagnostics)
+                                  save_timing_analysis, analyze_feature_space, 
+                                  save_feature_space_analysis_results, plot_model_diagnostics)
 from bigram_features import (column_map, row_map, finger_map, engram_position_values,
                            row_position_values, bigrams, bigram_frequencies_array)
 
@@ -53,37 +53,14 @@ def main():
     logger.info("Starting keyboard layout analysis pipeline")
 
     try:
-        # Create all necessary directories
+        # Create necessary directories
         dirs_to_create = [
             config['output']['base_dir'],
             config['output']['logs'],
-            
-            # Model directories
             config['output']['model']['dir'],
-            config['output']['model']['results'],
-            config['output']['model']['visualizations']['dir'],
-            config['output']['model']['visualizations']['mcmc'],
-            config['output']['model']['visualizations']['vi'],
-            
-            # Feature space directories
             config['output']['feature_space']['dir'],
-            Path(config['output']['feature_space']['files']['analysis']).parent,
-            Path(config['output']['feature_space']['files']['recommendations']).parent,
-            Path(config['output']['feature_space']['files']['vif']).parent,
-            Path(config['output']['feature_space']['files']['correlations']).parent,
-            Path(config['output']['feature_space']['visualizations']['pca']).parent,
-            Path(config['output']['feature_space']['visualizations']['bigram_graph']).parent,
-            Path(config['output']['feature_space']['visualizations']['underrepresented']).parent,
-            
-            # Timing frequency directories
             config['output']['timing_frequency']['dir'],
-            Path(config['output']['timing_frequency']['files']['analysis']).parent,
-            Path(config['output']['timing_frequency']['visualizations']['relationship']).parent,
-            Path(config['output']['timing_frequency']['visualizations']['groups']).parent,
-            
-            # Other directories
-            Path(config['output']['comfort_scores']).parent,
-            Path(config['logging']['file']).parent
+            Path(config['output']['comfort_scores']).parent
         ]
 
         # Create directories
@@ -120,7 +97,6 @@ def main():
         # Get processed data
         processed_data = preprocessor.get_processed_data()
 
-        # Now run analyses
         # Run timing-frequency analysis if enabled
         if config['output']['timing_frequency']['enabled']:
             logger.info("Analyzing timing-frequency relationship")
@@ -128,7 +104,7 @@ def main():
                 bigram_data=preprocessor.data,
                 bigrams=bigrams,
                 bigram_frequencies_array=bigram_frequencies_array,
-                output_path=config['output']['timing_frequency']['visualizations']['relationship']
+                output_path=config['output']['timing_frequency']['relationship']
             )
 
             # Create timing by frequency groups analysis
@@ -137,12 +113,12 @@ def main():
                 bigrams,
                 bigram_frequencies_array,
                 n_groups=config['output']['timing_frequency']['n_groups'],
-                output_base_path=config['output']['timing_frequency']['visualizations']['groups']
+                output_base_path=config['output']['timing_frequency']['groups']
             )
 
             save_timing_analysis(timing_results, 
-                    group_comparison_results,
-                    config['output']['timing_frequency']['files']['analysis'])
+                               group_comparison_results,
+                               config['output']['timing_frequency']['analysis'])
 
         # Evaluate feature space and generate recommendations
         if config['output']['feature_space']['enabled']:
@@ -158,7 +134,7 @@ def main():
 
             # Save analysis results
             save_feature_space_analysis_results(feature_space_results, 
-                                                config['output']['feature_space']['files']['analysis'])
+                                              config['output']['feature_space']['analysis'])
 
             if feature_space_results['multicollinearity']['high_correlations']:
                 logger.warning("Found high correlations between features:")
@@ -181,16 +157,16 @@ def main():
             )
 
             # Save model results
-            save_model_results(trace, model, config['output']['model']['results'])
+            save_model_results(trace, model, 
+                             f"{config['output']['model']['results']}_{config['model']['inference_method']}")
 
             # Plot model diagnostics if visualization is enabled
             if config['visualization']['enabled']:
-                diagnostics_path = (config['output']['model']['visualizations']['mcmc']
-                                  if config['model']['inference_method'] == 'mcmc'
-                                  else config['output']['model']['visualizations']['vi'])
-                plot_model_diagnostics(trace, 
-                                     diagnostics_path,
-                                     inference_method=config['model']['inference_method'])
+                plot_model_diagnostics(
+                    trace=trace,
+                    output_base_path=config['output']['model']['diagnostics'],
+                    inference_method=config['model']['inference_method']
+                )
 
             # Calculate comfort scores if requested
             if config['scoring']['enabled']:
@@ -204,7 +180,6 @@ def main():
 
                 # Save comfort scores
                 output_path = Path(config['output']['comfort_scores'])
-                output_path.parent.mkdir(parents=True, exist_ok=True)
                 pd.DataFrame.from_dict(comfort_scores, orient='index',
                                      columns=['comfort_score']).to_csv(output_path)
  
