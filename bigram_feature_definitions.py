@@ -1,6 +1,6 @@
 from math import atan2, degrees, sqrt
 
-from ngram_frequencies import * 
+from bigram_frequencies import * 
 
 #=====================================#
 # Keyboard layout and finger mappings #

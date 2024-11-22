@@ -8,17 +8,17 @@ from pathlib import Path
 import yaml
 from typing import Dict, Any
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
-from data_preprocessing import DataPreprocessor, manage_data_splits
-from bigram_feature_extraction import precompute_all_bigram_features, precompute_bigram_feature_differences
-from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results
-from analysis_visualization import (plot_timing_frequency_relationship, plot_timing_by_frequency_groups,
-                                  save_timing_analysis, analyze_feature_space, 
-                                  save_feature_space_analysis_results, plot_model_diagnostics)
-from bigram_features import (column_map, row_map, finger_map, engram_position_values,
-                           row_position_values, bigrams, bigram_frequencies_array)
-from feature_evaluation import evaluate_feature_sets
+from data_processing import DataPreprocessor, manage_data_splits
+from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_timing_by_frequency_groups,
+                                     save_timing_analysis)
+from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
+                                        row_position_values, bigrams, bigram_frequencies_array)
+from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences,
+                                       get_feature_combinations, get_feature_groups)
+from bigram_pair_feature_evaluation import evaluate_feature_sets
+from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
+from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results, plot_model_diagnostics
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
@@ -44,7 +44,7 @@ def main():
 
     # Load configuration
     config = load_config(args.config)
-    
+
     # Create logs directory first
     Path(config['logging']['file']).parent.mkdir(parents=True, exist_ok=True)
     
@@ -55,19 +55,46 @@ def main():
     logger.info("Starting keyboard layout analysis pipeline")
 
     try:
-        # Create necessary directories
+        # Define necessary directories based on your structure
         dirs_to_create = [
-            config['output']['base_dir'],
-            config['output']['logs'],
-            config['output']['model']['dir'],
-            config['output']['feature_space']['dir'],
-            config['output']['timing_frequency']['dir'],
-            Path(config['output']['comfort_scores']).parent
+            # Base directories
+            Path(config['output']['base_dir']),
+            Path(config['output']['logs']),
+            
+            # Feature evaluation
+            Path(config['output']['feature_evaluation']['dir']),
+            
+            # Feature space
+            Path(config['output']['feature_space']['dir']),
+            Path(config['output']['feature_space']['analysis']).parent,
+            Path(config['output']['feature_space']['recommendations']).parent,
+            Path(config['output']['feature_space']['pca']).parent,
+            Path(config['output']['feature_space']['bigram_graph']).parent,
+            Path(config['output']['feature_space']['underrepresented']).parent,
+            
+            # Frequency timing
+            Path(config['output']['frequency_timing']['dir']),
+            Path(config['output']['frequency_timing']['analysis']).parent,
+            Path(config['output']['frequency_timing']['relationship']).parent,
+            
+            # Model outputs
+            Path(config['output']['model']['dir']),
+            Path(config['output']['model']['results']).parent,
+            Path(config['output']['model']['diagnostics']).parent,
+            Path(config['output']['model']['forest']).parent,
+            Path(config['output']['model']['posterior']).parent,
+            Path(config['output']['model']['participant_effects']).parent,
+            
+            # Scores
+            Path(config['output']['scores']).parent
         ]
 
-        # Create directories
-        for dir_path in dirs_to_create:
-            Path(dir_path).mkdir(parents=True, exist_ok=True)
+        # Create all the directories if they do not exist
+        for directory in dirs_to_create:
+            directory_path = Path(directory)  # Ensure it's a Path object
+            if not directory_path.exists():
+                logger.info(f"Creating directory: {directory_path}")
+                directory_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize data preprocessor
         preprocessor = DataPreprocessor(config['data']['input_file'])
@@ -77,67 +104,70 @@ def main():
         logger.info("Computing bigram features")
         all_bigrams, all_bigram_features, feature_names, samekey_bigrams, \
             samekey_bigram_features, samekey_feature_names = precompute_all_bigram_features(
-                config['layout']['left_chars'],
-                column_map, row_map, finger_map,
-                engram_position_values,
-                row_position_values,
-                bigrams,
-                bigram_frequencies_array
+                layout_chars=config['layout']['left_chars'],
+                column_map=column_map, 
+                row_map=row_map, 
+                finger_map=finger_map,
+                engram_position_values=engram_position_values,
+                row_position_values=row_position_values,
+                bigrams=bigrams,
+                bigram_frequencies_array=bigram_frequencies_array,
+                config=config
             )
 
         # Compute feature differences
         all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
 
-        # Process data before any analysis
+        # Process data
         logger.info("Processing data")
         preprocessor.prepare_bigram_pairs()
         preprocessor.extract_target_vector()
         preprocessor.process_participants()
-        preprocessor.extract_typing_times()
-        preprocessor.create_feature_matrix(all_feature_differences, feature_names)
+        preprocessor.create_feature_matrix(
+            all_feature_differences=all_feature_differences,
+            feature_names=feature_names,
+            config=config
+        )
 
-        # Get processed data
+        # Get processed data and create train/test split if feature evaluation is enabled
         processed_data = preprocessor.get_processed_data()
-
-        # If feature evaluation is enabled, do it before any model training
+        
         if config['feature_evaluation']['enabled']:
-            logger.info("Starting feature evaluation")
+            train_data, test_data = manage_data_splits(
+                processed_data, 
+                config
+            )
             
-            # Get consistent train/test split
-            train_data, test_data = manage_data_splits(processed_data, config)
-            
-            # Create required directories
-            Path(config['feature_evaluation']['analysis_dir']).mkdir(parents=True, exist_ok=True)
-            Path(config['feature_evaluation']['plots_dir']).mkdir(parents=True, exist_ok=True)
+            # Get feature combinations and groups from config
+            feature_combinations = get_feature_combinations(config)
+            feature_groups = get_feature_groups(config)
             
             # Run feature evaluation
             feature_eval_results = evaluate_feature_sets(
                 feature_matrix=train_data.feature_matrix,
                 target_vector=train_data.target_vector,
                 participants=train_data.participants,
-                candidate_features=config['feature_evaluation']['candidate_features'],
+                candidate_features=feature_combinations,
                 feature_names=feature_names,
-                output_dir=Path(config['feature_evaluation']['dir']),
+                output_dir=Path(config['output']['feature_evaluation']['dir']),  # Updated path
+                config=config,
                 n_splits=config['feature_evaluation']['n_splits'],
                 n_samples=config['feature_evaluation']['n_samples']
             )
             
             logger.info("Feature evaluation completed")
-            
-            # Use test_data for final model evaluation
             evaluation_data = test_data
         else:
-            # If not doing feature evaluation, use all data for model
             evaluation_data = processed_data
 
         # Continue with existing pipeline using evaluation_data instead of processed_data
-        if config['output']['timing_frequency']['enabled']:
+        if config['output']['frequency_timing']['enabled']:
             logger.info("Analyzing timing-frequency relationship")
-            timing_results = plot_timing_frequency_relationship(
+            timing_results = plot_frequency_timing_relationship(
                 bigram_data=preprocessor.data,
                 bigrams=bigrams,
                 bigram_frequencies_array=bigram_frequencies_array,
-                output_path=config['output']['timing_frequency']['relationship']
+                output_path=config['output']['frequency_timing']['relationship']
             )
 
             # Create timing by frequency groups analysis
@@ -145,13 +175,13 @@ def main():
                 preprocessor.data,
                 bigrams,
                 bigram_frequencies_array,
-                n_groups=config['output']['timing_frequency']['n_groups'],
-                output_base_path=config['output']['timing_frequency']['groups']
+                n_groups=config['output']['frequency_timing']['n_groups'],
+                output_base_path=config['output']['frequency_timing']['group_directory']  # Updated key
             )
 
             save_timing_analysis(timing_results, 
                                group_comparison_results,
-                               config['output']['timing_frequency']['analysis'])
+                               config['output']['frequency_timing']['analysis'])
 
         # Evaluate feature space and generate recommendations
         if config['output']['feature_space']['enabled']:
@@ -160,7 +190,7 @@ def main():
                 feature_matrix=processed_data.feature_matrix,
                 output_paths=config['output']['feature_space'],
                 all_feature_differences=all_feature_differences,
-                check_multicollinearity=config['output']['feature_space']['check_multicollinearity'],
+                config=config,
                 recommend_bigrams=config['output']['feature_space']['recommend_bigrams'],
                 num_recommendations=config['output']['feature_space']['num_recommendations']
             )
@@ -169,10 +199,12 @@ def main():
             save_feature_space_analysis_results(feature_space_results, 
                                               config['output']['feature_space']['analysis'])
 
-            if feature_space_results['multicollinearity']['high_correlations']:
-                logger.warning("Found high correlations between features:")
-                for corr in feature_space_results['multicollinearity']['high_correlations']:
-                    logger.warning(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}")
+            # Log recommendations and feature space metrics
+            logger.info(f"Feature space analysis completed:")
+            logger.info(f"  Hull area: {feature_space_results['feature_space_metrics']['hull_area']:.3f}")
+            logger.info(f"  Point density: {feature_space_results['feature_space_metrics']['point_density']:.3f}")
+            if 'recommendations' in feature_space_results:
+                logger.info(f"  Generated {len(feature_space_results['recommendations'])} bigram pair recommendations")
 
         # Train model if requested
         if config['model']['train']:
@@ -182,8 +214,8 @@ def main():
                 feature_matrix=processed_data.feature_matrix,
                 target_vector=processed_data.target_vector,
                 participants=processed_data.participants,
-                design_features=config['features']['design'],
-                control_features=config['features']['control'],
+                design_features=config['features']['groups']['design'],
+                control_features=config['features']['groups']['control'],
                 inference_method=config['model']['inference_method'],
                 num_samples=config['model']['num_samples'],
                 chains=config['model']['chains']
@@ -207,14 +239,14 @@ def main():
                 comfort_scores = calculate_all_bigram_comfort_scores(
                     trace,
                     all_bigram_features,
-                    features_for_design=config['features']['design'],
+                    features_for_design = config['features']['groups']['design'],
                     mirror_scores=config['scoring']['mirror_scores']
                 )
 
                 # Save comfort scores
-                output_path = Path(config['output']['comfort_scores'])
+                output_path = Path(config['output']['scores'])
                 pd.DataFrame.from_dict(comfort_scores, orient='index',
-                                     columns=['comfort_score']).to_csv(output_path)
+                                       columns=['comfort_score']).to_csv(output_path)
  
         logger.info("Pipeline completed successfully")
 

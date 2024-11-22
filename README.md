@@ -1,8 +1,6 @@
 # Engram 3
 Author: Arno Klein (binarybottle.com)
-
 GitHub repository: binarybottle/engram3
-
 License: MIT 
 
 The purpose of the scripts in this repository is to take as input data 
@@ -38,7 +36,7 @@ project_root/
 │   │   ├── bigram_graph.png
 │   │   └── underrepresented.png
 │   │
-│   ├── timing_frequency/                   # Timing analysis
+│   ├── frequency_timing/                   # Timing analysis
 │   │   ├── analysis.txt
 │   │   ├── relationship.png
 │   │   ├── groups_boxplot.png
@@ -68,10 +66,8 @@ project_root/
 ├── setup.py
 └── README.md
 
+# Install required libraries
 pip install -r requirements.txt
-
-# Create necessary directories
-mkdir -p output/{logs,model,scores,visualizations}
 
 # Run the pipeline
 python main.py --config config.yaml

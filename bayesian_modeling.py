@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 import arviz as az
+import matplotlib.pyplot as plt
 from typing import Optional, Tuple, List, Any, Dict
 from sklearn.preprocessing import StandardScaler
 import logging
@@ -27,200 +28,109 @@ def validate_inputs(feature_matrix: pd.DataFrame,
         raise ValueError("Feature matrix contains null values")
     return True
 
-def train_bayesian_glmm(feature_matrix: pd.DataFrame,
-                        target_vector: np.ndarray,
-                        participants: Optional[np.ndarray] = None,
-                        design_features: List[str] = ['row_sum', 'engram_sum'],
-                        control_features: List[str] = ['freq'],
-                        inference_method: str = "mcmc",
-                        num_samples: int = 1000,
-                        chains: int = 4) -> Tuple[az.InferenceData, pm.Model, List[Any]]:
-    """
-    Train a Bayesian GLMM for keyboard layout analysis.
-    
-    Args:
-        feature_matrix: DataFrame containing feature values
-        target_vector: Target variable to predict
-        participants: Optional participant IDs for random effects
-        design_features: Features used for layout optimization
-        control_features: Features to control for but not use in optimization
-        inference_method: Either "mcmc" or "variational"
-        num_samples: Number of posterior samples
-        chains: Number of chains for MCMC
-        
-    Returns:
-        Tuple containing:
-        - trace: ArviZ InferenceData object
-        - model: PyMC Model object
-        - all_priors: List of prior distributions
-        
-    Raises:
-        ValueError: If input validation fails
-        RuntimeError: If model training fails
-    """
-    logger.info("Starting Bayesian GLMM training")
-    
-    # Additional data validation
-    if np.any(np.isinf(target_vector)) or np.any(np.isnan(target_vector)):
-        raise ValueError("Target vector contains inf or nan values")
-    if np.any(np.isinf(feature_matrix)) or np.any(np.isnan(feature_matrix)):
-        raise ValueError("Feature matrix contains inf or nan values")
-    
-    # Robust standardization
-    def robust_standardize(x):
-        median = np.median(x)
-        mad = np.median(np.abs(x - median)) * 1.4826  # Scale factor for normal distribution
-        return (x - median) / (mad + 1e-8)  # Add small constant to prevent division by zero
-    
-    # Standardize target using robust method
-    standardized_target = robust_standardize(target_vector)
-    
-    # Standardize features using robust method
-    features_standardized = feature_matrix.copy()
-    for col in feature_matrix.columns:
-        features_standardized[col] = robust_standardize(feature_matrix[col])
-    
-    if participants is None:
-        participants = np.arange(len(target_vector))
-    
-    unique_participants = np.unique(participants)
-    num_participants = len(unique_participants)
-    participant_map = {p: i for i, p in enumerate(unique_participants)}
-    participants_contiguous = np.array([participant_map[p] for p in participants])
-    
-    all_features = design_features + control_features
-    
-    with pm.Model() as model:
-        try:
-            # Feature effects with weakly informative priors
-            beta = {}
-            for feature in all_features:
-                beta[feature] = pm.StudentT(
-                    feature,
-                    nu=3,
-                    mu=0,
-                    sigma=1,
-                    initval=0.0
-                )
-            
-            # Random participant effects
-            participant_sigma = pm.HalfStudentT('participant_sigma',
-                                              nu=3,
-                                              sigma=1,
-                                              initval=0.5)
-            
-            participant_offset = pm.StudentT('participant_offset',
-                                           nu=3,
-                                           mu=0,
-                                           sigma=participant_sigma,
-                                           shape=num_participants,
-                                           initval=np.zeros(num_participants))
-            
-            # Construct linear predictor
-            mu = 0
-            for feature in all_features:
-                mu += beta[feature] * features_standardized[feature]
-            
-            mu = mu + participant_offset[participants_contiguous]
-            
-            # Observation noise
-            sigma = pm.HalfStudentT('sigma',
-                                  nu=3,
-                                  sigma=1,
-                                  initval=1.0)
-            
-            # Likelihood
-            likelihood = pm.StudentT('likelihood',
-                                   nu=3,
-                                   mu=mu,
-                                   sigma=sigma,
-                                   observed=standardized_target)
-            
-            # Sampling with automatic initialization
-            if inference_method == "mcmc":
-                try:
-                    logger.info("Starting NUTS sampling")
-                    trace = pm.sample(
-                        draws=num_samples,
-                        tune=1000,
-                        chains=chains,
-                        cores=min(chains, 2),
-                        return_inferencedata=True,
-                        target_accept=0.9  # Conservative acceptance rate
-                    )
-                except Exception as e:
-                    logger.warning(f"NUTS sampling failed: {str(e)}")
-                    logger.info("Falling back to Metropolis sampling")
-                    trace = pm.sample(
-                        draws=num_samples,
-                        tune=2000,
-                        step=pm.Metropolis(),
-                        chains=1,
-                        return_inferencedata=True
-                    )
-            else:
-                logger.info("Using variational inference")
-                try:
-                    approx = pm.fit(
-                        n=20000,
-                        method='advi'
-                    )
-                    trace = approx.sample(num_samples)
-                except Exception as e:
-                    logger.warning(f"Variational inference failed: {str(e)}")
-                    logger.info("Falling back to simple MCMC")
-                    trace = pm.sample(
-                        draws=num_samples,
-                        tune=500,
-                        chains=1,
-                        return_inferencedata=True
-                    )
+def train_bayesian_glmm(
+   feature_matrix: pd.DataFrame,
+   target_vector: np.ndarray,
+   participants: np.ndarray,
+   design_features: List[str],
+   control_features: List[str],
+   inference_method: str = 'nuts',
+   num_samples: int = 1000,
+   chains: int = 4
+) -> Tuple:
+   """
+   Train Bayesian GLMM using NUTS sampling.
 
-            logger.info("Model training completed successfully")
-            
-            all_priors = list(beta.values()) + [participant_sigma, sigma]
-            return trace, model, all_priors
-            
-        except Exception as e:
-            logger.error(f"Error in model training: {str(e)}")
-            raise RuntimeError(f"Model training failed: {str(e)}")
+   Args:
+       feature_matrix: DataFrame containing feature values
+       target_vector: Array of target values
+       participants: Array of participant IDs
+       design_features: List of design feature names
+       control_features: List of control feature names 
+       inference_method: Sampling method ('nuts' recommended)
+       num_samples: Number of samples to draw
+       chains: Number of MCMC chains
 
-def _sample_from_model(inference_method: str, 
-                      num_samples: int, 
-                      chains: int) -> az.InferenceData:
-    """Sample from the PyMC model using specified inference method."""
-    if inference_method == "mcmc":
-        try:
-            trace = pm.sample(num_samples,
-                            chains=chains,
-                            cores=min(chains, 2),
-                            return_inferencedata=True)
-        except Exception as e:
-            logger.warning(f"Multi-chain sampling failed: {str(e)}")
-            try:
-                trace = pm.sample(num_samples,
-                                chains=1,
-                                return_inferencedata=True)
-            except Exception as e:
-                logger.warning(f"NUTS sampling failed: {str(e)}")
-                trace = pm.sample(num_samples,
-                                chains=1,
-                                step=pm.Metropolis(),
-                                return_inferencedata=True)
-    elif inference_method == "variational":
-        try:
-            approx = pm.fit(method="advi", n=num_samples)
-            trace = approx.sample(num_samples)
-        except Exception as e:
-            logger.warning(f"Variational inference failed: {str(e)}")
-            trace = pm.sample(num_samples,
-                            chains=1,
-                            return_inferencedata=True)
-    else:
-        raise ValueError("inference_method must be 'mcmc' or 'variational'")
+   Returns:
+       Tuple containing:
+       - trace: Sampling trace
+       - model: PyMC model
+       - priors: Dictionary of model priors
+   """
+   logger.info("Starting Bayesian GLMM training")
 
-    return trace
+   # Scale features
+   scaler = StandardScaler()
+   X_scaled = pd.DataFrame(
+       scaler.fit_transform(feature_matrix),
+       columns=feature_matrix.columns
+   )
 
+   # Create participant mapping for indexing
+   unique_participants = np.unique(participants)
+   participant_map = {p: i for i, p in enumerate(unique_participants)}
+   n_participants = len(unique_participants)
+
+   with pm.Model() as model:
+       # Priors for design features
+       design_effects = {
+           feat: pm.Normal(feat, mu=0, sigma=1)
+           for feat in design_features
+       }
+
+       # Priors for control features
+       control_effects = {
+           feat: pm.Normal(feat, mu=0, sigma=1)
+           for feat in control_features
+       }
+
+       # Random effects for participants
+       participant_sigma = pm.HalfNormal('participant_sigma', sigma=1)
+       participant_offset = pm.Normal('participant_offset',
+                                    mu=0,
+                                    sigma=participant_sigma,
+                                    shape=n_participants)
+
+       # Error term
+       sigma = pm.HalfNormal('sigma', sigma=1)
+
+       # Expected value combining fixed and random effects
+       mu = 0
+       # Add design feature effects
+       for feat in design_features:
+           mu += design_effects[feat] * X_scaled[feat]
+       # Add control feature effects
+       for feat in control_features:
+           mu += control_effects[feat] * X_scaled[feat]
+       # Add participant random effects
+       mu += participant_offset[[participant_map[p] for p in participants]]
+
+       # Likelihood
+       likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
+
+       # Sample using NUTS
+       logger.info(f"Using {inference_method} inference")
+       trace = pm.sample(
+            draws=num_samples,
+            tune=2000,
+            chains=chains,
+            target_accept=0.99,
+            return_inferencedata=True,
+            compute_convergence_checks=True,
+            cores=1
+       )
+
+       # Collect priors
+       priors = {
+           'design_effects': design_effects,
+           'control_effects': control_effects,
+           'participant_sigma': participant_sigma,
+           'sigma': sigma
+       }
+
+       logger.info("Model training completed successfully")
+       return trace, model, priors
+   
 def calculate_all_bigram_comfort_scores(
         trace: az.InferenceData,
         all_bigram_features: pd.DataFrame,
@@ -410,3 +320,78 @@ def bayesian_pairwise_scoring(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     score = (accuracy + (log_likelihood + 1) / 2) / 2
     
     return score
+
+#==============================================#
+# Functions to visualize model characteristics #
+#==============================================#
+def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) -> None:
+    """Plot diagnostics with proper dimension handling."""
+    try:
+        # Get available variables excluding composite ones
+        available_vars = [var for var in trace.posterior.variables 
+                         if not any(dim in var for dim in ['chain', 'draw', 'dim'])]
+        
+        if available_vars:
+            az.plot_trace(trace, var_names=available_vars)
+            plt.savefig(output_base_path.format(inference_method=inference_method))
+            plt.close()
+        
+        # Plot forest plot for parameters only
+        param_vars = [var for var in available_vars 
+                     if var not in ['participant_offset', 'participant_sigma', 'sigma']]
+        if param_vars:
+            az.plot_forest(trace, var_names=param_vars)
+            plt.savefig(output_base_path.format(inference_method=inference_method)
+                       .replace('diagnostics', 'forest'))
+            plt.close()
+            
+    except Exception as e:
+        logger.warning(f"Could not create some diagnostic plots: {str(e)}")
+
+def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
+                              design_features: List[str],
+                              control_features: List[str],
+                              output_path: str) -> None:
+    """
+    Create visualization of sensitivity analysis results.
+    
+    Args:
+        parameter_estimates: Dictionary of parameter estimates
+        design_features: List of design features
+        control_features: List of control features
+        output_path: Path to save the plot
+    """
+    plt.figure(figsize=(12, 6))
+    
+    # Design features plot
+    plt.subplot(2, 1, 1)
+    data = []
+    labels = []
+    for feature in design_features:
+        means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
+        data.append(means)
+        labels.append(feature)
+    
+    plt.boxplot(data, labels=labels)
+    plt.title('Design Feature Effect Estimates')
+    plt.ylabel('Effect Size')
+    plt.grid(True, alpha=0.3)
+    
+    # Control features plot
+    if control_features:
+        plt.subplot(2, 1, 2)
+        data = []
+        labels = []
+        for feature in control_features:
+            means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
+            data.append(means)
+            labels.append(feature)
+        
+        plt.boxplot(data, labels=labels)
+        plt.title('Control Feature Effect Estimates')
+        plt.ylabel('Effect Size')
+        plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()

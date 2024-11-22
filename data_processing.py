@@ -108,32 +108,46 @@ class DataPreprocessor:
             logger.error(f"Error extracting typing times: {str(e)}")
             raise
 
-    def create_feature_matrix(self, all_feature_differences: Dict, feature_names: List[str]) -> None:
-        """Create feature matrix using provided feature differences."""
-        logger.info("Creating feature matrix")
-        try:
-            valid_pairs = [
-                bigram for bigram in self.bigram_pairs
-                if bigram in all_feature_differences
-            ]
-            
-            feature_matrix_data = [
-                all_feature_differences[bigram_pair]
-                for bigram_pair in valid_pairs
-            ]
-            
-            self.feature_matrix = pd.DataFrame(
-                feature_matrix_data,
-                columns=feature_names,
-                index=valid_pairs
-            )
-            
-            self._update_arrays_after_filtering(valid_pairs)
-            
-            logger.info(f"Created feature matrix with shape {self.feature_matrix.shape}")
-        except Exception as e:
-            logger.error(f"Error creating feature matrix: {str(e)}")
-            raise
+    def create_feature_matrix(
+            self, 
+            all_feature_differences: Dict, 
+            feature_names: List[str],
+            config: Dict  # Add config parameter
+        ) -> None:
+            """Create feature matrix using provided feature differences."""
+            logger.info("Creating feature matrix")
+            try:
+                # Create initial feature matrix
+                valid_pairs = [
+                    bigram for bigram in self.bigram_pairs
+                    if bigram in all_feature_differences
+                ]
+                
+                feature_matrix_data = [
+                    all_feature_differences[bigram_pair]
+                    for bigram_pair in valid_pairs
+                ]
+                
+                self.feature_matrix = pd.DataFrame(
+                    feature_matrix_data,
+                    columns=feature_names,
+                    index=valid_pairs
+                )
+                
+                # Add interactions if enabled
+                if config['features']['interactions']['enabled']:
+                    for pair in config['features']['interactions']['pairs']:
+                        interaction_name = f"{pair[0]}_{pair[1]}"
+                        self.feature_matrix[interaction_name] = (
+                            self.feature_matrix[pair[0]] * self.feature_matrix[pair[1]]
+                        )
+                
+                self._update_arrays_after_filtering(valid_pairs)
+                
+                logger.info(f"Created feature matrix with shape {self.feature_matrix.shape}")
+            except Exception as e:
+                logger.error(f"Error creating feature matrix: {str(e)}")
+                raise
 
     def _update_arrays_after_filtering(self, valid_pairs: List[Tuple]) -> None:
         """

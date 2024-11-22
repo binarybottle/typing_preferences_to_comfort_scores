@@ -14,33 +14,42 @@ layout:
 
 # Feature settings
 features:
-  design:
-    - 'row_sum'
-    - 'engram_sum'
-  control:
-    - 'freq'
-  add_interactions: false
-  interaction_pairs: []
-
-# Feature evaluation settings
-feature_evaluation:
-  enabled: true
-  dir: "output/feature_evaluation"
-  analysis_dir: "output/feature_evaluation/analysis"
-  plots_dir: "output/feature_evaluation/plots"
-  n_splits: 5
-  n_samples: 1000
-  candidate_features:
-    - ['row_sum', 'engram_sum']
-    - ['row_sum', 'engram_sum', 'freq']
-    - ['row_sum']
-    - ['engram_sum']
-  test_size: 0.2  # For train/test split
+  # Define features
+  all_features:
+    - name: 'freq'
+      type: 'frequency'
+      description: 'Bigram frequency'
+  
+    - name: 'engram_sum'
+      type: 'position'
+      description: 'Sum of engram position values'
+      
+    - name: 'row_sum'
+      type: 'position'
+      description: 'Sum of row position values'
+  
+  # Group features by their role
+  groups:
+    design:
+      - 'row_sum'
+      - 'engram_sum'
+    control:
+      - 'freq'
+  
+  # Feature interactions to consider
+  interactions:
+    enabled: false
+    pairs:
+      - ['row_sum', 'engram_sum']
 
 # Output directory structure
 output:
   base_dir: "output"
   logs: "output/logs"
+  
+  # Feature evaluation outputs
+  feature_evaluation:
+    dir: "output/feature_evaluation"
   
   # Model outputs
   model:
@@ -65,27 +74,40 @@ output:
     underrepresented: "output/feature_space/underrepresented.png"
   
   # Timing frequency analysis
-  timing_frequency:
-    enabled: true
-    n_groups: 4
-    dir: "output/timing_frequency"
-    analysis: "output/timing_frequency/analysis.txt"
-    relationship: "output/timing_frequency/relationship.png"
-    groups: "output/timing_frequency/groups"
+  frequency_timing:
+      enabled: true
+      n_groups: 4
+      dir: "output/frequency_timing"
+      analysis: "output/frequency_timing/analysis.txt"
+      relationship: "output/frequency_timing/relationship.png"
+      group_directory: "output/frequency_timing/groups" 
   
   # Comfort scores
-  comfort_scores: "output/scores/bigram_comfort_scores.csv"
+  scores: "output/scores/bigram_comfort_scores.csv"
+
+# Feature evaluation settings
+feature_evaluation:
+  enabled: true
+  n_splits: 5
+  n_samples: 1000
+  # List of feature combinations to evaluate
+  combinations:
+    - ['row_sum', 'engram_sum']
+    - ['row_sum', 'engram_sum', 'freq']
+    - ['row_sum']
+    - ['engram_sum']
+  test_size: 0.2
 
 # Model settings
 model:
-  train: true
+  train: false
   inference_method: 'variational'  # or 'mcmc'
-  num_samples: 20  #2000
+  num_samples: 100  #2000
   chains: 2  #8
 
 # Scoring settings
 scoring:
-  enabled: true
+  enabled: false
   mirror_scores: true
 
 # Visualization settings

@@ -239,7 +239,7 @@ if __name__ == "__main__":
     print(qwerty_comfort_scores)
 
     # Bigram frequencies
-    from ngram_frequencies import bigram_frequencies
+    from bigram_frequencies import bigram_frequencies
 
     # Precompute bigram comfort scores and qwerty bigram frequencies with square root scaling and offset
     normalized_frequencies, normalized_qwerty_comfort = precompute_valid_bigrams(qwerty_layout, 

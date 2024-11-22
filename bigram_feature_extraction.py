@@ -8,44 +8,64 @@ It provides functions for computing various metrics related to keyboard layout e
 import numpy as np
 import pandas as pd
 from itertools import product
-from typing import List, Tuple, Dict, Any
-from scipy.spatial.distance import cdist
+from typing import List, Tuple, Dict
 
-from bigram_features import *
+from bigram_feature_definitions import *
 
-FEATURE_NAMES = ['freq', 'engram_sum', 'row_sum']
-
-def extract_features(char1: str, char2: str, column_map: Dict, row_map: Dict, 
-                     finger_map: Dict, engram_position_values: Dict,
-                     row_position_values: Dict, bigrams: List, 
-                     bigram_frequencies_array: np.ndarray) -> Tuple[Dict, List[str]]:
+def extract_bigram_features(char1: str, char2: str, column_map: Dict, row_map: Dict, 
+                          finger_map: Dict, engram_position_values: Dict,
+                          row_position_values: Dict, bigrams: List, 
+                          bigram_frequencies_array: np.ndarray,
+                          config: Dict) -> Tuple[Dict, List[str]]:
     """
-    Extract features for a bigram pair.
+    Extract features for a bigram pair based on configuration.
     
     Args:
-        char1: First character of the bigram
-        char2: Second character of the bigram
-        column_map: Mapping of characters to keyboard columns
-        row_map: Mapping of characters to keyboard rows
-        finger_map: Mapping of characters to fingers
-        engram_position_values: Dictionary of engram position values
-        row_position_values: Dictionary of row position values
-        bigrams: List of bigrams ordered by frequency
-        bigram_frequencies_array: Array of corresponding frequency values
-
+        ...
+        config: Configuration dictionary containing feature definitions
+        
     Returns:
         Tuple containing:
         - Dictionary of computed features
         - List of feature names
     """
-    features = {
-        'freq': qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array),
-        'engram_sum': sum_engram_position_values(char1, char2, column_map, engram_position_values),
-        'row_sum': sum_row_position_values(char1, char2, column_map, row_position_values)
-    }
-    return features, FEATURE_NAMES
+    # Get all defined features
+    all_features = [feature['name'] for feature in config['features']['all_features']]
+    
+    # Initialize features dictionary
+    features = {}
+    
+    # Compute each feature based on its type
+    for feature_def in config['features']['all_features']:
+        name = feature_def['name']
+        feature_type = feature_def['type']
+        
+        if feature_type == 'frequency':
+            features[name] = qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array)
+        elif feature_type == 'position':
+            if name == 'engram_sum':
+                features[name] = sum_engram_position_values(char1, char2, column_map, engram_position_values)
+            elif name == 'row_sum':
+                features[name] = sum_row_position_values(char1, char2, column_map, row_position_values)
+    
+    # Add interactions if enabled
+    if config['features']['interactions']['enabled']:
+        for pair in config['features']['interactions']['pairs']:
+            interaction_name = f"{pair[0]}_{pair[1]}"
+            features[interaction_name] = features[pair[0]] * features[pair[1]]
+            all_features.append(interaction_name)
+    
+    return features, all_features
 
-def extract_features_samekey(char: str, finger_map: Dict) -> Tuple[Dict, List]:
+def get_feature_combinations(config: Dict) -> List[List[str]]:
+    """Get feature combinations from config for evaluation."""
+    return config['feature_evaluation']['combinations']  # Just return the list directly
+
+def get_feature_groups(config: Dict) -> Dict[str, List[str]]:
+    """Get feature groups (design, control) from config."""
+    return config['features']['groups']
+
+def extract_samekey_features(char: str, finger_map: Dict) -> Tuple[Dict, List]:
     """
     Extract features for same-key bigrams.
     
@@ -68,33 +88,17 @@ def extract_features_samekey(char: str, finger_map: Dict) -> Tuple[Dict, List]:
     
     return features, feature_names
 
-def precompute_all_bigram_features(layout_chars: List[str], column_map: Dict, 
-                                   row_map: Dict, finger_map: Dict, 
-                                   engram_position_values: Dict,
-                                   row_position_values: Dict,
-                                   bigrams: List,
-                                   bigram_frequencies_array: np.ndarray) -> Tuple:
+def precompute_all_bigram_features(layout_chars: List[str], 
+                                 column_map: Dict, 
+                                 row_map: Dict, 
+                                 finger_map: Dict, 
+                                 engram_position_values: Dict,
+                                 row_position_values: Dict,
+                                 bigrams: List,
+                                 bigram_frequencies_array: np.ndarray,
+                                 config: Dict) -> Tuple:
     """
-    Precompute features for all possible bigrams based on the given layout characters.
-    
-    Args:
-        layout_chars: List of all possible characters in the keyboard layout
-        column_map: Mapping of characters to keyboard columns
-        row_map: Mapping of characters to keyboard rows
-        finger_map: Mapping of characters to fingers
-        engram_position_values: Dictionary of engram position values
-        row_position_values: Dictionary of row position values
-        bigrams: List of bigrams ordered by frequency
-        bigram_frequencies_array: Array of corresponding frequency values
-
-    Returns:
-        Tuple containing:
-        - all_bigrams: All possible bigrams
-        - features_df: DataFrame of all bigram features
-        - feature_names: List of feature names
-        - samekey_bigrams: All possible same-key bigrams
-        - samekey_features_df: DataFrame of same-key bigram features
-        - samekey_feature_names: List of same-key feature names
+    Precompute features for all possible bigrams based on configuration.
     """
     # Generate all possible 2-key bigrams (permutations of 2 unique characters)
     all_bigrams = [(x, y) for x, y in product(layout_chars, repeat=2) if x != y]
@@ -109,24 +113,33 @@ def precompute_all_bigram_features(layout_chars: List[str], column_map: Dict,
 
     # Extract features for the bigram pairs
     for char1, char2 in all_bigrams:
-        features, feature_names = extract_features(char1, char2, column_map, row_map, 
-                                                   finger_map, engram_position_values, 
-                                                   row_position_values, bigrams, 
-                                                   bigram_frequencies_array)
+        features, names = extract_bigram_features(
+            char1, char2, column_map, row_map, 
+            finger_map, engram_position_values, 
+            row_position_values, bigrams, 
+            bigram_frequencies_array,
+            config
+        )
         feature_vectors.append(list(features.values()))
+        if feature_names is None:
+            feature_names = names
 
     # Extract features for same-key bigrams
     for char1, char2 in samekey_bigrams:
-        samekey_features, samekey_feature_names = extract_features_samekey(char1, finger_map)
+        samekey_features, names = extract_samekey_features(char1, finger_map)
         samekey_feature_vectors.append(list(samekey_features.values()))
+        if samekey_feature_names is None:
+            samekey_feature_names = names
 
     # Convert to DataFrames
     features_df = pd.DataFrame(feature_vectors, columns=feature_names, index=all_bigrams)
     features_df.index = pd.MultiIndex.from_tuples(features_df.index)
     
-    samekey_features_df = pd.DataFrame(samekey_feature_vectors, 
-                                       columns=samekey_feature_names, 
-                                       index=samekey_bigrams)
+    samekey_features_df = pd.DataFrame(
+        samekey_feature_vectors, 
+        columns=samekey_feature_names, 
+        index=samekey_bigrams
+    )
     samekey_features_df.index = pd.MultiIndex.from_tuples(samekey_features_df.index)
 
     return (all_bigrams, features_df, feature_names, 
