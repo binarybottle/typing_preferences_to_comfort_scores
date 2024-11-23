@@ -2,7 +2,11 @@
 Bayesian Modeling Module
 
 This module implements the Bayesian GLMM analysis for keyboard layout optimization.
-It provides functions for model training, validation, and comfort score generation.
+Provides:
+1. Model Training - GLMM with participant random effects
+2. Model Evaluation - Performance metrics and diagnostics
+3. Score Generation - Comfort score calculation and validation
+4. Model Analysis - Sensitivity analysis and visualization
 """
 from pathlib import Path
 import numpy as np
@@ -20,110 +24,9 @@ from data_processing import ProcessedData
 
 logger = logging.getLogger(__name__)
 
-def validate_inputs(feature_matrix: pd.DataFrame, 
-                   target_vector: np.ndarray, 
-                   participants: Optional[np.ndarray]) -> bool:
-    """
-    Validate data inputs for Bayesian GLMM model fitting.
-    
-    Args:
-        feature_matrix: DataFrame of feature values, where each row corresponds to a bigram pair
-        target_vector: Array of comfort scores or preference ratings
-        participants: Optional array of participant IDs for mixed effects modeling
-        
-    Returns:
-        bool: True if validation passes, raises ValueError otherwise
-        
-    Raises:
-        ValueError: If dimensions don't match or if feature matrix contains null values
-    """
-    if len(feature_matrix) != len(target_vector):
-        raise ValueError("Feature matrix and target vector must have same length")
-    if participants is not None and len(participants) != len(target_vector):
-        raise ValueError("Participants array must match target vector length")
-    if np.any(pd.isnull(feature_matrix)):
-        raise ValueError("Feature matrix contains null values")
-    return True
-
-def evaluate_feature_sets(
-    feature_matrix: pd.DataFrame,
-    target_vector: np.ndarray,
-    participants: np.ndarray,
-    candidate_features: List[List[str]],
-    feature_names: List[str],
-    output_dir: Path,
-    config: Dict[str, Any],
-    n_splits: int = 5,
-    n_samples: int = 1000
-):
-    """Evaluate different feature sets using cross-validation and information criteria."""
-    cv_scores = {}
-    waic_scores = {}
-    loo_scores = {}
-
-    # Validate input data
-    if feature_matrix.empty:
-        raise ValueError("Feature matrix is empty")
-    if len(target_vector) == 0:
-        raise ValueError("Target vector is empty")
-        
-    # Log data dimensions
-    logger.info(f"Feature matrix shape: {feature_matrix.shape}")
-    logger.info(f"Target vector length: {len(target_vector)}")
-    logger.info(f"Participants array length: {len(participants)}")
-    logger.info(f"Number of unique participants: {len(np.unique(participants))}")
-
-    # Evaluate each feature set
-    for set_idx, feature_set in enumerate(candidate_features):
-        set_name = f"feature_set_{set_idx}"
-        logger.info(f"Evaluating {set_name} with {len(feature_set)} features")
-        
-        # Get feature subset
-        try:
-            X_subset = feature_matrix[feature_set]
-            logger.info(f"Feature subset shape: {X_subset.shape}")
-        except KeyError as e:
-            logger.error(f"Missing features in set {set_idx}: {e}")
-            continue
-        
-        # Perform cross-validation
-        try:
-            cv_result = perform_cross_validation(
-                feature_matrix=X_subset,
-                target_vector=target_vector,
-                participants=participants,
-                n_splits=n_splits
-            )
-            cv_scores[set_name] = cv_result
-        except Exception as e:
-            logger.error(f"Cross-validation failed for {set_name}: {e}", exc_info=True)
-            cv_scores[set_name] = [np.nan] * n_splits
-        
-        # Calculate WAIC and LOO
-        try:
-            waic_score, loo_score = calculate_waic_loo(X_subset, target_vector)
-            waic_scores[set_name] = waic_score
-            loo_scores[set_name] = loo_score
-        except Exception as e:
-            logger.error(f"WAIC/LOO computation failed for {set_name}: {e}")
-            waic_scores[set_name] = np.nan
-            loo_scores[set_name] = np.nan
-
-    # Calculate feature importance and correlations
-    feature_importance = calculate_feature_importance(feature_matrix, target_vector, feature_names)
-    feature_correlations = calculate_feature_correlations(feature_matrix)
-
-    return FeatureEvaluationResults(
-        cv_scores=cv_scores,
-        waic_scores=waic_scores,
-        loo_scores=loo_scores,
-        feature_correlations=feature_correlations,
-        feature_importance=feature_importance,
-        feature_groups=config['features']['groups'],
-        interaction_scores=None,
-        stability_metrics=None
-    )
-
+#=========================#
+# Core Model Functions    #
+#=========================#
 def train_bayesian_glmm(
    feature_matrix: pd.DataFrame,
    target_vector: np.ndarray,
@@ -309,52 +212,69 @@ def validate_comfort_scores(
    
    return validation_metrics
 
-def save_model_results(trace: az.InferenceData, 
-                      model: pm.Model, 
-                      base_filename: str) -> None:
-    """Save model results to files."""
-    # Save trace
-    az.to_netcdf(trace, filename=f"{base_filename}_trace.nc")
+#=========================#
+# Model Evaluation       #
+#=========================#
+def evaluate_model_performance(
+    trace: az.InferenceData,
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    design_features: List[str],
+    control_features: List[str]
+) -> Dict[str, float]:
+    """
+    Evaluate model performance on data using posterior predictions.
     
-    # Save point estimates
-    point_estimates = az.summary(trace)
-    point_estimates.to_csv(f"{base_filename}_point_estimates.csv")
+    Args:
+        trace: ArviZ InferenceData object containing posterior samples
+        feature_matrix: Features to evaluate
+        target_vector: True target values
+        participants: Participant IDs
+        design_features: Names of design features
+        control_features: Names of control features
     
-    # Save model configuration
-    model_config = {
-        'input_vars': [var.name for var in model.named_vars.values() 
-                      if hasattr(var, 'distribution')],
-        'observed_vars': [var.name for var in model.observed_RVs],
-        'free_vars': [var.name for var in model.free_RVs],
+    Returns:
+        Dictionary containing performance metrics:
+        - r2: R² score
+        - rmse: Root mean squared error
+        - mae: Mean absolute error
+        - correlation: Spearman correlation
+    """
+    # Get posterior means for parameters
+    posterior = trace.posterior
+    
+    # Calculate predictions using posterior means
+    predictions = np.zeros_like(target_vector)
+    
+    # Add fixed effects
+    for feature in design_features + control_features:
+        if feature in feature_matrix.columns:
+            effect = float(posterior[feature].mean())
+            predictions += effect * feature_matrix[feature].values
+            
+    # Add random participant effects if present
+    if 'participant_offset' in posterior:
+        unique_participants = np.unique(participants)
+        participant_effects = posterior['participant_offset'].mean().values
+        for i, p in enumerate(participants):
+            p_idx = np.where(unique_participants == p)[0][0]
+            predictions[i] += participant_effects[p_idx]
+    
+    # Calculate metrics
+    r2 = 1 - (np.sum((target_vector - predictions) ** 2) / 
+              np.sum((target_vector - np.mean(target_vector)) ** 2))
+    
+    rmse = np.sqrt(np.mean((target_vector - predictions) ** 2))
+    mae = np.mean(np.abs(target_vector - predictions))
+    correlation, _ = stats.spearmanr(predictions, target_vector)
+    
+    return {
+        'r2': r2,
+        'rmse': rmse,
+        'mae': mae,
+        'correlation': correlation
     }
-    
-    # Save prior information
-    prior_info = {}
-    for var in model.named_vars.values():
-        if hasattr(var, 'distribution'):
-            prior_info[var.name] = {
-                'distribution': var.distribution.__class__.__name__,
-                'parameters': {k: str(v) for k, v in var.distribution.parameters.items()
-                             if k != 'name'}
-            }
-    
-    model_info = {
-        'config': model_config,
-        'priors': prior_info
-    }
-    
-    with open(f"{base_filename}_model_info.json", "w") as f:
-        json.dump(model_info, f, indent=2)
-
-def load_model_results(base_filename: str) -> Tuple[az.InferenceData, pd.DataFrame, Dict]:
-    """Load saved model results."""
-    trace = az.from_netcdf(f"{base_filename}_trace.nc")
-    point_estimates = pd.read_csv(f"{base_filename}_point_estimates.csv", index_col=0)
-    
-    with open(f"{base_filename}_model_info.json", "r") as f:
-        model_info = json.load(f)
-    
-    return trace, point_estimates, model_info
 
 def perform_sensitivity_analysis(
         feature_matrix: pd.DataFrame,
@@ -410,8 +330,29 @@ def perform_sensitivity_analysis(
     
     return results
 
+#=========================#
+# Model Visualization    #
+#=========================#
 def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) -> None:
-    """Plot diagnostics with proper dimension handling."""
+    """
+    Plot model diagnostic visualizations.
+    
+    Creates two plots:
+    1. Trace plots for model parameters (saved as 'diagnostics_{inference_method}.png')
+    2. Forest plot for fixed effects (saved as 'forest_{inference_method}.png')
+    
+    Related to train_bayesian_glmm() for model fitting and 
+    evaluate_model_performance() for model assessment.
+    
+    Args:
+        trace: ArviZ InferenceData object from train_bayesian_glmm()
+        output_base_path: Base path template for saving plots
+        inference_method: Name of inference method used
+        
+    See Also:
+        train_bayesian_glmm: Main model training function
+        evaluate_model_performance: Model evaluation metrics
+    """    
     try:
         # Get available variables excluding composite ones
         available_vars = [var for var in trace.posterior.variables 
@@ -433,48 +374,6 @@ def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) 
             
     except Exception as e:
         logger.warning(f"Could not create some diagnostic plots: {str(e)}")
-
-def evaluate_model_performance(predictions: np.ndarray, 
-                            true_values: np.ndarray,
-                            participants: np.ndarray) -> Dict[str, float]:
-   """
-   Evaluate model predictions against test data.
-   
-   Returns dict with metrics:
-   - R² score
-   - RMSE
-   - Mean absolute error
-   - Pairwise accuracy (% correctly predicted preferences)
-   - Per-participant metrics
-   """
-   metrics = {}
-   
-   # Overall metrics
-   ss_res = np.sum((true_values - predictions) ** 2)
-   ss_tot = np.sum((true_values - np.mean(true_values)) ** 2)
-   metrics['r2'] = 1 - (ss_res / ss_tot)
-   metrics['rmse'] = np.sqrt(np.mean((true_values - predictions) ** 2))
-   metrics['mae'] = np.mean(np.abs(true_values - predictions))
-   
-   # Pairwise accuracy
-   correct_pairs = np.sign(predictions) == np.sign(true_values)
-   metrics['pairwise_accuracy'] = np.mean(correct_pairs)
-   
-   # Per-participant breakdown
-   unique_participants = np.unique(participants)
-   participant_metrics = {}
-   for p in unique_participants:
-       mask = participants == p
-       p_true = true_values[mask]
-       p_pred = predictions[mask]
-       participant_metrics[p] = {
-           'r2': 1 - (np.sum((p_true - p_pred) ** 2) / 
-                     np.sum((p_true - np.mean(p_true)) ** 2)),
-           'accuracy': np.mean(np.sign(p_pred) == np.sign(p_true))
-       }
-   metrics['participant_breakdown'] = participant_metrics
-   
-   return metrics
 
 def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
                               design_features: List[str],
@@ -523,6 +422,153 @@ def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+#=========================#
+# Model Persistence      #
+#=========================#
+def save_model_results(trace: az.InferenceData, 
+                       model: pm.Model, 
+                       base_filename: str) -> None:
+    """
+    Save model results to disk.
+    
+    Saves three files:
+    1. {base_filename}_trace.nc: Model trace in NetCDF format
+    2. {base_filename}_point_estimates.csv: Parameter point estimates
+    3. {base_filename}_model_info.json: Model configuration and priors
+    
+    Args:
+        trace: ArviZ InferenceData object from train_bayesian_glmm()
+        model: Fitted PyMC model
+        base_filename: Base filename for output files
+        
+    See Also:
+        load_model_results: Function to load saved model results
+        train_bayesian_glmm: Main model training function
+    """
+    logger.info(f"Saving model results to {base_filename}")
+    try:
+        # Save trace
+        logger.debug("Saving model trace")
+        az.to_netcdf(trace, filename=f"{base_filename}_trace.nc")
+        
+        # Save point estimates
+        logger.debug("Saving point estimates")
+        point_estimates = az.summary(trace)
+        point_estimates.to_csv(f"{base_filename}_point_estimates.csv")
+        
+        # Save model configuration
+        logger.debug("Saving model configuration")
+        model_config = {
+            'input_vars': [var.name for var in model.named_vars.values() 
+                          if hasattr(var, 'distribution')],
+            'observed_vars': [var.name for var in model.observed_RVs],
+            'free_vars': [var.name for var in model.free_RVs],
+        }
+        
+        # Save prior information
+        prior_info = {}
+        for var in model.named_vars.values():
+            if hasattr(var, 'distribution'):
+                prior_info[var.name] = {
+                    'distribution': var.distribution.__class__.__name__,
+                    'parameters': {k: str(v) for k, v in var.distribution.parameters.items()
+                                 if k != 'name'}
+                }
+        
+        model_info = {
+            'config': model_config,
+            'priors': prior_info
+        }
+        
+        with open(f"{base_filename}_model_info.json", "w") as f:
+            json.dump(model_info, f, indent=2)
+            
+        logger.info("Successfully saved all model results")
+        
+    except Exception as e:
+        logger.error(f"Error saving model results: {str(e)}")
+        raise
+
+def load_model_results(
+    base_filename: str
+) -> Tuple[az.InferenceData, pd.DataFrame, Dict[str, Any]]:
+    """
+    Load saved model results from disk.
+    
+    Loads model results previously saved by save_model_results():
+    1. Trace file (.nc)
+    2. Point estimates (.csv)
+    3. Model information (.json)
+    
+    Args:
+        base_filename: Base filename used when saving results
+        
+    Returns:
+        Tuple containing:
+        - trace: ArviZ InferenceData object with model trace
+        - point_estimates: DataFrame of parameter point estimates
+        - model_info: Dictionary of model configuration and priors
+        
+    Raises:
+        FileNotFoundError: If any required files are missing
+        
+    See Also:
+        save_model_results: Function that saved these model results
+    """
+    logger.info(f"Loading model results from {base_filename}")
+    try:
+        # Load trace
+        logger.debug("Loading model trace")
+        trace = az.from_netcdf(f"{base_filename}_trace.nc")
+        
+        # Load point estimates
+        logger.debug("Loading point estimates")
+        point_estimates = pd.read_csv(f"{base_filename}_point_estimates.csv", 
+                                    index_col=0)
+        
+        # Load model info
+        logger.debug("Loading model configuration")
+        with open(f"{base_filename}_model_info.json", "r") as f:
+            model_info = json.load(f)
+            
+        logger.info("Successfully loaded all model results")
+        return trace, point_estimates, model_info
+        
+    except FileNotFoundError as e:
+        logger.error(f"Missing model file: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading model results: {str(e)}")
+        raise
+
+#=========================#
+# Helper Functions       #
+#=========================#
+def validate_inputs(feature_matrix: pd.DataFrame, 
+                   target_vector: np.ndarray, 
+                   participants: Optional[np.ndarray]) -> bool:
+    """
+    Validate data inputs for Bayesian GLMM model fitting.
+    
+    Args:
+        feature_matrix: DataFrame of feature values, where each row corresponds to a bigram pair
+        target_vector: Array of comfort scores or preference ratings
+        participants: Optional array of participant IDs for mixed effects modeling
+        
+    Returns:
+        bool: True if validation passes, raises ValueError otherwise
+        
+    Raises:
+        ValueError: If dimensions don't match or if feature matrix contains null values
+    """
+    if len(feature_matrix) != len(target_vector):
+        raise ValueError("Feature matrix and target vector must have same length")
+    if participants is not None and len(participants) != len(target_vector):
+        raise ValueError("Participants array must match target vector length")
+    if np.any(pd.isnull(feature_matrix)):
+        raise ValueError("Feature matrix contains null values")
+    return True
 
 def normalize_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
     """Normalize comfort scores to 0-1 range."""

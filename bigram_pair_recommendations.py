@@ -5,7 +5,6 @@ This module provides functions for analyzing and visualizing feature space,
 with specific application to bigram-pair (bigram-difference) features.
 """
 from pathlib import Path
-import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,7 +13,6 @@ from typing import Dict, List, Tuple, Optional
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial import ConvexHull
-from scipy.spatial.distance import cdist
 import logging
 
 logger = logging.getLogger(__name__)

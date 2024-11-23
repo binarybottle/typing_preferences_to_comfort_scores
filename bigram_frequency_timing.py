@@ -4,10 +4,8 @@ Bigram Frequency & Timing Module
 This module provides functions for analyzing and visualizing bigram frequency and timing relationships.
 """
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy import stats
 import logging
-import os
 from typing import List, Dict, Any, Tuple
 
 from data_processing import ProcessedData
@@ -67,8 +65,8 @@ def plot_timing_by_frequency_groups(
     bigram_data: ProcessedData,
     bigrams: List[Tuple[str, str]],
     bigram_frequencies_array: np.ndarray,
-    n_groups: int = 4,
-    output_base_path: str
+    output_base_path: str,
+    n_groups: int = 4
 ) -> Dict[str, Any]:
     """
     Analyze typing times across different frequency groups.

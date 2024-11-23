@@ -1,5 +1,12 @@
 """
 Main script for keyboard layout analysis pipeline.
+
+This script orchestrates the entire keyboard layout analysis process:
+1. Data preprocessing and train/test splitting
+2. Feature extraction and evaluation
+3. Timing and frequency analysis
+4. Feature space analysis
+5. Bayesian model training and evaluation
 """
 
 import logging
@@ -21,6 +28,36 @@ from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_sco
                                save_model_results, plot_model_diagnostics, evaluate_model_performance, 
                                validate_comfort_scores, plot_sensitivity_analysis)
 
+def validate_config(config: Dict[str, Any]) -> None:
+    """
+    Validate configuration structure and required fields.
+    
+    Args:
+        config: Configuration dictionary to validate
+        
+    Raises:
+        ValueError: If required configuration is missing or invalid
+    """
+    required_sections = [
+        'data', 'splits', 'layout', 'features', 'feature_evaluation',
+        'model', 'output', 'logging'
+    ]
+    
+    for section in required_sections:
+        if section not in config:
+            raise ValueError(f"Missing required config section: {section}")
+    
+    # Validate model settings
+    if 'model' in config:
+        model_config = config['model']
+        if 'train' not in model_config:
+            raise ValueError("Missing 'train' setting in model config")
+        if model_config['train']:
+            required_model_settings = ['inference_method', 'num_samples', 'chains']
+            for setting in required_model_settings:
+                if setting not in model_config:
+                    raise ValueError(f"Missing required model setting: {setting}")
+
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
     logging.basicConfig(
@@ -33,71 +70,81 @@ def setup_logging(config: Dict[str, Any]) -> None:
     )
 
 def load_config(config_path: str) -> Dict[str, Any]:
-    """Load configuration from YAML file."""
+    """Load and validate configuration from YAML file."""
     with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    validate_config(config)
+    return config
+
+def create_output_directories(config: Dict[str, Any]) -> None:
+    """
+    Create all necessary output directories.
+    
+    Args:
+        config: Configuration dictionary containing output paths
+    """
+    dirs_to_create = [
+        # Base directories
+        Path(config['output']['base_dir']),
+        Path(config['output']['logs']),
+        
+        # Feature evaluation
+        Path(config['output']['feature_evaluation']['dir']),
+        
+        # Feature space
+        Path(config['output']['feature_space']['dir']),
+        Path(config['output']['feature_space']['analysis']).parent,
+        Path(config['output']['feature_space']['recommendations']).parent,
+        Path(config['output']['feature_space']['pca']).parent,
+        Path(config['output']['feature_space']['bigram_graph']).parent,
+        Path(config['output']['feature_space']['underrepresented']).parent,
+        
+        # Frequency timing
+        Path(config['output']['frequency_timing']['dir']),
+        Path(config['output']['frequency_timing']['analysis']).parent,
+        Path(config['output']['frequency_timing']['relationship']).parent,
+        
+        # Model outputs
+        Path(config['output']['model']['dir']),
+        Path(config['output']['model']['results']).parent,
+        Path(config['output']['model']['diagnostics']).parent,
+        Path(config['output']['model']['forest']).parent,
+        Path(config['output']['model']['posterior']).parent,
+        Path(config['output']['model']['participant_effects']).parent,
+        Path(config['output']['model']['sensitivity']).parent,
+        
+        # Scores
+        Path(config['output']['scores']).parent
+    ]
+
+    for directory in dirs_to_create:
+        if not directory.exists():
+            logger.info(f"Creating directory: {directory}")
+            directory.mkdir(parents=True, exist_ok=True)
 
 def main():
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Keyboard Layout Analysis Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     args = parser.parse_args()
 
-    # Load configuration
+    # Load and validate configuration
     config = load_config(args.config)
-
-    # Create logs directory first
-    Path(config['logging']['file']).parent.mkdir(parents=True, exist_ok=True)
     
-    # Setup logging
+    # Create logs directory and setup logging
+    Path(config['logging']['file']).parent.mkdir(parents=True, exist_ok=True)
     setup_logging(config)
     logger = logging.getLogger(__name__)
 
     logger.info("Starting keyboard layout analysis pipeline")
 
     try:
-        # Define necessary directories based on your structure
-        dirs_to_create = [
-            # Base directories
-            Path(config['output']['base_dir']),
-            Path(config['output']['logs']),
-            
-            # Feature evaluation
-            Path(config['output']['feature_evaluation']['dir']),
-            
-            # Feature space
-            Path(config['output']['feature_space']['dir']),
-            Path(config['output']['feature_space']['analysis']).parent,
-            Path(config['output']['feature_space']['recommendations']).parent,
-            Path(config['output']['feature_space']['pca']).parent,
-            Path(config['output']['feature_space']['bigram_graph']).parent,
-            Path(config['output']['feature_space']['underrepresented']).parent,
-            
-            # Frequency timing
-            Path(config['output']['frequency_timing']['dir']),
-            Path(config['output']['frequency_timing']['analysis']).parent,
-            Path(config['output']['frequency_timing']['relationship']).parent,
-            
-            # Model outputs
-            Path(config['output']['model']['dir']),
-            Path(config['output']['model']['results']).parent,
-            Path(config['output']['model']['diagnostics']).parent,
-            Path(config['output']['model']['forest']).parent,
-            Path(config['output']['model']['posterior']).parent,
-            Path(config['output']['model']['participant_effects']).parent,
-            
-            # Scores
-            Path(config['output']['scores']).parent
-        ]
+        # Create all output directories
+        create_output_directories(config)
 
-        # Create all the directories if they do not exist
-        for directory in dirs_to_create:
-            directory_path = Path(directory)  # Ensure it's a Path object
-            if not directory_path.exists():
-                logger.info(f"Creating directory: {directory_path}")
-                directory_path.mkdir(parents=True, exist_ok=True)
-
-        # Initialize data preprocessor
+        # Initialize preprocessor and load data
+        logger.info("Loading and preprocessing data")
         preprocessor = DataPreprocessor(config['data']['input_file'])
         preprocessor.load_data()
 
@@ -165,8 +212,8 @@ def main():
                 processed_data,
                 bigrams,
                 bigram_frequencies_array,
-                n_groups=config['output']['frequency_timing']['n_groups'],
-                output_base_path=config['output']['frequency_timing']['group_directory']  # Updated key
+                output_base_path=config['output']['frequency_timing']['group_directory'],
+                n_groups=config['output']['frequency_timing']['n_groups']
             )
             save_timing_analysis(timing_results, 
                                group_comparison_results,
@@ -198,7 +245,8 @@ def main():
         # Train model if requested
         if config['model']['train']:
             logger.info("Training Bayesian GLMM")
-
+            
+            # Train model
             trace, model, priors = train_bayesian_glmm(
                 feature_matrix=train_data.feature_matrix,
                 target_vector=train_data.target_vector,
@@ -211,11 +259,12 @@ def main():
             )
 
             # Save model results
-            save_model_results(trace, model, 
-                             f"{config['output']['model']['results']}_{config['model']['inference_method']}")
+            model_prefix = f"{config['output']['model']['results']}_{config['model']['inference_method']}"
+            save_model_results(trace, model, model_prefix)
 
-            # Plot model diagnostics if visualization is enabled
-            if config['model']['visualization']['enabled']:
+            # Plot diagnostics
+            if config['model'].get('visualization', {}).get('enabled', False):
+                logger.info("Generating model diagnostics")
                 plot_model_diagnostics(
                     trace=trace,
                     output_base_path=config['output']['model']['diagnostics'],
@@ -231,14 +280,14 @@ def main():
                     )
                 )
 
-            # Calculate comfort scores if requested
-            if config['model']['scoring']['enabled']:
+            # Calculate comfort scores
+            if config['model'].get('scoring', {}).get('enabled', False):
                 logger.info("Calculating comfort scores")
                 comfort_scores = calculate_bigram_comfort_scores(
                     trace,
-                    train_data.feature_matrix,  # Use training features only
+                    train_data.feature_matrix,
                     features_for_design=config['features']['groups']['design'],
-                    mirror_left_right_scores=config['scoring']['mirror_left_right_scores']
+                    mirror_left_right_scores=config['model']['scoring'].get('mirror_left_right_scores', True)
                 )
 
                 # Validate scores against test data
@@ -247,18 +296,24 @@ def main():
                 # Save comfort scores
                 output_path = Path(config['output']['scores'])
                 pd.DataFrame.from_dict(comfort_scores, orient='index',
-                                       columns=['comfort_score']).to_csv(output_path)
-                
+                                     columns=['comfort_score']).to_csv(output_path)
+
             # Evaluate model on test data
-            logger.info("Evaluating model on test data")
-            test_predictions = model.predict(test_data.feature_matrix)
-            test_score = evaluate_model_performance(
-                test_predictions, 
-                test_data.target_vector,
-                test_data.participants
-            )
-            logger.info(f"Test set performance: {test_score}")  
-                
+            if config['model'].get('evaluate_test', True):  # Make evaluation optional
+                logger.info("Evaluating model on test data")
+                test_score = evaluate_model_performance(
+                    trace=trace,
+                    feature_matrix=test_data.feature_matrix,
+                    target_vector=test_data.target_vector,
+                    participants=test_data.participants,
+                    design_features=config['features']['groups']['design'],
+                    control_features=config['features']['groups']['control']
+                )
+                logger.info(f"Test set performance metrics:")
+                for metric, value in test_score.items():
+                    logger.info(f"  {metric}: {value:.3f}")
+
+
         logger.info("Pipeline completed successfully")
 
     except Exception as e:
