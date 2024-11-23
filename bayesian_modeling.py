@@ -199,35 +199,53 @@ def calculate_bigram_comfort_scores(
         logger.error("No valid posterior samples found")
         return {}
     
-    # Normalize index format
-    normalized_index = []
-    for idx in feature_matrix.index:
-        norm_bigram = normalize_bigram_format(idx)
-        if norm_bigram:
-            normalized_index.append(norm_bigram)
-        else:
-            logger.warning(f"Could not normalize bigram format: {idx}")
-    
-    # Create new DataFrame with normalized index
-    feature_matrix = feature_matrix.copy()
-    feature_matrix.index = normalized_index
-    
-    logger.info(f"Processing {len(normalized_index)} normalized bigram pairs")
-    
+    # Process bigram pairs differently than index normalization
     scores = {}
     sample_size = next(iter(posterior_samples.values())).shape[0]
     
+    # Iterate through original feature matrix
     for idx, features in feature_matrix.iterrows():
         effect = np.zeros(sample_size, dtype=np.float64)
         
+        # Calculate effect for each feature
         for param, samples in posterior_samples.items():
             if param in features:
                 feature_value = features[param]
                 if not np.isnan(feature_value):
                     effect += samples * feature_value
         
-        if effect.size > 0 and not np.all(np.isnan(effect)):
-            scores[idx] = float(np.nanmean(effect))
+        # Extract bigram from the index
+        try:
+            # If idx is already a tuple of two chars
+            if isinstance(idx, tuple) and len(idx) == 2 and all(isinstance(x, str) for x in idx):
+                bigram = idx
+            # If idx is a tuple of tuples (bigram pair)
+            elif isinstance(idx, tuple) and len(idx) == 2 and all(isinstance(x, tuple) for x in idx):
+                # Take the first bigram of the pair
+                bigram = idx[0]
+            # If idx is a string representation
+            elif isinstance(idx, str):
+                if idx.startswith("(") and idx.endswith(")"):
+                    try:
+                        evaluated = eval(idx)
+                        if isinstance(evaluated, tuple):
+                            if len(evaluated) == 2 and all(isinstance(x, str) for x in evaluated):
+                                bigram = evaluated
+                            elif len(evaluated) == 2 and all(isinstance(x, tuple) for x in evaluated):
+                                bigram = evaluated[0]
+                    except:
+                        logger.warning(f"Could not evaluate bigram string: {idx}")
+                        continue
+                elif len(idx) == 2:
+                    bigram = tuple(idx)
+            
+            if bigram and len(bigram) == 2:
+                if effect.size > 0 and not np.all(np.isnan(effect)):
+                    scores[bigram] = float(np.nanmean(effect))
+            
+        except Exception as e:
+            logger.warning(f"Could not process bigram index: {idx}, error: {str(e)}")
+            continue
     
     logger.info(f"Generated scores for {len(scores)} bigram pairs")
     
@@ -243,7 +261,14 @@ def validate_comfort_scores(
     comfort_scores: Dict[Tuple[str, str], float],
     test_data: 'ProcessedData'
 ) -> Dict[str, float]:
-    """Validate comfort scores against held-out test data."""
+    """
+    Validate comfort scores against held-out test data.
+    
+    Data structure:
+    - test_data.bigram_pairs: List of [bigram1, bigram2] where each bigram is [char1, char2]
+    - comfort_scores: Dict of (char1, char2) -> float
+    - Implicit preference: bigram1 is preferred over bigram2
+    """
     validation_metrics = {}
     
     if not hasattr(test_data, 'bigram_pairs'):
@@ -257,45 +282,77 @@ def validate_comfort_scores(
     actual_prefs = []
     skipped_pairs = set()
     
-    for (bigram1, bigram2), pref in test_data.bigram_pairs:
-        # Normalize both bigrams
-        norm_bigram1 = normalize_bigram_format(bigram1)
-        norm_bigram2 = normalize_bigram_format(bigram2)
-        
-        if norm_bigram1 is None or norm_bigram2 is None:
-            logger.debug(f"Could not normalize bigrams: {bigram1}, {bigram2}")
+    for bigram_pair in test_data.bigram_pairs:
+        try:
+            # Each bigram_pair should be [bigram1, bigram2]
+            if not isinstance(bigram_pair, list) or len(bigram_pair) != 2:
+                logger.warning(f"Invalid bigram pair format: {bigram_pair}")
+                continue
+            
+            bigram1, bigram2 = bigram_pair
+            
+            # Convert list bigrams to tuples for dictionary lookup
+            tuple1 = tuple(bigram1) if isinstance(bigram1, list) else bigram1
+            tuple2 = tuple(bigram2) if isinstance(bigram2, list) else bigram2
+            
+            logger.debug(f"Looking up bigrams: {tuple1} and {tuple2}")
+            
+            # Get comfort scores
+            score1 = comfort_scores.get(tuple1)
+            score2 = comfort_scores.get(tuple2)
+            
+            if score1 is not None and score2 is not None:
+                # Calculate predicted preference (score difference)
+                pred_diff = score1 - score2
+                # Actual preference is 1.0 (bigram1 preferred over bigram2)
+                predicted_prefs.append(pred_diff)
+                actual_prefs.append(1.0)  # bigram1 is always preferred
+                logger.debug(f"Added: pred={pred_diff:.3f}, actual=1.0")
+            else:
+                if (tuple1, tuple2) not in skipped_pairs:
+                    missing = []
+                    if score1 is None:
+                        missing.append(str(tuple1))
+                    if score2 is None:
+                        missing.append(str(tuple2))
+                    logger.debug(f"Skipping bigrams - missing scores: {missing}")
+                    skipped_pairs.add((tuple1, tuple2))
+                    
+        except Exception as e:
+            logger.warning(f"Error processing bigram pair {bigram_pair}: {str(e)}")
             continue
-        
-        if norm_bigram1 in comfort_scores and norm_bigram2 in comfort_scores:
-            pred = comfort_scores[norm_bigram1] - comfort_scores[norm_bigram2]
-            print("\n\nPRED = ", pred)
-            predicted_prefs.append(pred)
-            actual_prefs.append(pref)
-        else:
-            print("\n\nNOT IN = ", skipped_pairs)
-            if (norm_bigram1, norm_bigram2) not in skipped_pairs:
-                missing = []
-                if norm_bigram1 not in comfort_scores:
-                    missing.append(str(bigram1))
-                if norm_bigram2 not in comfort_scores:
-                    missing.append(str(bigram2))
-                logger.info(f"Skipping pair: {missing} - Missing in comfort scores")
-                skipped_pairs.add((norm_bigram1, norm_bigram2))
     
-    predicted_prefs = np.array(predicted_prefs)
-    actual_prefs = np.array(actual_prefs)
+    # Convert to numpy arrays with explicit float type
+    predicted_prefs = np.array(predicted_prefs, dtype=np.float64)
+    actual_prefs = np.array(actual_prefs, dtype=np.float64)
     
     logger.info(f"Predicted prefs: {len(predicted_prefs)}, Actual prefs: {len(actual_prefs)}")
     
     if len(predicted_prefs) > 0:
-        validation_metrics['accuracy'] = float(np.mean(
-            np.sign(predicted_prefs) == np.sign(actual_prefs)
-        ))
-        
-        if len(predicted_prefs) > 1:
-            validation_metrics['correlation'] = float(stats.spearmanr(
-                predicted_prefs, actual_prefs
-            )[0])
+        try:
+            # Calculate accuracy (how often we predict the correct preference)
+            # Positive prediction means we agree with the preference
+            sign_matches = (predicted_prefs > 0)
+            validation_metrics['accuracy'] = float(np.mean(sign_matches))
+            logger.info(f"Accuracy: {validation_metrics['accuracy']:.3f}")
+            
+            if len(predicted_prefs) > 1:
+                # Calculate correlation with preference strength
+                correlation, p_value = stats.spearmanr(predicted_prefs, actual_prefs)
+                validation_metrics['correlation'] = float(correlation)
+                validation_metrics['correlation_p_value'] = float(p_value)
+                logger.info(f"Correlation: {validation_metrics['correlation']:.3f} (p={p_value:.3f})")
+            
+            # Add prediction distribution metrics
+            validation_metrics['correct_direction'] = float(np.mean(predicted_prefs > 0))
+            validation_metrics['avg_preference_strength'] = float(np.mean(np.abs(predicted_prefs)))
+            logger.info(f"Predictions in correct direction: {validation_metrics['correct_direction']:.2%}")
+            logger.info(f"Average preference strength: {validation_metrics['avg_preference_strength']:.3f}")
+            
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {str(e)}")
+            logger.debug(f"Predicted prefs sample: {predicted_prefs[:5]}")
+            logger.debug(f"Actual prefs sample: {actual_prefs[:5]}")
     else:
         logger.warning("Empty arrays detected: Skipping accuracy calculation.")
     
@@ -588,44 +645,79 @@ def validate_inputs(feature_matrix: pd.DataFrame,
 
 def normalize_bigram_format(bigram):
     """
-    Normalize different bigram formats to a consistent tuple format.
-    
+    Normalize bigrams into a consistent tuple format.
+
     Handles:
-    - String tuples: "('a', 'b')"
-    - List of single-char tuples: ["('a',)", "('b',)"]
-    - Simple strings: "ab"
-    - Existing tuples: ('a', 'b')
+    - Bigram pairs: (('g', 'c'), ('q', 'w')) -> ('g', 'c')
+    - Single bigrams: ('a', 'b') -> ('a', 'b')
+    - String bigrams: "ab" -> ('a', 'b')
+    - String tuples: "('a', 'b')" -> ('a', 'b')
+    - List format: ['a', 'b'] -> ('a', 'b')
+    - Single character tuples: ('a',) -> a for building pairs
     
     Returns:
     - Tuple of two characters: ('a', 'b')
+    - Single character string for building pairs
+    - None if the input cannot be normalized
     """
-    if isinstance(bigram, tuple) and len(bigram) == 2:
-        return bigram
-        
-    if isinstance(bigram, list) and len(bigram) == 2:
-        # Handle ["('a',)", "('b',)"] format
-        chars = []
-        for item in bigram:
-            if isinstance(item, str) and item.startswith("('") and item.endswith(",)"):
-                # Extract character from "('a',)" format
-                char = item[2]
-                chars.append(char)
-        if len(chars) == 2:
-            return tuple(chars)
-            
-    if isinstance(bigram, str):
-        if bigram.startswith("(") and bigram.endswith(")"):
-            # Handle "('a', 'b')" format
-            try:
-                return eval(bigram)
-            except:
-                pass
-        elif len(bigram) == 2:
-            # Handle "ab" format
-            return tuple(bigram)
+    logger.debug(f"Normalizing bigram: {type(bigram).__name__}={bigram}")
     
-    return None
-
+    try:
+        # Case 1: Single character handling
+        if isinstance(bigram, str) and len(bigram) == 1:
+            logger.debug(f"Found single character: {bigram}")
+            return bigram
+        if isinstance(bigram, tuple) and len(bigram) == 1:
+            if isinstance(bigram[0], str) and len(bigram[0]) == 1:
+                logger.debug(f"Found single character tuple: {bigram[0]}")
+                return bigram[0]
+            
+        # Case 2: Handle string representation of single character tuple
+        if isinstance(bigram, str) and bigram.startswith("('") and bigram.endswith(",)"):
+            char = bigram[2]
+            if len(char) == 1:
+                logger.debug(f"Found string single character tuple: {char}")
+                return char
+            
+        # Case 3: Handle bigram pairs
+        if isinstance(bigram, tuple) and len(bigram) == 2:
+            if all(isinstance(x, tuple) and len(x) == 2 for x in bigram):
+                # It's a bigram pair, take the first one
+                logger.debug(f"Found bigram pair, using first: {bigram[0]}")
+                return bigram[0]
+            elif all(isinstance(x, str) and len(x) == 1 for x in bigram):
+                # It's already a properly formatted single bigram
+                logger.debug(f"Found properly formatted bigram: {bigram}")
+                return bigram
+        
+        # Case 4: Handle list format
+        if isinstance(bigram, list):
+            if len(bigram) == 2 and all(isinstance(x, str) and len(x) == 1 for x in bigram):
+                logger.debug(f"Converting list to tuple: {tuple(bigram)}")
+                return tuple(bigram)
+        
+        # Case 5: Handle string formats
+        if isinstance(bigram, str):
+            # Handle "('a', 'b')" format
+            if bigram.startswith("(") and bigram.endswith(")"):
+                try:
+                    evaluated = eval(bigram)
+                    logger.debug(f"Evaluating string representation: {evaluated}")
+                    return normalize_bigram_format(evaluated)
+                except:
+                    pass
+            # Handle simple "ab" format
+            elif len(bigram) == 2:
+                logger.debug(f"Converting string to tuple: {tuple(bigram)}")
+                return tuple(bigram)
+        
+        logger.warning(f"Could not normalize bigram format: {bigram}")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Error normalizing bigram {bigram}: {str(e)}")
+        return None
+    
 def normalize_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
     """
     Normalize comfort scores to 0-1 range.
