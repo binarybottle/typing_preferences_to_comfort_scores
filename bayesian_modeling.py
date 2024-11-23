@@ -268,9 +268,11 @@ def validate_comfort_scores(
         
         if norm_bigram1 in comfort_scores and norm_bigram2 in comfort_scores:
             pred = comfort_scores[norm_bigram1] - comfort_scores[norm_bigram2]
+            print("\n\nPRED = ", pred)
             predicted_prefs.append(pred)
             actual_prefs.append(pref)
         else:
+            print("\n\nNOT IN = ", skipped_pairs)
             if (norm_bigram1, norm_bigram2) not in skipped_pairs:
                 missing = []
                 if norm_bigram1 not in comfort_scores:
