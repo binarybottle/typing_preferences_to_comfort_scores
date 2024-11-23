@@ -3,14 +3,14 @@ Data Preprocessing Module
 
 This module handles data loading, cleaning, and preparation for keyboard layout analysis.
 """
-from pathlib import Path
 import pandas as pd
 import numpy as np
-from typing import Tuple, List, Dict, Optional, Any
+import os
+from typing import Tuple, List, Dict, Optional
 import ast
 from sklearn.preprocessing import StandardScaler
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,10 @@ class DataPreprocessor:
             feature_names: List[str],
             config: Dict  # Add config parameter
         ) -> None:
-            """Create feature matrix using provided feature differences."""
+            """
+            Create feature matrix using provided feature differences, 
+            and including timing data.
+            """
             logger.info("Creating feature matrix")
             try:
                 # Create initial feature matrix
@@ -134,6 +137,10 @@ class DataPreprocessor:
                     index=valid_pairs
                 )
                 
+                # Add typing time as a feature
+                if self.typing_times is not None:
+                    self.feature_matrix['typing_time'] = self.typing_times
+
                 # Add interactions if enabled
                 if config['features']['interactions']['enabled']:
                     for pair in config['features']['interactions']['pairs']:
@@ -332,62 +339,122 @@ class DataPreprocessor:
             logger.error(f"Error loading processed data: {str(e)}")
             raise
 
-def manage_data_splits(data: ProcessedData, 
-                      config: Dict,
-                      force_new_split: bool = False) -> Tuple[ProcessedData, ProcessedData]:
+def generate_train_test_splits(processed_data, config):
     """
-    Manage train/test splits, ensuring consistency across runs.
+    Generates and saves train/test participant splits.
     
     Args:
-        data: ProcessedData object containing all data
-        config: Configuration dictionary
-        force_new_split: If True, create new split even if existing split exists
-        
+        processed_data (ProcessedData): The processed dataset where each row represents a participant.
+        config (dict): Configuration dictionary containing split settings.
+    
     Returns:
-        Tuple of (train_data, test_data)
+        None: The splits are saved to the path specified in the config.
     """
-    splits_file = Path(config['data']['splits_file'])
+    splits_config = config.get('splits', {})
+    generate_splits = splits_config.get('generate_splits', False)
+    train_ratio = splits_config.get('train_ratio', 0.8)
+    splits_file = splits_config.get('splits_file', "data/splits/train_test_indices.npz")
     
-    if not force_new_split and splits_file.exists():
-        # Load existing splits
-        logger.info("Loading existing train/test split indices")
-        splits = np.load(splits_file)
-        train_indices = splits['train_indices']
-        test_indices = splits['test_indices']
+    if not generate_splits:
+        print("Skipping split generation as per configuration.")
+        return
+    
+    # Determine the number of participants
+    participants = processed_data.participants
+    n_participants = len(participants)
+    
+    # Shuffle participants and split indices
+    indices = np.arange(n_participants)
+    np.random.shuffle(indices)
+    
+    train_size = int(train_ratio * n_participants)
+    train_indices = indices[:train_size]
+    test_indices = indices[train_size:]
+    
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(splits_file), exist_ok=True)
+    
+    # Save the splits to an .npz file
+    np.savez(splits_file, train_indices=train_indices, test_indices=test_indices)
+    print(f"Train/test splits saved to {splits_file}.")
+
+def manage_data_splits(processed_data, config):
+    """
+    Splits the processed data into training and testing datasets.
+    
+    Args:
+        processed_data (ProcessedData): The processed dataset.
+        config (dict): Configuration dictionary.
+    
+    Returns:
+        tuple: (train_data, test_data)
+    """
+    splits_file = config['splits']['splits_file']
+    splits = np.load(splits_file)
+    train_indices = splits['train_indices']
+    test_indices = splits['test_indices']
+    
+    # Split participants and other attributes by indices
+    train_participants = [processed_data.participants[i] for i in train_indices]
+    test_participants = [processed_data.participants[i] for i in test_indices]
+    
+    train_bigram_pairs = [processed_data.bigram_pairs[i] for i in train_indices]
+    test_bigram_pairs = [processed_data.bigram_pairs[i] for i in test_indices]
+    
+    train_target_vector = [processed_data.target_vector[i] for i in train_indices]
+    test_target_vector = [processed_data.target_vector[i] for i in test_indices]
+    
+    if processed_data.typing_times is not None:
+        train_typing_times = [processed_data.typing_times[i] for i in train_indices]
+        test_typing_times = [processed_data.typing_times[i] for i in test_indices]
     else:
-        # Create and save new splits
-        logger.info("Creating new train/test split")
-        n_samples = len(data.target_vector)
-        indices = np.random.permutation(n_samples)
-        test_size = int(config['feature_evaluation']['test_size'] * n_samples)
-        test_indices = indices[:test_size]
-        train_indices = indices[test_size:]
-        
-        # Save splits
-        splits_file.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(splits_file, 
-                 train_indices=train_indices,
-                 test_indices=test_indices)
+        train_typing_times = None
+        test_typing_times = None
     
-    # Create training data
-    train_data = ProcessedData(
-        bigram_pairs=[data.bigram_pairs[i] for i in train_indices],
-        feature_matrix=data.feature_matrix.iloc[train_indices],
-        target_vector=data.target_vector[train_indices],
-        participants=data.participants[train_indices],
-        typing_times=data.typing_times[train_indices] if data.typing_times is not None else None
+    train_feature_matrix = processed_data.feature_matrix.iloc[train_indices, :]
+    test_feature_matrix = processed_data.feature_matrix.iloc[test_indices, :]
+
+    # Create new ProcessedData instances for train and test datasets
+    train_data = replace(
+        processed_data,
+        participants=train_participants,
+        bigram_pairs=train_bigram_pairs,
+        target_vector=train_target_vector,
+        typing_times=train_typing_times,
+        feature_matrix=train_feature_matrix,
     )
     
-    # Create test data
-    test_data = ProcessedData(
-        bigram_pairs=[data.bigram_pairs[i] for i in test_indices],
-        feature_matrix=data.feature_matrix.iloc[test_indices],
-        target_vector=data.target_vector[test_indices],
-        participants=data.participants[test_indices],
-        typing_times=data.typing_times[test_indices] if data.typing_times is not None else None
+    test_data = replace(
+        processed_data,
+        participants=test_participants,
+        bigram_pairs=test_bigram_pairs,
+        target_vector=test_target_vector,
+        typing_times=test_typing_times,
+        feature_matrix=test_feature_matrix,
     )
-    
-    logger.info(f"Using data split - Train: {len(train_data.target_vector)}, "
-               f"Test: {len(test_data.target_vector)}")
     
     return train_data, test_data
+
+def validate_features(config: Dict, feature_matrix: pd.DataFrame) -> None:
+   """Validate that required features exist and are properly configured."""
+   
+   # Check control features exist
+   for feature in config['features']['groups']['control']:
+       if feature not in feature_matrix.columns:
+           raise ValueError(f"Control feature {feature} missing from data")
+           
+   # Check typing_time specifically
+   if 'typing_time' in config['features']['groups']['control']:
+       if feature_matrix['typing_time'].isnull().any():
+           raise ValueError("Missing timing data")
+           
+   # Check feature definitions match usage
+   eval_features = set()
+   for combo in config['feature_evaluation']['combinations']:
+       eval_features.update(combo)
+   
+   model_features = set(config['features']['groups']['design'] +
+                       config['features']['groups']['control'])
+                       
+   if not eval_features.issubset(model_features):
+       raise ValueError("Evaluated features not subset of model features")

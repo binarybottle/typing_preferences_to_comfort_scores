@@ -1,48 +1,141 @@
 # Configuration for keyboard layout analysis pipeline
 
-# Data settings
+#========#
+# Inputs #
+#========#
 data:
   input_file: "data/input/output_all4studies_406participants/tables/filtered_bigram_data.csv"
   #input_file: "data/input/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
   #input_file: "data/oinput/utput_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
   #input_file: "data/input/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
-  splits_file: "data/splits/train_test_indices.npz"  # New entry
+
+# Generate and save train/test participant splits
+splits:
+  generate_splits: true  # Generate and save train/test splits?
+  train_ratio: 0.8       # Proportion of participants for training the Bayesian model
+  splits_file: "data/splits/train_test_indices.npz"
 
 # Keyboard layout settings
 layout:
   left_chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
 
-# Feature settings
+#===================#
+# Function settings #
+#===================#
+# Feature evaluation settings
+feature_evaluation:
+  enabled: true
+  n_splits: 5
+  n_samples: 1000
+  test_size: 0.2
+  # List of feature combinations to evaluate
+  combinations:
+    - ['same_finger','adjacent_finger','adj_finger_diff_row','adj_finger_skip',
+       'rows_apart','skip_home','columns_apart','angle_apart',
+       'outward_roll','outward_roll_same_row','outward_skip',
+       'middle_column','sum_engram_position_values','sum_row_position_values',
+       'sum_finger_values','finger1or4_top_above','finger2or3_bottom_below','finger_pairs']
+    - ['same_finger','adj_finger_skip','skip_home','angle_apart','outward_roll_same_row',
+       'middle_column','sum_engram_position_values','sum_row_position_values',
+       'sum_finger_values','finger1or4_top_above','finger2or3_bottom_below']
+
+# Model settings
+model:
+  train: false
+  inference_method: 'mcmc'  # or 'variational'
+  num_samples: 2000
+  chains: 8
+  scoring:
+    enabled: true
+    mirror_left_right_scores: true
+  visualization:
+    enabled: true
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "output/logs/pipeline.log"
+
+#==================#
+# Feature settings #
+#==================#
 features:
-  # Define features
   all_features:
-    - name: 'freq'
-      type: 'frequency'
-      description: 'Bigram frequency'
-  
-    - name: 'engram_sum'
-      type: 'position'
-      description: 'Sum of engram position values'
-      
-    - name: 'row_sum'
-      type: 'position'
-      description: 'Sum of row position values'
-  
+    # Qwerty bigram frequency and typing time features:
+    - 'qwerty_bigram_frequency'
+    - 'typing_time'
+    # Same features:
+      #- 'same_hand'
+    - 'same_finger'
+      #- 'same_key'
+    # Adjacent features: 
+    - 'adjacent_finger'
+    - 'adj_finger_diff_row'
+    - 'adj_finger_skip'
+    # Separation features:
+    - 'rows_apart'
+    - 'skip_home'
+    - 'columns_apart'
+      #- 'distance_apart'
+    - 'angle_apart'
+    # Direction features:
+    - 'outward_roll'
+    - 'outward_roll_same_row'
+    - 'outward_skip'
+    # Position features:
+    - 'middle_column'
+    - 'sum_engram_position_values'
+    - 'sum_row_position_values'
+    # Finger features:
+    - 'sum_finger_values'
+    - 'finger1or4_top_above'
+    - 'finger2or3_bottom_below'
+    - 'finger_pairs'
+
   # Group features by their role
   groups:
     design:
-      - 'row_sum'
-      - 'engram_sum'
+      # Same features:
+      # - 'same_hand'
+      - 'same_finger'
+      # - 'same_key'
+      # Adjacent features: 
+      - 'adjacent_finger'
+      - 'adj_finger_diff_row'
+      - 'adj_finger_skip'
+      # Separation features:
+      - 'rows_apart'
+      - 'skip_home'
+      - 'columns_apart'
+      - 'distance_apart'
+      - 'angle_apart'
+      # Direction features:
+      - 'outward_roll'
+      - 'outward_roll_same_row'
+      - 'outward_skip'
+      # Position features:
+      - 'middle_column'
+      - 'sum_engram_position_values'
+      - 'sum_row_position_values'
+      # Finger features:
+      - 'sum_finger_values'
+      - 'finger1or4_top_above'
+      - 'finger2or3_bottom_below'
+      - 'finger_pairs'
     control:
-      - 'freq'
+      - 'qwerty_bigram_frequency'
+      - 'typing_time'
   
   # Feature interactions to consider
   interactions:
     enabled: false
     pairs:
-      - ['row_sum', 'engram_sum']
+      - ['adjacent_finger', 'skip_home']
 
-# Output directory structure
+#============================#
+# Output directory structure #
+#============================#
 output:
   base_dir: "output"
   logs: "output/logs"
@@ -59,6 +152,7 @@ output:
     forest: "output/model/forest_{inference_method}.png"
     posterior: "output/model/posterior_{inference_method}.png"
     participant_effects: "output/model/participant_effects_{inference_method}.png"
+    sensitivity: "output/model/sensitivity_{inference_method}.png"
   
   # Feature space analysis
   feature_space:
@@ -84,38 +178,3 @@ output:
   
   # Comfort scores
   scores: "output/scores/bigram_comfort_scores.csv"
-
-# Feature evaluation settings
-feature_evaluation:
-  enabled: true
-  n_splits: 5
-  n_samples: 1000
-  # List of feature combinations to evaluate
-  combinations:
-    - ['row_sum', 'engram_sum']
-    - ['row_sum', 'engram_sum', 'freq']
-    - ['row_sum']
-    - ['engram_sum']
-  test_size: 0.2
-
-# Model settings
-model:
-  train: false
-  inference_method: 'variational'  # or 'mcmc'
-  num_samples: 100  #2000
-  chains: 2  #8
-
-# Scoring settings
-scoring:
-  enabled: false
-  mirror_scores: true
-
-# Visualization settings
-visualization:
-  enabled: true
-
-# Logging settings
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "output/logs/pipeline.log"

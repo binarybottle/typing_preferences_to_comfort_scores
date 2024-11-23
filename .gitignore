@@ -1,3 +1,4 @@
+train_test_indices.npz
 output*
 __pycache__
 package-lock.json

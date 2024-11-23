@@ -157,18 +157,6 @@ row_position_values = {
     'n': 2, 'm': 2, ',': 2, '.': 2, '/': 2
 }
 
-# position values determined by study data --
-# same as value_row_map, but top and bottom keys swapped for finger 4, and middle columns penalized:
-data_position_values = {
-    'q': 2, 'w': 1, 'e': 1, 'r': 1, 't': 3,
-    'a': 0, 's': 0, 'd': 0, 'f': 0, 'g': 3,
-    'z': 1, 'x': 2, 'c': 2, 'v': 2, 'b': 3,
-    'y': 3, 'u': 1, 'i': 1, 'o': 1, 'p': 2,
-    'h': 3, 'j': 0, 'k': 0, 'l': 0, ';': 0, 
-    'n': 3, 'm': 2, ',': 2, '.': 2, '/': 1
-}
-
-
 #==========#
 # Features #
 #==========#
@@ -419,392 +407,34 @@ def middle_column(char1, char2, column_map):
 def sum_engram_position_values(char1, char2, column_map, engram_position_values):
     """Sum engram_position_values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return engram_position_values[char2] + engram_position_values[char1]
+        return engram_position_values[char1] + engram_position_values[char2]
     else:
         return 0
 
 def sum_row_position_values(char1, char2, column_map, row_position_values):
     """Sum row_position_values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return row_position_values[char2] + row_position_values[char1]
+        return row_position_values[char1] + row_position_values[char2]
     else:
         return 0
 
 def sum_data_position_values(char1, char2, column_map, data_position_values):
     """Sum data_position_values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return data_position_values[char2] + data_position_values[char1]
+        return data_position_values[char1] + data_position_values[char2]
     else:
         return 0
 
 #-----------------#
 # Finger features #
 #-----------------#
-def finger1skip2(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if adjacent fingers 1 & 2 on the same hand type two keys skipping the home row.
-      1: yes
-      0: no
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if skip_home(char1, char2, column_map, row_map) == 1:
-            if (finger_map[char1] == 1 and finger_map[char2] == 2) or \
-               (finger_map[char1] == 2 and finger_map[char2] == 1):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
+def sum_finger_values(char1, char2, finger_map):
+    """Sum finger_map values for the two characters (typed by the same hand)."""
+    if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
+        return finger_map[char1] + finger_map[char2]
     else:
         return 0
 
-def finger2skip3(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if adjacent fingers 2 & 3 on the same hand type two keys skipping the home row.
-      1: yes
-      0: no
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if skip_home(char1, char2, column_map, row_map) == 1:
-            if (finger_map[char1] == 2 and finger_map[char2] == 3) or \
-               (finger_map[char1] == 3 and finger_map[char2] == 2):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger3skip4(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if adjacent fingers 3 & 4 on the same hand type two keys skipping the home row.
-      1: yes
-      0: no
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if skip_home(char1, char2, column_map, row_map) == 1:
-            if (finger_map[char1] == 3 and finger_map[char2] == 4) or \
-               (finger_map[char1] == 4 and finger_map[char2] == 3):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger1(char1, char2, finger_map):
-    """
-    Check whether finger 1 is used to type either key.
-      1: Yes
-      0: No
-    """
-    if finger_map[char1] == 1 or finger_map[char2] == 1:
-        return 1
-    else:
-        return 0
-
-def finger2(char1, char2, finger_map):
-    """
-    Check whether finger 2 is used to type either key.
-      1: Yes
-      0: No
-    """
-    if finger_map[char1] == 2 or finger_map[char2] == 2:
-        return 1
-    else:
-        return 0
-
-def finger3(char1, char2, finger_map):
-    """
-    Check whether finger 3 is used to type either key.
-      1: Yes
-      0: No
-    """
-    if finger_map[char1] == 3 or finger_map[char2] == 3:
-        return 1
-    else:
-        return 0
-
-def finger4(char1, char2, finger_map):
-    """
-    Check whether finger 4 is used to type either key.
-      1: Yes
-      0: No
-    """
-    if finger_map[char1] == 4 or finger_map[char2] == 4:
-        return 1
-    else:
-        return 0
-
-def finger1_above(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger1 types a key on a row above the other key typed by another finger on the same hand.
-      1: finger1 above
-      0: finger1 not above
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger1(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 1 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 1 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger2_above(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger2 types a key on a row above the other key typed by another finger on the same hand.
-      1: finger2 above
-      0: finger2 not above
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger2(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger3_above(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger3 types a key on a row above the other key typed by another finger on the same hand.
-      1: finger3 above
-      0: finger3 not above
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger3(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger4_above(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger4 types a key on a row above the other key typed by another finger on the same hand.
-      1: finger4 above
-      0: finger4 not above
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger4(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 4 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 4 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger1_below(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger1 types a key on a row below the other key typed by another finger on the same hand.
-      1: finger1 below
-      0: finger1 not below
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger1(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 1 and row_map[char1] < row_map[char2]) or \
-               (finger_map[char2] == 1 and row_map[char2] < row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger2_below(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger2 types a key on a row below the other key typed by another finger on the same hand.
-      1: finger2 below
-      0: finger2 not below
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger2(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 2 and row_map[char1] < row_map[char2]) or \
-               (finger_map[char2] == 2 and row_map[char2] < row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger3_below(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger3 types a key on a row below the other key typed by another finger on the same hand.
-      1: finger3 below
-      0: finger3 not below
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger3(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 3 and row_map[char1] < row_map[char2]) or \
-               (finger_map[char2] == 3 and row_map[char2] < row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger4_below(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger4 types a key on a row below the other key typed by another finger on the same hand.
-      1: finger4 below
-      0: finger4 not below
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger4(char1, char2, finger_map) == 1 and same_finger(char1, char2, column_map, finger_map) == 0:
-            if (finger_map[char1] == 4 and row_map[char1] < row_map[char2]) or \
-               (finger_map[char2] == 4 and row_map[char2] < row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger1above2(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger1 types a key on a row above finger2 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger1(char1, char2, finger_map) == 1 and finger2(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 1 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 1 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger2above1(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger2 types a key on a row above finger1 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger1(char1, char2, finger_map) == 1 and finger2(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger2above3(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger2 types a key on a row above finger3 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger2(char1, char2, finger_map) == 1 and finger3(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 2 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 2 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger3above2(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger3 types a key on a row above finger2 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger2(char1, char2, finger_map) == 1 and finger3(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger3above4(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger3 types a key on a row above finger4 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger3(char1, char2, finger_map) == 1 and finger4(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 3 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 3 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-
-def finger4above3(char1, char2, column_map, row_map, finger_map):
-    """
-    Check if finger4 types a key on a row above finger3 on the same hand.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger3(char1, char2, finger_map) == 1 and finger4(char1, char2, finger_map) == 1:
-            if (finger_map[char1] == 4 and row_map[char1] > row_map[char2]) or \
-               (finger_map[char2] == 4 and row_map[char2] > row_map[char1]):
-                return 1
-            else:
-                return 0
-        else:
-            return 0
-    else:
-        return 0
-    
-def finger2or3down(char1, char2, column_map):
-    """
-    Check if finger 2 or 3 are on the bottom row.
-      1: yes
-      0: no 
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        finger2or3_bottom = ["x", "c", ",", "."]
-        if char1 in finger2or3_bottom or char2 in finger2or3_bottom:
-            return 1
-        else:
-            return 0
-    else:
-        return 0
-    
 def finger1or4_top_above(char1, char2, column_map, row_map):
     """
     Check if finger 1 or 4 are on the top row and above the other finger.
@@ -883,4 +513,43 @@ def finger_pairs(char1, char2, column_map, finger_map):
             return 0
     else:
         return 0
+
+#================================#
+# Map feature names to functions #
+#================================#
+def function_map(char1, char2, column_map, row_map, finger_map, 
+                 engram_position_values, row_position_values, 
+                 bigrams, bigram_frequencies_array):
+    """Map feature names to their calculation functions."""
+    return {
+        # Qwerty bigram frequency feature 
+        'qwerty_bigram_frequency': lambda: qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array),
+        # Same features 
+        'same_hand': lambda: same_hand(char1, char2, column_map),
+        'same_finger': lambda: same_finger(char1, char2, column_map, finger_map),
+        'same_key': lambda: same_key(char1, char2),
+        # Adjacent features 
+        'adjacent_finger': lambda: adjacent_finger(char1, char2, column_map, finger_map),
+        'adj_finger_diff_row': lambda: adj_finger_diff_row(char1, char2, column_map, row_map, finger_map),
+        'adj_finger_skip': lambda: adj_finger_skip(char1, char2, column_map, row_map, finger_map),
+        # Separation features 
+        'rows_apart': lambda: rows_apart(char1, char2, column_map, row_map),
+        'skip_home': lambda: skip_home(char1, char2, column_map, row_map),
+        'columns_apart': lambda: columns_apart(char1, char2, column_map),
+        'distance_apart': lambda: distance_apart(char1, char2, column_map, key_metrics),
+        'angle_apart': lambda: angle_apart(char1, char2, column_map, key_metrics),
+        # Direction features 
+        'outward_roll': lambda: outward_roll(char1, char2, column_map, finger_map),
+        'outward_roll_same_row': lambda: outward_roll_same_row(char1, char2, column_map, row_map, finger_map),
+        'outward_skip': lambda: outward_skip(char1, char2, column_map, finger_map),
+        # Position features 
+        'middle_column': lambda: middle_column(char1, char2, column_map),
+        'sum_engram_position_values': lambda: sum_engram_position_values(char1, char2, column_map, engram_position_values),
+        'sum_row_position_values': lambda: sum_row_position_values(char1, char2, column_map, row_position_values),
+        # Finger features 
+        'sum_finger_values': lambda: sum_finger_values(char1, char2, finger_map),
+        'finger1or4_top_above': lambda: finger1or4_top_above(char1, char2, column_map, row_map),
+        'finger2or3_bottom_below': lambda: finger2or3_bottom_below(char1, char2, column_map, row_map),
+        'finger_pairs': lambda: finger_pairs(char1, char2, column_map, finger_map)
+    }
 

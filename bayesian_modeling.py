@@ -4,6 +4,7 @@ Bayesian Modeling Module
 This module implements the Bayesian GLMM analysis for keyboard layout optimization.
 It provides functions for model training, validation, and comfort score generation.
 """
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import pymc as pm
@@ -11,15 +12,31 @@ import arviz as az
 import matplotlib.pyplot as plt
 from typing import Optional, Tuple, List, Any, Dict
 from sklearn.preprocessing import StandardScaler
-import logging
+from scipy import stats
 import json
+import logging
+
+from data_processing import ProcessedData
 
 logger = logging.getLogger(__name__)
 
 def validate_inputs(feature_matrix: pd.DataFrame, 
                    target_vector: np.ndarray, 
                    participants: Optional[np.ndarray]) -> bool:
-    """Validate inputs for GLMM fitting."""
+    """
+    Validate data inputs for Bayesian GLMM model fitting.
+    
+    Args:
+        feature_matrix: DataFrame of feature values, where each row corresponds to a bigram pair
+        target_vector: Array of comfort scores or preference ratings
+        participants: Optional array of participant IDs for mixed effects modeling
+        
+    Returns:
+        bool: True if validation passes, raises ValueError otherwise
+        
+    Raises:
+        ValueError: If dimensions don't match or if feature matrix contains null values
+    """
     if len(feature_matrix) != len(target_vector):
         raise ValueError("Feature matrix and target vector must have same length")
     if participants is not None and len(participants) != len(target_vector):
@@ -27,6 +44,85 @@ def validate_inputs(feature_matrix: pd.DataFrame,
     if np.any(pd.isnull(feature_matrix)):
         raise ValueError("Feature matrix contains null values")
     return True
+
+def evaluate_feature_sets(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    candidate_features: List[List[str]],
+    feature_names: List[str],
+    output_dir: Path,
+    config: Dict[str, Any],
+    n_splits: int = 5,
+    n_samples: int = 1000
+):
+    """Evaluate different feature sets using cross-validation and information criteria."""
+    cv_scores = {}
+    waic_scores = {}
+    loo_scores = {}
+
+    # Validate input data
+    if feature_matrix.empty:
+        raise ValueError("Feature matrix is empty")
+    if len(target_vector) == 0:
+        raise ValueError("Target vector is empty")
+        
+    # Log data dimensions
+    logger.info(f"Feature matrix shape: {feature_matrix.shape}")
+    logger.info(f"Target vector length: {len(target_vector)}")
+    logger.info(f"Participants array length: {len(participants)}")
+    logger.info(f"Number of unique participants: {len(np.unique(participants))}")
+
+    # Evaluate each feature set
+    for set_idx, feature_set in enumerate(candidate_features):
+        set_name = f"feature_set_{set_idx}"
+        logger.info(f"Evaluating {set_name} with {len(feature_set)} features")
+        
+        # Get feature subset
+        try:
+            X_subset = feature_matrix[feature_set]
+            logger.info(f"Feature subset shape: {X_subset.shape}")
+        except KeyError as e:
+            logger.error(f"Missing features in set {set_idx}: {e}")
+            continue
+        
+        # Perform cross-validation
+        try:
+            cv_result = perform_cross_validation(
+                feature_matrix=X_subset,
+                target_vector=target_vector,
+                participants=participants,
+                n_splits=n_splits
+            )
+            cv_scores[set_name] = cv_result
+        except Exception as e:
+            logger.error(f"Cross-validation failed for {set_name}: {e}", exc_info=True)
+            cv_scores[set_name] = [np.nan] * n_splits
+        
+        # Calculate WAIC and LOO
+        try:
+            waic_score, loo_score = calculate_waic_loo(X_subset, target_vector)
+            waic_scores[set_name] = waic_score
+            loo_scores[set_name] = loo_score
+        except Exception as e:
+            logger.error(f"WAIC/LOO computation failed for {set_name}: {e}")
+            waic_scores[set_name] = np.nan
+            loo_scores[set_name] = np.nan
+
+    # Calculate feature importance and correlations
+    feature_importance = calculate_feature_importance(feature_matrix, target_vector, feature_names)
+    feature_correlations = calculate_feature_correlations(feature_matrix)
+
+    return FeatureEvaluationResults(
+        cv_scores=cv_scores,
+        waic_scores=waic_scores,
+        loo_scores=loo_scores,
+        feature_correlations=feature_correlations,
+        feature_importance=feature_importance,
+        feature_groups=config['features']['groups'],
+        interaction_scores=None,
+        stability_metrics=None
+    )
 
 def train_bayesian_glmm(
    feature_matrix: pd.DataFrame,
@@ -39,24 +135,29 @@ def train_bayesian_glmm(
    chains: int = 4
 ) -> Tuple:
    """
-   Train Bayesian GLMM using NUTS sampling.
-
-   Args:
-       feature_matrix: DataFrame containing feature values
-       target_vector: Array of target values
-       participants: Array of participant IDs
-       design_features: List of design feature names
-       control_features: List of control feature names 
-       inference_method: Sampling method ('nuts' recommended)
-       num_samples: Number of samples to draw
-       chains: Number of MCMC chains
-
-   Returns:
-       Tuple containing:
-       - trace: Sampling trace
-       - model: PyMC model
-       - priors: Dictionary of model priors
-   """
+    Train Bayesian Generalized Linear Mixed Model (GLMM) for keyboard layout analysis.
+    
+    This function fits a hierarchical model that accounts for:
+    - Fixed effects from design features (layout characteristics)
+    - Fixed effects from control features (e.g., typing time)
+    - Random effects per participant
+    
+    Args:
+        feature_matrix: DataFrame of feature values for bigram pairs
+        target_vector: Array of comfort scores or preference ratings
+        participants: Array of participant IDs for random effects
+        design_features: Names of features related to keyboard layout design
+        control_features: Names of features to control for (e.g., typing time)
+        inference_method: MCMC method to use ('nuts' recommended)
+        num_samples: Number of posterior samples to draw
+        chains: Number of independent MCMC chains
+        
+    Returns:
+        Tuple containing:
+        - trace: ArviZ InferenceData object with posterior samples
+        - model: Fitted PyMC model
+        - priors: Dictionary of model prior distributions
+    """
    logger.info("Starting Bayesian GLMM training")
 
    # Scale features
@@ -129,56 +230,84 @@ def train_bayesian_glmm(
        }
 
        logger.info("Model training completed successfully")
+
        return trace, model, priors
    
-def calculate_all_bigram_comfort_scores(
-        trace: az.InferenceData,
-        all_bigram_features: pd.DataFrame,
-        features_for_design: Optional[List[str]] = None,
-        mirror_scores: bool = True) -> Dict[Tuple[str, str], float]:
-    """Calculate comfort scores for all possible bigrams."""
-    if features_for_design is None:
-        all_vars = list(trace.posterior.data_vars)
-        params = [var for var in all_vars if var not in ['participant_intercept', 'sigma']]
-        features_for_design = [p for p in params if p != 'freq']
-
-    logger.info(f"Design features used for scoring: {features_for_design}")
-
-    posterior_samples = {param: az.extract(trace, var_names=param).values
-                        for param in features_for_design}
-
-    all_bigram_scores = {}
-    for bigram, features in all_bigram_features.iterrows():
-        scores = np.zeros(len(next(iter(posterior_samples.values()))))
-        for param in features_for_design:
-            if param in features.index:
-                scores += posterior_samples[param] * features[param]
+def calculate_bigram_comfort_scores(
+       trace: az.InferenceData,
+       feature_matrix: pd.DataFrame,
+       features_for_design: List[str],
+       mirror_left_right_scores: bool = True) -> Dict[Tuple[str, str], float]:
+   """
+    Calculate comfort scores for bigram pairs using trained model parameters.
+    
+    Takes the posterior distributions from a trained model and computes expected
+    comfort scores for bigram pairs. Can optionally mirror scores from left to
+    right hand keys.
+    
+    Args:
+        trace: ArviZ InferenceData object containing posterior samples
+        feature_matrix: DataFrame of feature values for bigram pairs
+        features_for_design: List of feature names to use for score calculation
+        mirror_left_right_scores: If True, mirror scores from left to right hand keys
         
-        all_bigram_scores[bigram] = np.mean(scores)
+    Returns:
+        Dictionary mapping bigram pairs to their predicted comfort scores
+   """   
+   # Extract design feature effects from posterior
+   posterior_samples = {param: az.extract(trace, var_names=param).values
+                       for param in features_for_design 
+                       if param in feature_matrix.columns}
+   
+   # Verify all needed features exist
+   missing = set(features_for_design) - set(feature_matrix.columns)
+   if missing:
+       raise ValueError(f"Missing features: {missing}")
+       
+   scores = {}
+   for bigram, features in feature_matrix.iterrows():
+       effect = np.zeros(len(next(iter(posterior_samples.values()))))
+       for param, samples in posterior_samples.items():
+           effect += samples * features[param]
+       scores[bigram] = float(np.mean(effect))
+   
+   # Normalize and mirror if requested
+   scores = normalize_scores(scores)
+   if mirror_left_right_scores:
+       scores = add_mirrored_scores(scores)
+       
+   return scores
 
-    # Normalize scores to 0-1 range
-    min_score = min(all_bigram_scores.values())
-    max_score = max(all_bigram_scores.values())
-    normalized_scores = {bigram: 1 - (score - min_score) / (max_score - min_score)
-                        for bigram, score in all_bigram_scores.items()}
-
-    if mirror_scores:
-        left_keys = "qwertasdfgzxcvb"
-        right_keys = "poiuy;lkjh/.,mn"
-        key_mapping = dict(zip(left_keys, right_keys))
-        
-        right_scores = {}
-        for bigram, score in normalized_scores.items():
-            if isinstance(bigram, tuple) and len(bigram) == 2:
-                right_bigram = (key_mapping.get(bigram[0], bigram[0]),
-                              key_mapping.get(bigram[1], bigram[1]))
-                right_scores[right_bigram] = score
-        
-        all_scores = {**normalized_scores, **right_scores}
-    else:
-        all_scores = normalized_scores
-
-    return all_scores
+def validate_comfort_scores(
+   comfort_scores: Dict[Tuple[str, str], float],
+   test_data: ProcessedData
+) -> Dict[str, float]:
+   """Validate comfort scores against held-out test data."""
+   
+   validation_metrics = {}
+   
+   # Convert scores to preferences
+   predicted_prefs = []
+   actual_prefs = []
+   
+   for (bigram1, bigram2), pref in test_data.bigram_pairs:
+       if bigram1 in comfort_scores and bigram2 in comfort_scores:
+           pred = comfort_scores[bigram1] - comfort_scores[bigram2]
+           predicted_prefs.append(pred)
+           actual_prefs.append(pref)
+           
+   predicted_prefs = np.array(predicted_prefs)
+   actual_prefs = np.array(actual_prefs)
+   
+   # Calculate metrics
+   validation_metrics['accuracy'] = np.mean(
+       np.sign(predicted_prefs) == np.sign(actual_prefs)
+   )
+   validation_metrics['correlation'] = stats.spearmanr(
+       predicted_prefs, actual_prefs
+   )[0]
+   
+   return validation_metrics
 
 def save_model_results(trace: az.InferenceData, 
                       model: pm.Model, 
@@ -281,49 +410,6 @@ def perform_sensitivity_analysis(
     
     return results
 
-def calculate_stability_metrics(parameter_estimates: Dict[str, pd.DataFrame],
-                                features: List[str]) -> Dict[str, Dict[str, float]]:
-    """Calculate metrics showing how stable each feature's effect is."""
-    stability_metrics = {}
-    
-    for feature in features:
-        means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
-        sds = [est.loc[feature, 'sd'] for est in parameter_estimates.values()]
-        
-        stability_metrics[feature] = {
-            'direction_consistency': np.mean(np.sign(means) == np.sign(np.mean(means))),
-            'relative_variation': np.std(means) / np.abs(np.mean(means)),
-            'min_mean': np.min(means),
-            'max_mean': np.max(means),
-            'mean_of_means': np.mean(means),
-            'sd_of_means': np.std(means),
-            'mean_of_sds': np.mean(sds)
-        }
-    
-    return stability_metrics
-
-def bayesian_pairwise_scoring(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Calculate score for Bayesian pairwise comparison predictions."""
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    
-    y_true_binary = (y_true > 0).astype(int)
-    y_pred_binary = (y_pred > 0).astype(int)
-    
-    accuracy = np.mean(y_true_binary == y_pred_binary)
-    
-    epsilon = 1e-15
-    probs = 1 / (1 + np.exp(-np.abs(y_pred)))
-    log_likelihood = np.mean(y_true_binary * np.log(probs + epsilon) +
-                           (1 - y_true_binary) * np.log(1 - probs + epsilon))
-    
-    score = (accuracy + (log_likelihood + 1) / 2) / 2
-    
-    return score
-
-#==============================================#
-# Functions to visualize model characteristics #
-#==============================================#
 def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) -> None:
     """Plot diagnostics with proper dimension handling."""
     try:
@@ -347,6 +433,48 @@ def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) 
             
     except Exception as e:
         logger.warning(f"Could not create some diagnostic plots: {str(e)}")
+
+def evaluate_model_performance(predictions: np.ndarray, 
+                            true_values: np.ndarray,
+                            participants: np.ndarray) -> Dict[str, float]:
+   """
+   Evaluate model predictions against test data.
+   
+   Returns dict with metrics:
+   - R² score
+   - RMSE
+   - Mean absolute error
+   - Pairwise accuracy (% correctly predicted preferences)
+   - Per-participant metrics
+   """
+   metrics = {}
+   
+   # Overall metrics
+   ss_res = np.sum((true_values - predictions) ** 2)
+   ss_tot = np.sum((true_values - np.mean(true_values)) ** 2)
+   metrics['r2'] = 1 - (ss_res / ss_tot)
+   metrics['rmse'] = np.sqrt(np.mean((true_values - predictions) ** 2))
+   metrics['mae'] = np.mean(np.abs(true_values - predictions))
+   
+   # Pairwise accuracy
+   correct_pairs = np.sign(predictions) == np.sign(true_values)
+   metrics['pairwise_accuracy'] = np.mean(correct_pairs)
+   
+   # Per-participant breakdown
+   unique_participants = np.unique(participants)
+   participant_metrics = {}
+   for p in unique_participants:
+       mask = participants == p
+       p_true = true_values[mask]
+       p_pred = predictions[mask]
+       participant_metrics[p] = {
+           'r2': 1 - (np.sum((p_true - p_pred) ** 2) / 
+                     np.sum((p_true - np.mean(p_true)) ** 2)),
+           'accuracy': np.mean(np.sign(p_pred) == np.sign(p_true))
+       }
+   metrics['participant_breakdown'] = participant_metrics
+   
+   return metrics
 
 def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
                               design_features: List[str],
@@ -395,3 +523,25 @@ def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+def normalize_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
+    """Normalize comfort scores to 0-1 range."""
+    min_score = min(scores.values())
+    max_score = max(scores.values())
+    return {bigram: (score - min_score) / (max_score - min_score)
+            for bigram, score in scores.items()}
+
+def add_mirrored_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
+    """Add mirrored scores for right hand keys."""
+    left_keys = "qwertasdfgzxcvb"
+    right_keys = "poiuy;lkjh/.,mn"
+    key_mapping = dict(zip(left_keys, right_keys))
+    
+    mirrored = {}
+    for bigram, score in scores.items():
+        right_bigram = (key_mapping.get(bigram[0], bigram[0]),
+                       key_mapping.get(bigram[1], bigram[1]))
+        mirrored[right_bigram] = score
+    
+    return {**scores, **mirrored}
+

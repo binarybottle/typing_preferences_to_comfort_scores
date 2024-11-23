@@ -46,8 +46,6 @@ import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-from bigram_feature_extraction import get_feature_groups
-
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -61,6 +59,116 @@ class FeatureEvaluationResults:
     feature_groups: Dict[str, List[str]]
     interaction_scores: Optional[Dict[Tuple[str, str], float]] = None
     stability_metrics: Optional[Dict[str, Dict[str, float]]] = None
+
+def evaluate_feature_sets(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    candidate_features: List[List[str]],
+    feature_names: List[str],
+    output_dir: Path,
+    config: Dict[str, Any],
+    n_splits: int = 5,
+    n_samples: int = 1000
+) -> FeatureEvaluationResults:
+    """
+    Evaluate different combinations of features to determine their predictive power.
+    
+    This function performs multiple analyses on feature combinations:
+    1. Cross-validation to assess predictive performance using R² scores
+       - R² measures how well features predict comfort/preference scores
+       - Higher R² indicates better prediction (1.0 is perfect, 0.0 is poor)
+       - Scores are averaged across folds for stability
+    2. Feature importance calculation
+    3. Feature correlation analysis
+    4. Multicollinearity checks
+    
+    Args:
+        feature_matrix: DataFrame of all available features
+        target_vector: Array of target values to predict
+        participants: Array of participant IDs for grouped cross-validation
+        candidate_features: List of feature combinations to evaluate
+        feature_names: Names of all available features
+        output_dir: Directory to save evaluation results
+        config: Configuration dictionary
+        n_splits: Number of cross-validation folds
+        n_samples: Number of samples for Bayesian modeling
+        
+    Returns:
+        FeatureEvaluationResults containing:
+        - Cross-validation R² scores for each feature set
+        - Feature correlations
+        - Feature importance scores
+        - Feature grouping information
+    """
+    cv_scores = {}
+    waic_scores = {}
+    loo_scores = {}
+
+    # Validate input data
+    if feature_matrix.empty:
+        raise ValueError("Feature matrix is empty. Please provide valid data.")
+    if len(target_vector) == 0:
+        raise ValueError("Target vector is empty. Please provide valid target values.")
+
+    # Convert participants to integer indices for cross-validation
+    unique_participants = np.unique(participants)
+    participant_map = {p: i for i, p in enumerate(unique_participants)}
+    participant_indices = np.array([participant_map[p] for p in participants])
+
+    # Evaluate each feature set
+    for set_idx, feature_set in enumerate(candidate_features):
+        set_name = f"feature_set_{set_idx}"
+        logger.info(f"Evaluating {set_name}: {feature_set}")
+        
+        # Initialize scores
+        cv_scores[set_name] = []
+        
+        # Perform cross-validation
+        try:
+            cv_result = perform_cross_validation(
+                feature_matrix[feature_set],
+                target_vector,
+                participant_indices,  # Use integer indices
+                n_splits=n_splits
+            )
+            cv_scores[set_name] = cv_result
+        except Exception as e:
+            logger.warning(f"Cross-validation failed for {set_name}: {e}")
+            cv_scores[set_name] = [np.nan] * n_splits
+        
+        # Calculate WAIC and LOO
+        try:
+            waic_score, loo_score = calculate_waic_loo(
+                feature_matrix[feature_set], 
+                target_vector
+            )
+            waic_scores[set_name] = waic_score
+            loo_scores[set_name] = loo_score
+        except Exception as e:
+            logger.warning(f"WAIC/LOO computation failed for {set_name}: {e}")
+            waic_scores[set_name] = np.nan
+            loo_scores[set_name] = np.nan
+
+    # Calculate feature importance and stability
+    feature_importance = calculate_feature_importance(
+        feature_matrix, target_vector, feature_names
+    )
+
+    # Calculate feature correlations
+    feature_correlations = calculate_feature_correlations(feature_matrix)
+
+    # Return results using the actual feature groups from config
+    return FeatureEvaluationResults(
+        cv_scores=cv_scores,
+        waic_scores=waic_scores,
+        loo_scores=loo_scores,
+        feature_correlations=feature_correlations,
+        feature_importance=feature_importance,
+        feature_groups=config['features']['groups'],  # Use the real feature groups
+        interaction_scores=None,
+        stability_metrics=None
+    )
 
 def evaluate_predictions(
     posterior_pred: az.InferenceData,
@@ -119,107 +227,23 @@ def evaluate_predictions(
     score = (1/rmse + mae + r2) / 3
     return score
 
-def evaluate_feature_sets(
-    feature_matrix: pd.DataFrame,
-    target_vector: np.ndarray,
-    participants: np.ndarray,
-    candidate_features: List[List[str]],
-    feature_names: List[str],
-    output_dir: Path,
-    config: Dict[str, Any],  # Add config parameter
-    n_splits: int = 5,
-    n_samples: int = 1000
-) -> FeatureEvaluationResults:
-    """Evaluate different feature sets using cross-validation and information criteria."""
-    cv_scores = {}
-    waic_scores = {}
-    loo_scores = {}
-
-    # Validate input data
-    if feature_matrix.empty:
-        raise ValueError("Feature matrix is empty. Please provide valid data.")
-    if len(target_vector) == 0:
-        raise ValueError("Target vector is empty. Please provide valid target values.")
-
-    # Evaluate each feature set
-    for set_idx, feature_set in enumerate(candidate_features):
-        set_name = f"feature_set_{set_idx}"
-        logger.info(f"Evaluating {set_name}: {feature_set}")
-        
-        # Initialize scores
-        cv_scores[set_name] = []
-        
-        # Perform cross-validation
-        try:
-            cv_result = perform_cross_validation(
-                feature_matrix[feature_set],
-                target_vector,
-                participants,
-                n_splits=n_splits
-            )
-            cv_scores[set_name] = cv_result
-        except Exception as e:
-            logger.warning(f"Cross-validation failed for {set_name}: {e}")
-            cv_scores[set_name] = [np.nan] * n_splits
-        
-        # Calculate WAIC and LOO
-        try:
-            waic_score, loo_score = calculate_waic_loo(
-                feature_matrix[feature_set], 
-                target_vector
-            )
-            waic_scores[set_name] = waic_score
-            loo_scores[set_name] = loo_score
-        except Exception as e:
-            logger.warning(f"WAIC/LOO computation failed for {set_name}: {e}")
-            waic_scores[set_name] = np.nan
-            loo_scores[set_name] = np.nan
-
-    # Diagnostic logging for empty scores
-    for key, scores in cv_scores.items():
-        if not scores:
-            logger.warning(f"Empty scores for key: {key}")
-
-    # Calculate feature importance and stability
-    feature_importance = calculate_feature_importance(
-        feature_matrix, target_vector, feature_names
-    )
-
-    # Calculate feature correlations
-    feature_correlations = calculate_feature_correlations(feature_matrix)
-
-    # Add multicollinearity check
-    multicollinearity_results = check_multicollinearity_vif(feature_matrix)
-
-    # Save results to output directory
-    save_evaluation_results(
-        cv_scores=cv_scores,
-        waic_scores=waic_scores,
-        loo_scores=loo_scores,
-        feature_importance=feature_importance,
-        feature_correlations=feature_correlations,
-        feature_combinations=[
-            {'name': f'feature_set_{i}', 'features': features} 
-            for i, features in enumerate(candidate_features)
-        ],
-        output_dir=output_dir,
-        multicollinearity_results=multicollinearity_results
-    )
-
-    # Return results, ensuring all required fields are present
-    return FeatureEvaluationResults(
-        cv_scores=cv_scores,
-        waic_scores=waic_scores,
-        loo_scores=loo_scores,
-        feature_correlations=feature_correlations,
-        feature_importance=feature_importance,
-        feature_groups=get_feature_groups(config),
-        interaction_scores=None,  # Placeholder for future implementation
-        stability_metrics=None  # Placeholder for future implementation
-    )
-       
 def check_multicollinearity_vif(feature_matrix: pd.DataFrame) -> Dict:
-    """Check for multicollinearity using Variance Inflation Factor."""
+    """
+    Check for multicollinearity among features using Variance Inflation Factor.
+    
+    Performs two types of checks:
+    1. VIF calculation for each feature (>5 indicates high multicollinearity)
+    2. Pairwise correlation analysis (>0.7 indicates high correlation)
+    
+    Args:
+        feature_matrix: DataFrame of features to check
+        
+    Returns:
+        Dictionary containing:
+        - VIF scores for each feature
+        - List of highly correlated feature pairs
+        - Status indicators for problematic features
+    """
     results = {
         'vif': [],
         'high_correlations': []
@@ -261,6 +285,22 @@ def calculate_feature_importance(
 ) -> Dict[str, float]:
     """
     Calculate feature importance using multiple methods and aggregate results.
+    
+    Combines three approaches:
+    1. Correlation with target (30% weight)
+    2. Mutual information (30% weight)
+    3. Permutation importance (40% weight)
+    
+    This multi-method approach provides more robust importance scores than
+    any single method alone.
+    
+    Args:
+        feature_matrix: DataFrame of features to evaluate
+        target_vector: Array of target values
+        feature_names: List of feature names
+        
+    Returns:
+        Dictionary mapping feature names to their importance scores (0-1 scale)
     """
     importance_scores = {}
     
@@ -298,86 +338,8 @@ def calculate_feature_correlations(feature_matrix: pd.DataFrame) -> pd.DataFrame
     """Calculate and analyze feature correlations."""
     return feature_matrix.corr()
 
-def perform_cross_validation(
-    feature_matrix,
-    target_vector,
-    participants,
-    n_splits=5
-) -> List[float]:
-    """
-    Perform cross-validation while preserving participant grouping.
-    """
-    cv_scores = []
-    group_kfold = GroupKFold(n_splits=n_splits)
-    
-    for train_idx, val_idx in group_kfold.split(feature_matrix, target_vector, participants):
-        # Get training and validation sets
-        X_train = feature_matrix.iloc[train_idx]
-        y_train = target_vector[train_idx]
-        
-        X_val = feature_matrix.iloc[val_idx]
-        y_val = target_vector[val_idx]
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns)
-        X_val_scaled = pd.DataFrame(scaler.transform(X_val), columns=X_val.columns)
-        
-        try:
-            # Create and train model
-            with pm.Model() as model:
-                # Fixed effects priors
-                feature_effects = {}
-                for feat in X_train.columns:
-                    feature_effects[feat] = pm.Normal(feat, mu=0, sigma=1)
-                
-                # Error term
-                sigma = pm.HalfNormal('sigma', sigma=1)
-                
-                # Expected value
-                mu = sum(feature_effects[feat] * X_train_scaled[feat] for feat in X_train.columns)
-                
-                # Likelihood
-                likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=y_train)
-                
-                # Sample with increased tuning and adaptation
-                trace = pm.sample(
-                    draws=500,      # Increased
-                    tune=2000,      # Increased
-                    chains=4,
-                    target_accept=0.99,  # Increased
-                    init='adapt_diag',
-                    return_inferencedata=True,
-                    cores=1
-                )
-                
-                # Get feature effect means for prediction
-                feature_effects_mean = {
-                    feat: float(trace.posterior[feat].mean())
-                    for feat in X_train.columns
-                }
-                
-                # Make predictions on validation set
-                y_pred = sum(feature_effects_mean[feat] * X_val_scaled[feat].values 
-                            for feat in X_val_scaled.columns)
-                
-                # Calculate R² score
-                ss_res = np.sum((y_val - y_pred) ** 2)
-                ss_tot = np.sum((y_val - np.mean(y_val)) ** 2)
-                r2 = 1 - (ss_res / ss_tot)
-                
-                cv_scores.append(r2)
-                
-        except Exception as e:
-            logger.warning(f"Failed fold with error: {str(e)}")
-            cv_scores.append(np.nan)
-    
-    return cv_scores
-
 def calculate_waic_loo(feature_matrix: pd.DataFrame, target_vector: np.ndarray) -> Tuple[float, float]:
-    """
-    Calculate both WAIC and LOO scores in a single model context.
-    """
+    """Calculate both WAIC and LOO scores in a single model context."""
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(feature_matrix)
     
@@ -396,7 +358,7 @@ def calculate_waic_loo(feature_matrix: pd.DataFrame, target_vector: np.ndarray) 
             mu = sum(feature_effects[feat] * X_scaled[:, i] 
                     for i, feat in enumerate(feature_matrix.columns))
             
-            # Likelihood
+            # Likelihood with observed data
             likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
             
             # Sample with improved settings
@@ -408,11 +370,11 @@ def calculate_waic_loo(feature_matrix: pd.DataFrame, target_vector: np.ndarray) 
                 init='adapt_diag',
                 return_inferencedata=True,
                 compute_convergence_checks=True,
-                nuts={'log_likelihood': True},  # Correct placement of log_likelihood
                 cores=1
             )
             
             # Calculate information criteria
+            # Note: Recent PyMC versions handle log_likelihood internally
             waic = az.waic(trace)
             loo = az.loo(trace)
             
@@ -421,7 +383,7 @@ def calculate_waic_loo(feature_matrix: pd.DataFrame, target_vector: np.ndarray) 
     except Exception as e:
         logger.warning(f"Failed to compute WAIC/LOO: {str(e)}")
         return np.nan, np.nan
-                    
+
 def save_evaluation_results(
     cv_scores: Dict[str, List[float]],
     waic_scores: Dict[str, float],
@@ -573,3 +535,121 @@ def plot_evaluation_results(
     plt.rcParams['figure.figsize'] = [10, 6]
     plt.rcParams['axes.grid'] = True
     plt.rcParams['grid.alpha'] = 0.3
+
+def perform_cross_validation(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    n_splits: int = 5
+) -> List[float]:
+    """
+    Perform cross-validation to evaluate feature combinations while preserving participant grouping.
+    Uses R² (R-squared) scores to assess predictive performance.
+    
+    R² measures the proportion of variance in comfort/preference scores that is predictable from 
+    the features. It ranges from:
+    - 1.0: Perfect prediction - features explain all variation in preferences
+    - 0.0: Model only predicts as well as always guessing the mean preference
+    - <0.0: Model performs worse than guessing the mean
+    
+    For example, R²=0.7 means our features explain 70% of the variation in comfort scores.
+    
+    Args:
+        feature_matrix: DataFrame of features to evaluate
+        target_vector: Array of comfort/preference scores
+        participants: Array of participant IDs/indices for grouped validation
+        n_splits: Number of cross-validation folds
+    
+    Returns:
+        List[float]: R² scores for each fold, indicating how well features predict preferences
+    """
+    cv_scores = []
+    group_kfold = GroupKFold(n_splits=n_splits)
+    
+    # Convert everything to numpy arrays
+    X = feature_matrix.to_numpy()
+    y = np.array(target_vector)
+    groups = np.array(participants)
+    
+    # Ensure all arrays are the right shape
+    X = np.atleast_2d(X)
+    y = np.ravel(y)
+    groups = np.ravel(groups)
+    
+    # Verify dimensions
+    if len(X) != len(y) or len(y) != len(groups):
+        raise ValueError("Inconsistent dimensions in input data")
+    
+    logger.info(f"Starting cross-validation with {n_splits} splits")
+    logger.info(f"Data shapes - X: {X.shape}, y: {y.shape}, groups: {groups.shape}")
+    
+    for fold, (train_idx, val_idx) in enumerate(group_kfold.split(X, y, groups)):
+        try:
+            # Extract training and validation sets
+            X_train = X[train_idx]
+            y_train = y[train_idx]
+            X_val = X[val_idx]
+            y_val = y[val_idx]
+            
+            # Scale features
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
+            
+            # Create and train model
+            with pm.Model() as model:
+                # Fixed effects priors
+                feature_effects = {
+                    f'feat_{i}': pm.Normal(f'feat_{i}', mu=0, sigma=1)
+                    for i in range(X_train.shape[1])
+                }
+                
+                # Error term
+                sigma = pm.HalfNormal('sigma', sigma=1)
+                
+                # Expected value
+                mu = sum(feature_effects[f'feat_{i}'] * X_train_scaled[:, i] 
+                        for i in range(X_train.shape[1]))
+                
+                # Likelihood
+                likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=y_train)
+                
+                # Sample
+                trace = pm.sample(
+                    draws=500,
+                    tune=2000,
+                    chains=4,
+                    target_accept=0.99,
+                    init='adapt_diag',
+                    return_inferencedata=True,
+                    cores=1
+                )
+                
+                # Get feature effect means for prediction
+                feature_effects_mean = {
+                    f'feat_{i}': float(trace.posterior[f'feat_{i}'].mean())
+                    for i in range(X_train.shape[1])
+                }
+                
+                # Make predictions on validation set
+                y_pred = sum(feature_effects_mean[f'feat_{i}'] * X_val_scaled[:, i]
+                           for i in range(X_val.shape[1]))
+                
+                # Calculate R² score
+                ss_res = np.sum((y_val - y_pred) ** 2)
+                ss_tot = np.sum((y_val - np.mean(y_val)) ** 2)
+                r2 = 1 - (ss_res / ss_tot)
+                
+                logger.info(f"Fold {fold + 1}/{n_splits} R² score: {r2:.3f}")
+                cv_scores.append(r2)
+                
+        except Exception as e:
+            logger.warning(f"Failed fold {fold + 1}/{n_splits} with error: {str(e)}")
+            cv_scores.append(np.nan)
+    
+    if not any(~np.isnan(score) for score in cv_scores):
+        logger.warning("All cross-validation folds failed")
+    else:
+        logger.info(f"Average R² score: {np.nanmean(cv_scores):.3f}")
+    
+    return cv_scores

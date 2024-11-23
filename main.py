@@ -9,16 +9,17 @@ import yaml
 from typing import Dict, Any
 import pandas as pd
 
-from data_processing import DataPreprocessor, manage_data_splits
+from data_processing import DataPreprocessor, generate_train_test_splits, manage_data_splits
 from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_timing_by_frequency_groups,
                                      save_timing_analysis)
 from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
                                         row_position_values, bigrams, bigram_frequencies_array)
-from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences,
-                                       get_feature_combinations, get_feature_groups)
+from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences)
 from bigram_pair_feature_evaluation import evaluate_feature_sets
 from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
-from bayesian_modeling import train_bayesian_glmm, calculate_all_bigram_comfort_scores, save_model_results, plot_model_diagnostics
+from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
+                               save_model_results, plot_model_diagnostics, evaluate_model_performance, 
+                               validate_comfort_scores, plot_sensitivity_analysis)
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
@@ -129,61 +130,49 @@ def main():
             config=config
         )
 
-        # Get processed data and create train/test split if feature evaluation is enabled
+        # Get processed data and create train/test split
         processed_data = preprocessor.get_processed_data()
-        
-        if config['feature_evaluation']['enabled']:
-            train_data, test_data = manage_data_splits(
-                processed_data, 
-                config
-            )
-            
-            # Get feature combinations and groups from config
-            feature_combinations = get_feature_combinations(config)
-            feature_groups = get_feature_groups(config)
-            
+        generate_train_test_splits(processed_data, config)
+        train_data, test_data = manage_data_splits(processed_data, config)
+
+        if config['feature_evaluation']['enabled']:            
             # Run feature evaluation
             feature_eval_results = evaluate_feature_sets(
-                feature_matrix=train_data.feature_matrix,
-                target_vector=train_data.target_vector,
-                participants=train_data.participants,
-                candidate_features=feature_combinations,
+                feature_matrix=test_data.feature_matrix,
+                target_vector=test_data.target_vector,
+                participants=test_data.participants,
+                candidate_features=config['feature_evaluation']['combinations'],
                 feature_names=feature_names,
-                output_dir=Path(config['output']['feature_evaluation']['dir']),  # Updated path
+                output_dir=Path(config['output']['feature_evaluation']['dir']),
                 config=config,
                 n_splits=config['feature_evaluation']['n_splits'],
                 n_samples=config['feature_evaluation']['n_samples']
             )
             
             logger.info("Feature evaluation completed")
-            evaluation_data = test_data
-        else:
-            evaluation_data = processed_data
 
-        # Continue with existing pipeline using evaluation_data instead of processed_data
+        # Analyze bigram frequency/timing relationship using all of the data
         if config['output']['frequency_timing']['enabled']:
             logger.info("Analyzing timing-frequency relationship")
             timing_results = plot_frequency_timing_relationship(
-                bigram_data=preprocessor.data,
+                bigram_data=processed_data,
                 bigrams=bigrams,
                 bigram_frequencies_array=bigram_frequencies_array,
                 output_path=config['output']['frequency_timing']['relationship']
             )
-
-            # Create timing by frequency groups analysis
+            # Create timing by frequency groups analysis using all of the data
             group_comparison_results = plot_timing_by_frequency_groups(
-                preprocessor.data,
+                processed_data,
                 bigrams,
                 bigram_frequencies_array,
                 n_groups=config['output']['frequency_timing']['n_groups'],
                 output_base_path=config['output']['frequency_timing']['group_directory']  # Updated key
             )
-
             save_timing_analysis(timing_results, 
                                group_comparison_results,
                                config['output']['frequency_timing']['analysis'])
 
-        # Evaluate feature space and generate recommendations
+        # Evaluate feature space using all of the data and generate recommendations
         if config['output']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             feature_space_results = analyze_feature_space(
@@ -211,9 +200,9 @@ def main():
             logger.info("Training Bayesian GLMM")
 
             trace, model, priors = train_bayesian_glmm(
-                feature_matrix=processed_data.feature_matrix,
-                target_vector=processed_data.target_vector,
-                participants=processed_data.participants,
+                feature_matrix=train_data.feature_matrix,
+                target_vector=train_data.target_vector,
+                participants=train_data.participants,
                 design_features=config['features']['groups']['design'],
                 control_features=config['features']['groups']['control'],
                 inference_method=config['model']['inference_method'],
@@ -226,28 +215,50 @@ def main():
                              f"{config['output']['model']['results']}_{config['model']['inference_method']}")
 
             # Plot model diagnostics if visualization is enabled
-            if config['visualization']['enabled']:
+            if config['model']['visualization']['enabled']:
                 plot_model_diagnostics(
                     trace=trace,
                     output_base_path=config['output']['model']['diagnostics'],
                     inference_method=config['model']['inference_method']
                 )
 
-            # Calculate comfort scores if requested
-            if config['scoring']['enabled']:
-                logger.info("Calculating comfort scores")
-                comfort_scores = calculate_all_bigram_comfort_scores(
-                    trace,
-                    all_bigram_features,
-                    features_for_design = config['features']['groups']['design'],
-                    mirror_scores=config['scoring']['mirror_scores']
+                plot_sensitivity_analysis(
+                    parameter_estimates=trace,
+                    design_features=config['features']['groups']['design'],
+                    control_features=config['features']['groups']['control'],
+                    output_path=config['output']['model']['sensitivity'].format(
+                        inference_method=config['model']['inference_method']
+                    )
                 )
+
+            # Calculate comfort scores if requested
+            if config['model']['scoring']['enabled']:
+                logger.info("Calculating comfort scores")
+                comfort_scores = calculate_bigram_comfort_scores(
+                    trace,
+                    train_data.feature_matrix,  # Use training features only
+                    features_for_design=config['features']['groups']['design'],
+                    mirror_left_right_scores=config['scoring']['mirror_left_right_scores']
+                )
+
+                # Validate scores against test data
+                validate_comfort_scores(comfort_scores, test_data)
 
                 # Save comfort scores
                 output_path = Path(config['output']['scores'])
                 pd.DataFrame.from_dict(comfort_scores, orient='index',
                                        columns=['comfort_score']).to_csv(output_path)
- 
+                
+            # Evaluate model on test data
+            logger.info("Evaluating model on test data")
+            test_predictions = model.predict(test_data.feature_matrix)
+            test_score = evaluate_model_performance(
+                test_predictions, 
+                test_data.target_vector,
+                test_data.participants
+            )
+            logger.info(f"Test set performance: {test_score}")  
+                
         logger.info("Pipeline completed successfully")
 
     except Exception as e:

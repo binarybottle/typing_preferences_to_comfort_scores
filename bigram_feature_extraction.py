@@ -13,57 +13,32 @@ from typing import List, Tuple, Dict
 from bigram_feature_definitions import *
 
 def extract_bigram_features(char1: str, char2: str, column_map: Dict, row_map: Dict, 
-                          finger_map: Dict, engram_position_values: Dict,
-                          row_position_values: Dict, bigrams: List, 
-                          bigram_frequencies_array: np.ndarray,
-                          config: Dict) -> Tuple[Dict, List[str]]:
-    """
-    Extract features for a bigram pair based on configuration.
-    
-    Args:
-        ...
-        config: Configuration dictionary containing feature definitions
-        
-    Returns:
-        Tuple containing:
-        - Dictionary of computed features
-        - List of feature names
-    """
-    # Get all defined features
-    all_features = [feature['name'] for feature in config['features']['all_features']]
-    
-    # Initialize features dictionary
-    features = {}
-    
-    # Compute each feature based on its type
-    for feature_def in config['features']['all_features']:
-        name = feature_def['name']
-        feature_type = feature_def['type']
-        
-        if feature_type == 'frequency':
-            features[name] = qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array)
-        elif feature_type == 'position':
-            if name == 'engram_sum':
-                features[name] = sum_engram_position_values(char1, char2, column_map, engram_position_values)
-            elif name == 'row_sum':
-                features[name] = sum_row_position_values(char1, char2, column_map, row_position_values)
-    
-    # Add interactions if enabled
-    if config['features']['interactions']['enabled']:
-        for pair in config['features']['interactions']['pairs']:
-            interaction_name = f"{pair[0]}_{pair[1]}"
-            features[interaction_name] = features[pair[0]] * features[pair[1]]
-            all_features.append(interaction_name)
-    
-    return features, all_features
+                            finger_map: Dict, engram_position_values: Dict,
+                            row_position_values: Dict, bigrams: List, 
+                            bigram_frequencies_array: np.ndarray, 
+                            config: Dict) -> Tuple[Dict, List[str]]:
+   """Extract features for a bigram pair based on configuration."""
+   
+   features_functions = function_map(char1, char2, column_map, row_map, finger_map,
+                                     engram_position_values, row_position_values,
+                                     bigrams, bigram_frequencies_array)
 
-def get_feature_combinations(config: Dict) -> List[List[str]]:
-    """Get feature combinations from config for evaluation."""
-    return config['feature_evaluation']['combinations']  # Just return the list directly
-
-def get_feature_groups(config: Dict) -> Dict[str, List[str]]:
-    """Get feature groups (design, control) from config."""
-    return config['features']['groups']
+   features = {}
+   all_features = config['features']['all_features']
+   
+   for feature_name in all_features:
+       if feature_name in features_functions:
+           features[feature_name] = features_functions[feature_name]()
+   
+   feature_names = list(features.keys())
+   
+   if config['features']['interactions']['enabled']:
+       for pair in config['features']['interactions']['pairs']:
+           interaction_name = f"{pair[0]}_{pair[1]}"
+           features[interaction_name] = features[pair[0]] * features[pair[1]]
+           feature_names.append(interaction_name)
+   
+   return features, feature_names
 
 def extract_samekey_features(char: str, finger_map: Dict) -> Tuple[Dict, List]:
     """

@@ -3,71 +3,85 @@ Author: Arno Klein (binarybottle.com)
 GitHub repository: binarybottle/engram3
 License: MIT 
 
+## Description
 The purpose of the scripts in this repository is to take as input data 
 ratings of how comfortable one bigram is to type vs. another,
 estimate latent bigram typing comfort scores, and use these estimates
 to design ergonomically optimized keyboard layouts.
 
-project_root/
-├── data/
-│   ├── raw/                                # Original data files
-│   ├── splits/
-│   │   └── train_test_indices.npz          # Saved train/test split indices
-│   └── processed/                          # Final processed data
-│
-├── output/
-│   ├── logs/
-│   │   └── pipeline.log
-│   │
-│   ├── feature_evaluation/                 # Feature evaluation results
-│   │   ├── analysis/
-│   │   │   ├── evaluation_results.csv      # Numerical results
-│   │   │   ├── feature_importance.csv
-│   │   │   └── feature_correlations.csv
-│   │   └── plots/
-│   │       ├── feature_importance.png
-│   │       ├── feature_correlations.png
-│   │       └── cv_scores.png
-│   │
-│   ├── feature_space/                      # Feature space analysis
-│   │   ├── analysis.txt                    # Combined analysis results
-│   │   ├── recommendations.txt
-│   │   ├── pca.png
-│   │   ├── bigram_graph.png
-│   │   └── underrepresented.png
-│   │
-│   ├── frequency_timing/                   # Timing analysis
-│   │   ├── analysis.txt
-│   │   ├── relationship.png
-│   │   ├── groups_boxplot.png
-│   │   └── groups_violin.png
-│   │
-│   ├── model/                             # Model outputs
-│   │   ├── results_mcmc_trace.nc
-│   │   ├── results_mcmc_point_estimates.csv
-│   │   ├── results_mcmc_model_info.json
-│   │   ├── diagnostics_mcmc.png
-│   │   ├── forest_mcmc.png
-│   │   # (Similar files for variational inference with 'vi' instead of 'mcmc')
-│   │
-│   └── scores/
-│       └── bigram_comfort_scores.csv
-│
-├── __init__.py
-│── main.py
-│── config.yaml
-│── feature_evaluation.py
-│── analysis_visualization.py
-│── bayesian_modeling.py
-│── data_preprocessing.py
-│── bigram_feature_extraction.py
-│── bigram_features.py
-├── requirements.txt
-├── setup.py
-└── README.md
+### Input data
+The input data comes from an online bigram comparison typing test 
+(https://github.com/binarybottle/bigram-typing-comfort-experiment) 
+crowdsourced to hundreds of participants.
+Here, the data is split into training (80% participants) and test (20% participants). 
+- The full dataset (100%) is used for:
+  - Feature space analysis (does not influence feature selection or model training)
+  - Bigram pair recommendations (what additional data to collect)
+  - Timing-frequency analysis (timing information is not used to train the model)
+- Training data (80%) is used for:
+  - Model training
+  - Model output (bigram comfort scores)
+- Test data (20%) is used to:
+  - Feature evaluation (to select features to train the model)
+  - Final model performance evaluation
 
-# Install required libraries
+## Directory tree
+engram3/
+│
+├── config.yaml
+├── main.py
+├── bayesian_modeling.py
+├── bigram_feature_definitions.py
+├── bigram_feature_extraction.py 
+├── bigram_frequency_timing.py
+├── bigram_pair_feature_evaluation.py
+├── bigram_pair_recommendations.py
+├── data_processing.py
+│── README.md
+│
+│── data/
+│   │
+│   ├── input/
+│   │   ├── output_all4studies_406participants/
+│   │   │   └── tables/
+│   │   │       ├── filtered_bigram_data.csv
+│   │   │       └── filtered_consistent_choices.csv
+│   │   └── output_all4studies_303of406participants_0improbable/
+│   │       └── tables/
+│   │           ├── filtered_bigram_data.csv  
+│   │           └── filtered_consistent_choices.csv
+│   └── splits/
+│       └── train_test_indices.npz
+│
+└── output/
+    │
+    ├── logs/
+    │   └── pipeline.log
+    │
+    ├── feature_evaluation/
+    │   └── evaluation_metrics.csv
+    │
+    ├── feature_space/
+    │   ├── analysis.txt
+    │   ├── recommendations.txt 
+    │   ├── pca.png
+    │   ├── bigram_graph.png
+    │   └── underrepresented.png
+    │
+    ├── frequency_timing/
+    │   ├── analysis.txt
+    │   ├── relationship.png
+    │   └── groups/
+    │
+    ├── model/
+    │   ├── results/
+    │   └── diagnostics_{inference_method}.png
+    │
+    └── scores/
+        └── bigram_comfort_scores.csv
+
+# Installation
 pip install -r requirements.txt
 
-# Run the pipeline
+# Running the pipeline
 python main.py --config config.yaml
