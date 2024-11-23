@@ -37,7 +37,7 @@ def train_bayesian_glmm(
    participants: np.ndarray,
    design_features: List[str],
    control_features: List[str],
-   inference_method: str = 'nuts',
+   inference_method: str = 'mcmc',
    num_samples: int = 1000,
    chains: int = 4
 ) -> Tuple:
@@ -140,19 +140,30 @@ def train_bayesian_glmm(
         mu += participant_offset[[participant_map[p] for p in participants]]
 
         # Likelihood
-        likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
+        #likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
 
-        # Sample using NUTS
+        # Different sampling based on inference method
         logger.info(f"Using {inference_method} inference")
-        trace = pm.sample(
-            draws=num_samples,
-            tune=2000,
-            chains=chains,
-            target_accept=0.99,
-            return_inferencedata=True,
-            compute_convergence_checks=True,
-            cores=1
-        )
+        
+        if inference_method.lower() == 'variational':
+            # Use ADVI for variational inference
+            approx = pm.fit(
+                n=num_samples,
+                method='advi',
+                obj_optimizer=pm.adam(learning_rate=0.1)
+            )
+            trace = approx.sample(num_samples)
+            
+        else:  # default to MCMC/NUTS
+            trace = pm.sample(
+                draws=num_samples,
+                tune=2000,
+                chains=chains,
+                target_accept=0.99,
+                return_inferencedata=True,
+                compute_convergence_checks=True,
+                cores=1
+            )
 
         # Collect priors
         priors = {
@@ -620,112 +631,3 @@ def add_mirrored_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str,
         mirrored[right_bigram] = score
     
     return {**scores, **mirrored}
-
-#=========================#
-# Logging Functions       #
-#=========================#
-class ConsoleFormatter(logging.Formatter):
-    """Formatter for console output with colors and visual markers."""
-    
-    COLORS = {
-        'DEBUG': Fore.BLUE,
-        'INFO': Fore.GREEN,
-        'WARNING': Fore.YELLOW,
-        'ERROR': Fore.RED,
-        'CRITICAL': Fore.RED + Style.BRIGHT
-    }
-    
-    MARKERS = {
-        'DATA': '[DATA]',
-        'MODEL': '[MODEL]',
-        'EVALUATION': '[EVAL]',
-        'FEATURE': '[FEAT]',
-        'TIMING': '[TIME]',
-        'WARNING': '[WARN]',
-        'ERROR': '[ERR]'
-    }
-
-    def format(self, record: logging.LogRecord) -> str:
-        # Add timestamp
-        timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
-        
-        # Determine section
-        section = 'OTHER'
-        for key in self.MARKERS:
-            if key in record.msg.upper():
-                section = key
-                break
-        
-        # Color based on level
-        color = self.COLORS.get(record.levelname, '')
-        
-        # Format the message
-        record.msg = f"{timestamp} {self.MARKERS.get(section, '[-]')} {color}{record.msg}{Style.RESET_ALL}"
-        
-        return super().format(record)
-
-class FileFormatter(logging.Formatter):
-    """Clean formatter for file output without colors or special characters."""
-    
-    def format(self, record: logging.LogRecord) -> str:
-        # Extract section from message if present
-        section = 'OTHER'
-        for key in ['DATA', 'MODEL', 'EVALUATION', 'FEATURE', 'TIMING']:
-            if key in record.msg.upper():
-                section = key
-                break
-        
-        # Format with standard timestamp, level, and section
-        return f"{self.formatTime(record)} - {record.levelname} - {section} - {record.msg}"
-
-def setup_logging(config: Dict[str, Any]) -> None:
-    """Setup dual-format logging for console and file output."""
-    # Initialize colorama for Windows compatibility
-    colorama.init()
-    
-    # Create formatters
-    console_formatter = ConsoleFormatter('%(message)s')
-    file_formatter = FileFormatter()
-    
-    # Setup console handler with colored output
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(console_formatter)
-    
-    # Setup file handler with clean output
-    file_handler = logging.FileHandler(config['paths']['logs'])
-    file_handler.setFormatter(file_formatter)
-    
-    # Setup root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(config['logging']['level'])
-    
-    # Remove any existing handlers
-    root_logger.handlers = []
-    
-    # Add our handlers
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
-
-# Example logging calls
-def log_examples():
-    logger = logging.getLogger(__name__)
-    
-    # These will appear differently in console vs log file
-    logger.info("DATA: Loading dataset...")
-    logger.info("MODEL: Starting training...")
-    logger.warning("MODEL: High correlation detected")
-    logger.error("MODEL: Failed to converge")
-
-"""
-Console output will look like:
-10:45:23 [DATA] Loading dataset...
-10:45:24 [MODEL] Starting training...
-10:45:25 [MODEL] High correlation detected
-10:45:26 [MODEL] Failed to converge
-
-Log file will contain:
-2024-11-23 10:45:23,456 - INFO - DATA - Loading dataset...
-2024-11-23 10:45:24,789 - INFO - MODEL - Starting training...
-2024-11-23 10:45:25,123 - WARNING - MODEL - High correlation detected
-2024-11-23 10:45:26,456 - ERROR - MODEL - Failed to converge
-"""

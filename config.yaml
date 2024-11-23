@@ -47,18 +47,18 @@ analysis:
     enabled: true
     n_groups: 4
 
-  # Model settings
-  model:
-    train: true
-    inference_method: 'variational' #'mcmc'  # or 'variational'
-    num_samples: 100 #2000
-    chains: 4 #8
-    evaluate_test: true
-    scoring:
-      enabled: true
-      mirror_left_right_scores: true
-    visualization:
-      enabled: true
+# Model settings
+model:
+  train: true
+  inference_method: 'variational' #'mcmc'  # or 'variational'
+  num_samples: 100 #2000
+  chains: 4 #8
+  evaluate_test: true
+  scoring:
+    enabled: true
+    mirror_left_right_scores: true
+  visualization:
+    enabled: true
 
 # Feature definitions
 features:

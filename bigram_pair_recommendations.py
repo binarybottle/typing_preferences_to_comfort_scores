@@ -115,16 +115,6 @@ def analyze_feature_space(
 
     return results
 
-def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
-    """
-    Save feature space analysis results to a file.
-    
-    Args:
-        results: Dictionary containing analysis results
-        output_path: Path to save the analysis file
-    """
-    # [Implementation remains the same]
-
 def identify_underrepresented_areas(
     pca_result: np.ndarray,
     output_path: str,
@@ -134,18 +124,39 @@ def identify_underrepresented_areas(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Identify and visualize underrepresented areas in feature space.
-    
-    Args:
-        pca_result: PCA-transformed feature data
-        output_path: Path to save the visualization
-        x_lims: (min, max) for x-axis
-        y_lims: (min, max) for y-axis
-        num_grid: Number of grid points for density estimation
-    
-    Returns:
-        Tuple of (grid_points, distances) for use in recommendation generation
     """
-    # [Implementation remains the same]
+    try:
+        # Create grid
+        x = np.linspace(x_lims[0], x_lims[1], num_grid)
+        y = np.linspace(y_lims[0], y_lims[1], num_grid)
+        X, Y = np.meshgrid(x, y)
+        grid_points = np.column_stack((X.ravel(), Y.ravel()))
+        
+        # Calculate distances to nearest points
+        distances = np.zeros(len(grid_points))
+        for i, point in enumerate(grid_points):
+            dist_to_all = np.sqrt(np.sum((pca_result - point) ** 2, axis=1))
+            distances[i] = np.min(dist_to_all)
+        
+        # Plot heatmap
+        plt.figure(figsize=(10, 8))
+        plt.scatter(pca_result[:, 0], pca_result[:, 1], 
+                   c='black', alpha=0.6, label='Data points')
+        plt.tricontourf(grid_points[:, 0], grid_points[:, 1], 
+                       distances.reshape(-1))
+        plt.colorbar(label='Distance to nearest point')
+        plt.title('Underrepresented Areas in Feature Space')
+        plt.xlabel('First Principal Component')
+        plt.ylabel('Second Principal Component')
+        plt.legend()
+        plt.savefig(output_path)
+        plt.close()
+        
+        return grid_points, distances
+        
+    except Exception as e:
+        logger.error(f"Error in underrepresented areas analysis: {str(e)}")
+        return None
 
 def generate_bigram_recommendations(
     pca_result: np.ndarray,
@@ -158,17 +169,93 @@ def generate_bigram_recommendations(
 ) -> List[Tuple]:
     """
     Generate recommendations for new bigram pairs to test.
-    
-    Uses PCA-space density analysis to identify underrepresented areas,
-    then finds closest existing bigram pairs to generate recommendations.
     """
-    # [Implementation remains the same]
+    try:
+        # Find points in underrepresented areas
+        max_distances = np.argsort(distances)[-num_recommendations:]
+        target_points = grid_points[max_distances]
+        
+        # Transform back to feature space
+        target_features = pca.inverse_transform(target_points)
+        target_features = scaler.inverse_transform(target_features)
+        
+        # Find closest existing bigram pairs
+        recommendations = []
+        for target in target_features:
+            min_dist = float('inf')
+            best_pair = None
+            
+            for pair, features in all_feature_differences.items():
+                dist = np.sqrt(np.sum((np.array(features) - target) ** 2))
+                if dist < min_dist:
+                    min_dist = dist
+                    best_pair = pair
+            
+            if best_pair is not None:
+                recommendations.append(best_pair)
+        
+        return recommendations[:num_recommendations]
+        
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {str(e)}")
+        return None
 
 def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
     """
-    Create graph visualization of bigram relationships with minimal edge crossings.
-    
-    Organizes connected components vertically and uses Kamada-Kawai layout
-    to minimize edge crossings within each component.
+    Create graph visualization of bigram relationships.
     """
-    # [Implementation remains the same]
+    try:
+        G = nx.Graph()
+        
+        # Add nodes and edges
+        for pair in bigram_pairs:
+            b1, b2 = pair
+            G.add_edge(f"{b1[0]}{b1[1]}", f"{b2[0]}{b2[1]}")
+        
+        # Create layout
+        pos = nx.kamada_kawai_layout(G)
+        
+        # Plot
+        plt.figure(figsize=(12, 8))
+        nx.draw(G, pos, with_labels=True, node_color='lightblue',
+               node_size=1000, font_size=10, font_weight='bold')
+        plt.title('Bigram Relationship Graph')
+        plt.savefig(output_path)
+        plt.close()
+        
+    except Exception as e:
+        logger.error(f"Error plotting bigram graph: {str(e)}")
+
+def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
+    """
+    Save feature space analysis results to a file.
+    """
+    try:
+        with open(output_path, 'w') as f:
+            f.write("=== Feature Space Analysis Results ===\n\n")
+            
+            # Write metrics
+            if 'feature_space_metrics' in results:
+                metrics = results['feature_space_metrics']
+                f.write("Feature Space Metrics:\n")
+                f.write(f"  Hull Area: {metrics['hull_area']:.3f}\n")
+                f.write(f"  Point Density: {metrics['point_density']:.3f}\n\n")
+            
+            # Write feature groups
+            if 'feature_groups' in results:
+                groups = results['feature_groups']
+                f.write("Feature Groups:\n")
+                for group_name, features in groups.items():
+                    f.write(f"\n{group_name}:\n")
+                    for feature in features:
+                        f.write(f"  - {feature}\n")
+            
+            # Write recommendations
+            if 'recommendations' in results:
+                f.write("\nBigram Pair Recommendations:\n")
+                for i, pair in enumerate(results['recommendations'], 1):
+                    f.write(f"{i}. {pair[0][0]}{pair[0][1]} - {pair[1][0]}{pair[1][1]}\n")
+                    
+    except Exception as e:
+        logger.error(f"Error saving analysis results: {str(e)}")
+    

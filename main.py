@@ -80,14 +80,24 @@ def validate_config(config: Dict[str, Any]) -> None:
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
-    logging.basicConfig(
-        level=config['logging']['level'],
-        format=config['logging']['format'],
-        handlers=[
-            logging.FileHandler(config['logging']['file']),
-            logging.StreamHandler()
-        ]
-    )
+    handlers = [
+        logging.FileHandler(config['paths']['logs']),
+        logging.StreamHandler()
+    ]
+    
+    # Setup root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(config['logging']['level'])
+    
+    # Create and set formatter
+    formatter = logging.Formatter(config['logging']['format'])
+    
+    # Add handlers with formatter
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+        
+    logger.info("Logging setup completed")
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load and validate configuration from YAML file."""
@@ -160,7 +170,7 @@ def main():
         logger.info("Computing bigram features")
         all_bigrams, all_bigram_features, feature_names, samekey_bigrams, \
             samekey_bigram_features, samekey_feature_names = precompute_all_bigram_features(
-                layout_chars=config['layout']['left_chars'],
+                layout_chars=config['data']['layout']['left_chars'],
                 column_map=column_map, 
                 row_map=row_map, 
                 finger_map=finger_map,
@@ -192,7 +202,7 @@ def main():
         # === FULL DATASET ANALYSES === #
 
         # Analyze bigram frequency/timing relationship if enabled
-        if config['output']['frequency_timing']['enabled']:
+        if config['analysis']['frequency_timing']['enabled']:
             logger.info("Starting frequency/timing analysis")
             
             try:
@@ -223,7 +233,7 @@ def main():
                 logger.error(f"Error in frequency-timing analysis: {str(e)}")
 
         # Evaluate feature space
-        if config['output']['feature_space']['enabled']:
+        if config['analysis']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             try:
                 # Feature space analysis
@@ -242,7 +252,7 @@ def main():
                     # Save analysis results
                     save_feature_space_analysis_results(
                         feature_space_results, 
-                        config['output']['feature_space']['analysis']
+                        config['analysis']['feature_space']['analysis']
                     )
 
                     # Log recommendations and feature space metrics
@@ -264,18 +274,18 @@ def main():
         train_data, test_data = manage_data_splits(processed_data, config)
 
         # Run feature evaluation on test data
-        if config['feature_evaluation']['enabled']:            
+        if config['analysis']['feature_evaluation']['enabled']:            
             logger.info("Starting feature evaluation on test data")
             feature_eval_results = evaluate_feature_sets(
                 feature_matrix=test_data.feature_matrix,
                 target_vector=test_data.target_vector,
                 participants=test_data.participants,
-                candidate_features=config['feature_evaluation']['combinations'],
+                candidate_features=config['analysis']['feature_evaluation']['combinations'],
                 feature_names=feature_names,
-                output_dir=Path(config['output']['feature_evaluation']['dir']),
+                output_dir=Path(config['paths']['feature_evaluation']),
                 config=config,
-                n_splits=config['feature_evaluation']['n_splits'],
-                n_samples=config['feature_evaluation']['n_samples']
+                n_splits=config['analysis']['feature_evaluation']['n_splits'],
+                n_samples=config['analysis']['feature_evaluation']['n_samples']
             )
             logger.info("Feature evaluation completed")
 
