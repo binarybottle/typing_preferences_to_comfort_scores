@@ -65,25 +65,87 @@ class DataPreprocessor:
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")
             raise
-            
+
     def prepare_bigram_pairs(self) -> None:
         """Convert string representations of bigram pairs to tuples."""
         logger.info("Preparing bigram pairs")
         try:
-            # Convert string representations to actual tuples
-            bigram_pairs = [ast.literal_eval(pair) for pair in self.data['bigram_pair']]
+            # Log initial data state
+            logger.info(f"Initial data length: {len(self.data)}")
+            logger.info(f"Number of unique bigram pair strings: {self.data['bigram_pair'].nunique()}")
             
+            # Check for any NaN or invalid values
+            invalid_pairs = self.data['bigram_pair'].isna().sum()
+            if invalid_pairs > 0:
+                logger.warning(f"Found {invalid_pairs} invalid/NaN bigram pairs")
+
+            # Convert string representations to actual tuples
+            bigram_pairs = []
+            failed_conversions = 0
+            for i, pair_str in enumerate(self.data['bigram_pair']):
+                try:
+                    pair = ast.literal_eval(pair_str)
+                    bigram_pairs.append(pair)
+                except (ValueError, SyntaxError) as e:
+                    failed_conversions += 1
+                    logger.warning(f"Failed to convert bigram pair at index {i}: {pair_str}")
+                    
+            # Log conversion results
+            logger.info(f"Converted {len(bigram_pairs)} bigram pairs")
+            if failed_conversions > 0:
+                logger.warning(f"Failed to convert {failed_conversions} bigram pairs")
+                
             # Split each bigram in the pair into its individual characters
             self.bigram_pairs = [
                 ((bigram1[0], bigram1[1]), (bigram2[0], bigram2[1]))
                 for bigram1, bigram2 in bigram_pairs
             ]
             
-            logger.info(f"Processed {len(self.bigram_pairs)} bigram pairs")
+            # Store indices of successful conversions
+            self.processed_indices = [i for i, pair in enumerate(self.data['bigram_pair']) 
+                                    if ast.literal_eval(pair) in bigram_pairs]
+            
+            logger.info(f"Final processed bigram pairs: {len(self.bigram_pairs)}")
+            logger.info(f"Stored {len(self.processed_indices)} valid indices")
+            
         except Exception as e:
             logger.error(f"Error preparing bigram pairs: {str(e)}")
             raise
-            
+
+    def extract_typing_times(self) -> None:
+        """Extract average typing times from chosen and unchosen bigram times."""
+        logger.info("Extracting typing times")
+        try:
+            if 'chosen_bigram_time' in self.data.columns and 'unchosen_bigram_time' in self.data.columns:
+                # Log initial state
+                logger.info(f"Total rows in data: {len(self.data)}")
+                logger.info(f"Number of chosen times: {self.data['chosen_bigram_time'].count()}")
+                logger.info(f"Number of unchosen times: {self.data['unchosen_bigram_time'].count()}")
+                
+                # Get timing data only for valid bigram pairs
+                chosen_times = self.data['chosen_bigram_time'].iloc[self.processed_indices].to_numpy()
+                unchosen_times = self.data['unchosen_bigram_time'].iloc[self.processed_indices].to_numpy()
+                
+                # Calculate average
+                self.typing_times = (chosen_times + unchosen_times) / 2
+                
+                # Log alignment check
+                logger.info(f"Processed indices: {len(self.processed_indices)}")
+                logger.info(f"Extracted timing pairs: {len(self.typing_times)}")
+                logger.info(f"Number of bigram pairs: {len(self.bigram_pairs)}")
+                
+                # Verify alignment
+                if len(self.typing_times) != len(self.bigram_pairs):
+                    raise ValueError(f"Timing data length ({len(self.typing_times)}) does not match "
+                                f"bigram pairs length ({len(self.bigram_pairs)})")
+                    
+            else:
+                logger.warning("Missing typing time columns in data")
+                self.typing_times = None
+        except Exception as e:
+            logger.error(f"Error extracting typing times: {str(e)}")
+            raise
+
     def extract_target_vector(self) -> None:
         """Extract and prepare the target vector from slider values."""
         logger.info("Extracting target vector")
@@ -107,68 +169,95 @@ class DataPreprocessor:
         except Exception as e:
             logger.error(f"Error processing participants: {str(e)}")
             raise
-            
-    def extract_typing_times(self) -> None:
-        """Extract typing times if available."""
-        logger.info("Extracting typing times")
-        try:
-            if 'chosen_bigram_time' in self.data.columns:
-                self.typing_times = self.data['chosen_bigram_time'].to_numpy()
-                logger.info(f"Extracted {len(self.typing_times)} typing times")
-            else:
-                logger.warning("No typing times found in data")
-                self.typing_times = None
-        except Exception as e:
-            logger.error(f"Error extracting typing times: {str(e)}")
-            raise
 
     def create_feature_matrix(
-            self, 
-            all_feature_differences: Dict, 
-            feature_names: List[str],
-            config: Dict  # Add config parameter
-        ) -> None:
-            """
-            Create feature matrix using provided feature differences, 
-            and including timing data.
-            """
-            logger.info("Creating feature matrix")
-            try:
-                # Create initial feature matrix
-                valid_pairs = [
-                    bigram for bigram in self.bigram_pairs
-                    if bigram in all_feature_differences
-                ]
+        self, 
+        all_feature_differences: Dict, 
+        feature_names: List[str],
+        config: Dict
+    ) -> None:
+        """
+        Create feature matrix using provided feature differences and add typing times.
+        Handles filtering and alignment of data.
+        """
+        logger.info("Creating feature matrix")
+        try:
+            # Get initial valid pairs (those that exist in feature differences)
+            valid_pairs = [
+                bigram for bigram in self.bigram_pairs
+                if bigram in all_feature_differences
+            ]
+            logger.info(f"Found {len(valid_pairs)} valid pairs out of {len(self.bigram_pairs)}")
+            
+            # Get indices of valid pairs for filtering other data
+            valid_indices = [i for i, pair in enumerate(self.bigram_pairs)
+                            if pair in all_feature_differences]
+            logger.info(f"Valid indices: {len(valid_indices)}")
+            
+            # Create feature matrix for valid pairs
+            feature_matrix_data = [
+                all_feature_differences[bigram_pair]
+                for bigram_pair in valid_pairs
+            ]
+            
+            # Create basic feature matrix
+            self.feature_matrix = pd.DataFrame(
+                feature_matrix_data,
+                columns=feature_names,
+                index=valid_pairs
+            )
+            
+            # Add typing time as a feature
+            if self.typing_times is not None:
+                logger.info(f"Adding typing times to feature matrix")
+                logger.info(f"Original typing times shape: {self.typing_times.shape}")
                 
-                feature_matrix_data = [
-                    all_feature_differences[bigram_pair]
-                    for bigram_pair in valid_pairs
-                ]
+                # Filter typing times to match valid pairs
+                filtered_typing_times = self.typing_times[valid_indices]
+                logger.info(f"Filtered typing times shape: {filtered_typing_times.shape}")
                 
-                self.feature_matrix = pd.DataFrame(
-                    feature_matrix_data,
-                    columns=feature_names,
-                    index=valid_pairs
+                # Check for null values in filtered times
+                null_count = np.isnan(filtered_typing_times).sum()
+                if null_count > 0:
+                    logger.warning(f"Found {null_count} null values in typing times")
+                    mean_time = np.nanmean(filtered_typing_times)
+                    filtered_typing_times = np.nan_to_num(filtered_typing_times, nan=mean_time)
+                    logger.info(f"Filled null typing times with mean: {mean_time:.2f}")
+                
+                # Verify lengths match before assignment
+                if len(filtered_typing_times) != len(self.feature_matrix):
+                    raise ValueError(
+                        f"Filtered typing times length ({len(filtered_typing_times)}) "
+                        f"does not match feature matrix length ({len(self.feature_matrix)})"
+                    )
+                
+                # Add to feature matrix
+                self.feature_matrix = self.feature_matrix.assign(
+                    typing_time=filtered_typing_times
                 )
-                
-                # Add typing time as a feature
-                if self.typing_times is not None:
-                    self.feature_matrix['typing_time'] = self.typing_times
+                logger.info("Added typing times to feature matrix")
 
-                # Add interactions if enabled
-                if config['features']['interactions']['enabled']:
-                    for pair in config['features']['interactions']['pairs']:
-                        interaction_name = f"{pair[0]}_{pair[1]}"
-                        self.feature_matrix[interaction_name] = (
-                            self.feature_matrix[pair[0]] * self.feature_matrix[pair[1]]
-                        )
-                
-                self._update_arrays_after_filtering(valid_pairs)
-                
-                logger.info(f"Created feature matrix with shape {self.feature_matrix.shape}")
-            except Exception as e:
-                logger.error(f"Error creating feature matrix: {str(e)}")
-                raise
+            # Add interactions if enabled
+            if config['features']['interactions']['enabled']:
+                for pair in config['features']['interactions']['pairs']:
+                    interaction_name = f"{pair[0]}_{pair[1]}"
+                    self.feature_matrix = self.feature_matrix.assign(
+                        **{interaction_name: self.feature_matrix[pair[0]] * self.feature_matrix[pair[1]]}
+                    )
+                logger.info("Added feature interactions")
+            
+            logger.info(f"Final feature matrix shape: {self.feature_matrix.shape}")
+            
+            # Update other arrays to match
+            self.bigram_pairs = valid_pairs
+            self.target_vector = self.target_vector[valid_indices]
+            self.participants = self.participants[valid_indices]
+            if self.typing_times is not None:
+                self.typing_times = filtered_typing_times
+            
+        except Exception as e:
+            logger.error(f"Error creating feature matrix: {str(e)}")
+            raise
 
     def _update_arrays_after_filtering(self, valid_pairs: List[Tuple]) -> None:
         """
@@ -177,17 +266,54 @@ class DataPreprocessor:
         Args:
             valid_pairs: List of valid bigram pairs
         """
+        logger.info("=== Starting Array Updates ===")
+        logger.info(f"Original arrays lengths:")
+        logger.info(f"  Bigram pairs: {len(self.bigram_pairs)}")
+        logger.info(f"  Target vector: {len(self.target_vector)}")
+        logger.info(f"  Participants: {len(self.participants)}")
+        if self.typing_times is not None:
+            logger.info(f"  Typing times: {len(self.typing_times)}")
+        
         # Get indices of valid pairs
         valid_indices = [i for i, pair in enumerate(self.bigram_pairs)
                         if pair in valid_pairs]
+        logger.info(f"Number of valid indices: {len(valid_indices)}")
+        
+        # Log some sample filtering
+        if len(valid_indices) < len(self.bigram_pairs):
+            logger.info("Sample of filtered pairs:")
+            for i in range(min(5, len(self.bigram_pairs))):
+                if i not in valid_indices:
+                    pair = self.bigram_pairs[i]
+                    logger.info(f"  Filtered out: {pair}")
         
         # Update arrays
+        old_len = len(self.bigram_pairs)
         self.bigram_pairs = valid_pairs
         self.target_vector = self.target_vector[valid_indices]
         self.participants = self.participants[valid_indices]
         if self.typing_times is not None:
             self.typing_times = self.typing_times[valid_indices]
-
+        
+        logger.info(f"Updated arrays lengths:")
+        logger.info(f"  Bigram pairs: {len(self.bigram_pairs)}")
+        logger.info(f"  Target vector: {len(self.target_vector)}")
+        logger.info(f"  Participants: {len(self.participants)}")
+        if self.typing_times is not None:
+            logger.info(f"  Typing times: {len(self.typing_times)}")
+        
+        if old_len != len(valid_pairs):
+            logger.info(f"Filtered {old_len - len(valid_pairs)} pairs")
+            
+        # Verify alignment
+        arrays_aligned = (len(self.bigram_pairs) == len(self.target_vector) == 
+                        len(self.participants))
+        if self.typing_times is not None:
+            arrays_aligned = arrays_aligned and (len(self.typing_times) == len(self.bigram_pairs))
+        
+        if not arrays_aligned:
+            raise ValueError("Arrays are not properly aligned after filtering")
+    
     def add_feature_interactions(self, 
                                interaction_features: List[Tuple[str, str]]) -> None:
         """
@@ -227,17 +353,38 @@ class DataPreprocessor:
 
     def validate_data(self) -> bool:
         """
-        Perform validation checks on processed data.
+        Perform validation checks on processed data with detailed null value reporting.
         
         Returns:
             bool: True if validation passes
         """
         logger.info("Validating processed data")
         try:
-            # Check for null values
-            if self.feature_matrix.isnull().any().any():
-                raise ValueError("Feature matrix contains null values")
+            # Check for null values with detailed reporting
+            null_cols = self.feature_matrix.columns[self.feature_matrix.isnull().any()].tolist()
+            if null_cols:
+                logger.error("\n=== NULL VALUE ANALYSIS ===")
+                logger.error(f"Columns containing nulls: {null_cols}")
                 
+                # Count nulls per column
+                null_counts = self.feature_matrix.isnull().sum()
+                logger.error("\nNull counts per column:")
+                for col in null_cols:
+                    logger.error(f"  {col}: {null_counts[col]} nulls")
+                
+                # Show rows containing nulls
+                rows_with_nulls = self.feature_matrix.loc[self.feature_matrix.isnull().any(axis=1)]
+                logger.error("\nFirst few rows containing nulls:")
+                logger.error(f"\n{rows_with_nulls.head()}")
+                
+                # Show corresponding bigram pairs for null rows
+                null_indices = rows_with_nulls.index
+                logger.error("\nBigram pairs for rows with nulls:")
+                for idx in null_indices[:5]:  # Show first 5
+                    logger.error(f"  Index {idx}: {self.bigram_pairs[idx]}")
+                
+                raise ValueError("Feature matrix contains null values")
+                    
             # Check dimensions
             if len(self.feature_matrix) != len(self.target_vector):
                 raise ValueError("Feature matrix and target vector dimensions don't match")

@@ -12,7 +12,7 @@ data:
 
 # Generate and save train/test participant splits
 splits:
-  generate_splits: true  # Generate and save train/test splits?
+  generate_splits: false  # Generate and save train/test splits?
   train_ratio: 0.8      # Proportion of participants for training the Bayesian model
   splits_file: "data/splits/train_test_indices.npz"
 
@@ -25,7 +25,7 @@ layout:
 #===================#
 # Feature evaluation settings
 feature_evaluation:
-  enabled: true
+  enabled: false
   n_splits: 5
   n_samples: 1000
   test_size: 0.2
@@ -42,7 +42,7 @@ feature_evaluation:
 
 # Model settings
 model:
-  train: true
+  train: false
   inference_method: 'mcmc'  # or 'variational'
   num_samples: 2000
   chains: 8
@@ -169,12 +169,12 @@ output:
   
   # Timing frequency analysis
   frequency_timing:
-    enabled: true
+    enabled: true  # Master switch for frequency/timing analysis
     n_groups: 4
     dir: "output/frequency_timing"
     analysis: "output/frequency_timing/analysis.txt"
     relationship: "output/frequency_timing/relationship.png"
     group_directory: "output/frequency_timing/groups"
-  
+
   # Comfort scores
   scores: "output/scores/bigram_comfort_scores.csv"

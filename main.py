@@ -2,13 +2,17 @@
 Main script for keyboard layout analysis pipeline.
 
 This script orchestrates the entire keyboard layout analysis process:
-1. Data preprocessing and train/test splitting
-2. Feature extraction and evaluation
-3. Timing and frequency analysis
-4. Feature space analysis
-5. Bayesian model training and evaluation
+1. Data preprocessing
+2. Feature extraction
+3. Full dataset analyses:
+   - Timing and frequency analysis
+   - Feature space analysis
+4. Train/test splitting
+5. Split dataset analyses:
+   - Feature evaluation (using test_data)
+   - Bayesian model training (using train_data)
+   - Bayesian model testing (using test_data)
 """
-
 import logging
 import argparse
 from pathlib import Path
@@ -27,6 +31,8 @@ from bigram_pair_recommendations import (analyze_feature_space, save_feature_spa
 from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
                                save_model_results, plot_model_diagnostics, evaluate_model_performance, 
                                validate_comfort_scores, plot_sensitivity_analysis)
+
+logger = logging.getLogger(__name__)
 
 def validate_config(config: Dict[str, Any]) -> None:
     """
@@ -123,7 +129,6 @@ def create_output_directories(config: Dict[str, Any]) -> None:
             directory.mkdir(parents=True, exist_ok=True)
 
 def main():
-
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Keyboard Layout Analysis Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
@@ -171,19 +176,92 @@ def main():
         preprocessor.prepare_bigram_pairs()
         preprocessor.extract_target_vector()
         preprocessor.process_participants()
+        preprocessor.extract_typing_times()  # Add this line
         preprocessor.create_feature_matrix(
             all_feature_differences=all_feature_differences,
             feature_names=feature_names,
             config=config
         )
 
-        # Get processed data and create train/test split
+        # Get processed data BEFORE splitting
         processed_data = preprocessor.get_processed_data()
+
+        # === FULL DATASET ANALYSES === #
+
+        # Analyze bigram frequency/timing relationship if enabled
+        if config['output']['frequency_timing']['enabled']:
+            logger.info("Starting frequency/timing analysis")
+            
+            try:
+                timing_results = plot_frequency_timing_relationship(
+                    bigram_data=processed_data,
+                    bigrams=bigrams,
+                    bigram_frequencies_array=bigram_frequencies_array,
+                    output_path=config['output']['frequency_timing']['relationship']
+                )
+                
+                if 'error' in timing_results:
+                    logger.error(f"Frequency-timing analysis failed: {timing_results['error']}")
+                else:
+                    try:
+                        save_timing_analysis(
+                            timing_results, 
+                            None,  # No group comparison results needed
+                            config['output']['frequency_timing']['analysis']
+                        )
+                        logger.info("Frequency/timing analysis completed and saved")
+                        logger.info(f"Results:")
+                        logger.info(f"  Raw correlation: {timing_results['raw_correlation']:.3f} (p = {timing_results['raw_p_value']:.3e})")
+                        logger.info(f"  R-squared: {timing_results['r2']:.3f}")
+                        logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
+                    except Exception as e:
+                        logger.error(f"Error saving timing analysis: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error in frequency-timing analysis: {str(e)}")
+
+        # Evaluate feature space
+        if config['output']['feature_space']['enabled']:
+            logger.info("Analyzing feature space")
+            try:
+                feature_space_results = analyze_feature_space(
+                    feature_matrix=processed_data.feature_matrix,
+                    output_paths=config['output']['feature_space'],
+                    all_feature_differences=all_feature_differences,
+                    config=config,
+                    recommend_bigrams=config['output']['feature_space']['recommend_bigrams'],
+                    num_recommendations=config['output']['feature_space']['num_recommendations']
+                )
+                
+                if feature_space_results is None:
+                    logger.error("Feature space analysis returned no results")
+                else:
+                    # Save analysis results
+                    save_feature_space_analysis_results(
+                        feature_space_results, 
+                        config['output']['feature_space']['analysis']
+                    )
+
+                    # Log recommendations and feature space metrics
+                    logger.info(f"Feature space analysis completed:")
+                    if 'feature_space_metrics' in feature_space_results:
+                        logger.info(f"  Hull area: {feature_space_results['feature_space_metrics']['hull_area']:.3f}")
+                        logger.info(f"  Point density: {feature_space_results['feature_space_metrics']['point_density']:.3f}")
+                    if 'recommendations' in feature_space_results:
+                        logger.info(f"  Generated {len(feature_space_results['recommendations'])} bigram pair recommendations")
+            except Exception as e:
+                logger.error(f"Error in feature space analysis: {str(e)}")
+                if config['model']['train']:
+                    logger.warning("Continuing with model training despite feature space analysis failure")
+
+        # === SPLIT DATASET ANALYSES === #
+        
+        # Now create train/test splits for evaluation and modeling
         generate_train_test_splits(processed_data, config)
         train_data, test_data = manage_data_splits(processed_data, config)
 
+        # Run feature evaluation on test data
         if config['feature_evaluation']['enabled']:            
-            # Run feature evaluation
+            logger.info("Starting feature evaluation on test data")
             feature_eval_results = evaluate_feature_sets(
                 feature_matrix=test_data.feature_matrix,
                 target_vector=test_data.target_vector,
@@ -195,56 +273,11 @@ def main():
                 n_splits=config['feature_evaluation']['n_splits'],
                 n_samples=config['feature_evaluation']['n_samples']
             )
-            
             logger.info("Feature evaluation completed")
 
-        # Analyze bigram frequency/timing relationship using all of the data
-        if config['output']['frequency_timing']['enabled']:
-            logger.info("Analyzing timing-frequency relationship")
-            timing_results = plot_frequency_timing_relationship(
-                bigram_data=processed_data,
-                bigrams=bigrams,
-                bigram_frequencies_array=bigram_frequencies_array,
-                output_path=config['output']['frequency_timing']['relationship']
-            )
-            # Create timing by frequency groups analysis using all of the data
-            group_comparison_results = plot_timing_by_frequency_groups(
-                processed_data,
-                bigrams,
-                bigram_frequencies_array,
-                output_base_path=config['output']['frequency_timing']['group_directory'],
-                n_groups=config['output']['frequency_timing']['n_groups']
-            )
-            save_timing_analysis(timing_results, 
-                               group_comparison_results,
-                               config['output']['frequency_timing']['analysis'])
-
-        # Evaluate feature space using all of the data and generate recommendations
-        if config['output']['feature_space']['enabled']:
-            logger.info("Analyzing feature space")
-            feature_space_results = analyze_feature_space(
-                feature_matrix=processed_data.feature_matrix,
-                output_paths=config['output']['feature_space'],
-                all_feature_differences=all_feature_differences,
-                config=config,
-                recommend_bigrams=config['output']['feature_space']['recommend_bigrams'],
-                num_recommendations=config['output']['feature_space']['num_recommendations']
-            )
-
-            # Save analysis results
-            save_feature_space_analysis_results(feature_space_results, 
-                                              config['output']['feature_space']['analysis'])
-
-            # Log recommendations and feature space metrics
-            logger.info(f"Feature space analysis completed:")
-            logger.info(f"  Hull area: {feature_space_results['feature_space_metrics']['hull_area']:.3f}")
-            logger.info(f"  Point density: {feature_space_results['feature_space_metrics']['point_density']:.3f}")
-            if 'recommendations' in feature_space_results:
-                logger.info(f"  Generated {len(feature_space_results['recommendations'])} bigram pair recommendations")
-
-        # Train model if requested
+        # Train model on training data if requested
         if config['model']['train']:
-            logger.info("Training Bayesian GLMM")
+            logger.info("Training Bayesian GLMM on training data")
             
             # Train model
             trace, model, priors = train_bayesian_glmm(
@@ -280,7 +313,7 @@ def main():
                     )
                 )
 
-            # Calculate comfort scores
+            # Calculate comfort scores using the trained model
             if config['model'].get('scoring', {}).get('enabled', False):
                 logger.info("Calculating comfort scores")
                 comfort_scores = calculate_bigram_comfort_scores(
@@ -299,7 +332,7 @@ def main():
                                      columns=['comfort_score']).to_csv(output_path)
 
             # Evaluate model on test data
-            if config['model'].get('evaluate_test', True):  # Make evaluation optional
+            if config['model'].get('evaluate_test', True):
                 logger.info("Evaluating model on test data")
                 test_score = evaluate_model_performance(
                     trace=trace,
@@ -312,7 +345,6 @@ def main():
                 logger.info(f"Test set performance metrics:")
                 for metric, value in test_score.items():
                     logger.info(f"  {metric}: {value:.3f}")
-
 
         logger.info("Pipeline completed successfully")
 
