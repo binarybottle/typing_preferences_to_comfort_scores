@@ -10,7 +10,7 @@ data:
 
   # Participant splits
   splits:
-    generate: true
+    generate: false # One time per file (2024-11-23 for output_all4studies_406participants)
     train_ratio: 0.8
   
   # Keyboard layout
@@ -21,7 +21,7 @@ data:
 analysis:
   # Feature evaluation
   feature_evaluation:
-    enabled: true
+    enabled: false
     n_splits: 5
     n_samples: 1000
     test_size: 0.2
@@ -37,14 +37,14 @@ analysis:
 
   # Feature space analysis
   feature_space:
-    enabled: true
+    enabled: false
     check_multicollinearity: true
     recommend_bigrams: true
     num_recommendations: 30
 
   # Frequency/timing analysis
   frequency_timing:
-    enabled: true
+    enabled: false
     n_groups: 4
 
 # Model settings

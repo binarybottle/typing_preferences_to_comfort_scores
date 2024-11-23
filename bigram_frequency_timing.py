@@ -76,7 +76,6 @@ def plot_frequency_timing_relationship(
     # Dictionary to collect timing data for each unique bigram
     bigram_timing_data = {}
     
-    logger.info("\n=== Processing Bigram Pairs ===")
     logger.info(f"Total pairs to process: {len(bigram_data.bigram_pairs)}")
     
     # Debug value ranges
@@ -125,7 +124,6 @@ def plot_frequency_timing_relationship(
     frequencies = np.array(frequencies, dtype=float)
     
     # Debug data before correlation
-    logger.info("\n=== Data Validation ===")
     logger.info(f"Number of valid pairs: {len(typing_times)}")
     logger.info(f"Any NaN in times: {np.isnan(typing_times).any()}")
     logger.info(f"Any NaN in frequencies: {np.isnan(frequencies).any()}")
@@ -178,7 +176,6 @@ def plot_frequency_timing_relationship(
         plt.close()
         
         # Log matching results
-        logger.info("\n=== ANALYSIS RESULTS ===")
         logger.info(f"Unique bigrams matched: {len(matched_bigrams)}")
         logger.info(f"Sample of matched bigrams:")
         for i in range(min(5, len(matched_bigrams))):

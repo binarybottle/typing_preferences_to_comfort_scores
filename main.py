@@ -30,7 +30,7 @@ from bigram_pair_feature_evaluation import evaluate_feature_sets
 from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
 from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
                                save_model_results, plot_model_diagnostics, evaluate_model_performance, 
-                               validate_comfort_scores, plot_sensitivity_analysis)
+                               validate_comfort_scores)
 
 logger = logging.getLogger(__name__)
 
@@ -316,15 +316,6 @@ def main():
                     trace=trace,
                     output_base_path=config['paths']['model']['diagnostics'],
                     inference_method=config['model']['inference_method']
-                )
-
-                plot_sensitivity_analysis(
-                    parameter_estimates=trace,
-                    design_features=config['features']['groups']['design'],
-                    control_features=config['features']['groups']['control'],
-                    output_path=config['paths']['model']['sensitivity'].format(
-                        inference_method=config['model']['inference_method']
-                    )
                 )
 
             # Calculate comfort scores using the trained model

@@ -147,6 +147,7 @@ def train_bayesian_glmm(
         
         if inference_method.lower() == 'variational':
             # Use ADVI for variational inference
+            logger.info(f"Note: Using variational inference can lead to shape validation failure")
             approx = pm.fit(
                 n=num_samples,
                 method='advi',
@@ -178,80 +179,132 @@ def train_bayesian_glmm(
         return trace, model, priors
    
 def calculate_bigram_comfort_scores(
-       trace: az.InferenceData,
-       feature_matrix: pd.DataFrame,
-       features_for_design: List[str],
-       mirror_left_right_scores: bool = True) -> Dict[Tuple[str, str], float]:
-   """
-    Calculate comfort scores for bigram pairs using trained model parameters.
+    trace: az.InferenceData,
+    feature_matrix: pd.DataFrame,
+    features_for_design: List[str],
+    mirror_left_right_scores: bool = True
+) -> Dict[Tuple[str, str], float]:
+    """Calculate comfort scores for bigram pairs using trained model parameters."""
+    logger.info(f"Calculating comfort scores for {len(feature_matrix)} bigram pairs")
     
-    Takes the posterior distributions from a trained model and computes expected
-    comfort scores for bigram pairs. Can optionally mirror scores from left to
-    right hand keys.
+    # Extract design feature effects from posterior
+    posterior_samples = {}
+    for param in features_for_design:
+        if param in trace.posterior.variables:
+            samples = az.extract(trace, var_names=param).values
+            if samples.size > 0:
+                posterior_samples[param] = samples
     
-    Args:
-        trace: ArviZ InferenceData object containing posterior samples
-        feature_matrix: DataFrame of feature values for bigram pairs
-        features_for_design: List of feature names to use for score calculation
-        mirror_left_right_scores: If True, mirror scores from left to right hand keys
+    if not posterior_samples:
+        logger.error("No valid posterior samples found")
+        return {}
+    
+    # Normalize index format
+    normalized_index = []
+    for idx in feature_matrix.index:
+        norm_bigram = normalize_bigram_format(idx)
+        if norm_bigram:
+            normalized_index.append(norm_bigram)
+        else:
+            logger.warning(f"Could not normalize bigram format: {idx}")
+    
+    # Create new DataFrame with normalized index
+    feature_matrix = feature_matrix.copy()
+    feature_matrix.index = normalized_index
+    
+    logger.info(f"Processing {len(normalized_index)} normalized bigram pairs")
+    
+    scores = {}
+    sample_size = next(iter(posterior_samples.values())).shape[0]
+    
+    for idx, features in feature_matrix.iterrows():
+        effect = np.zeros(sample_size, dtype=np.float64)
         
-    Returns:
-        Dictionary mapping bigram pairs to their predicted comfort scores
-   """   
-   # Extract design feature effects from posterior
-   posterior_samples = {param: az.extract(trace, var_names=param).values
-                       for param in features_for_design 
-                       if param in feature_matrix.columns}
-   
-   # Verify all needed features exist
-   missing = set(features_for_design) - set(feature_matrix.columns)
-   if missing:
-       raise ValueError(f"Missing features: {missing}")
-       
-   scores = {}
-   for bigram, features in feature_matrix.iterrows():
-       effect = np.zeros(len(next(iter(posterior_samples.values()))))
-       for param, samples in posterior_samples.items():
-           effect += samples * features[param]
-       scores[bigram] = float(np.mean(effect))
-   
-   # Normalize and mirror if requested
-   scores = normalize_scores(scores)
-   if mirror_left_right_scores:
-       scores = add_mirrored_scores(scores)
-       
-   return scores
+        for param, samples in posterior_samples.items():
+            if param in features:
+                feature_value = features[param]
+                if not np.isnan(feature_value):
+                    effect += samples * feature_value
+        
+        if effect.size > 0 and not np.all(np.isnan(effect)):
+            scores[idx] = float(np.nanmean(effect))
+    
+    logger.info(f"Generated scores for {len(scores)} bigram pairs")
+    
+    if scores:
+        scores = normalize_scores(scores)
+        if mirror_left_right_scores:
+            scores = add_mirrored_scores(scores)
+        logger.info(f"Final number of scores (including mirrored): {len(scores)}")
+    
+    return scores
 
 def validate_comfort_scores(
-   comfort_scores: Dict[Tuple[str, str], float],
-   test_data: ProcessedData
+    comfort_scores: Dict[Tuple[str, str], float],
+    test_data: 'ProcessedData'
 ) -> Dict[str, float]:
-   """Validate comfort scores against held-out test data."""
-   
-   validation_metrics = {}
-   
-   # Convert scores to preferences
-   predicted_prefs = []
-   actual_prefs = []
-   
-   for (bigram1, bigram2), pref in test_data.bigram_pairs:
-       if bigram1 in comfort_scores and bigram2 in comfort_scores:
-           pred = comfort_scores[bigram1] - comfort_scores[bigram2]
-           predicted_prefs.append(pred)
-           actual_prefs.append(pref)
-           
-   predicted_prefs = np.array(predicted_prefs)
-   actual_prefs = np.array(actual_prefs)
-   
-   # Calculate metrics
-   validation_metrics['accuracy'] = np.mean(
-       np.sign(predicted_prefs) == np.sign(actual_prefs)
-   )
-   validation_metrics['correlation'] = stats.spearmanr(
-       predicted_prefs, actual_prefs
-   )[0]
-   
-   return validation_metrics
+    """Validate comfort scores against held-out test data."""
+    validation_metrics = {}
+    
+    if not hasattr(test_data, 'bigram_pairs'):
+        logger.error("Test data missing bigram pairs attribute")
+        return validation_metrics
+        
+    logger.info(f"Test data bigram pairs: {len(test_data.bigram_pairs)}")
+    
+    # Convert scores to preferences
+    predicted_prefs = []
+    actual_prefs = []
+    skipped_pairs = set()
+    
+    for (bigram1, bigram2), pref in test_data.bigram_pairs:
+        # Normalize both bigrams
+        norm_bigram1 = normalize_bigram_format(bigram1)
+        norm_bigram2 = normalize_bigram_format(bigram2)
+        
+        if norm_bigram1 is None or norm_bigram2 is None:
+            logger.debug(f"Could not normalize bigrams: {bigram1}, {bigram2}")
+            continue
+        
+        if norm_bigram1 in comfort_scores and norm_bigram2 in comfort_scores:
+            pred = comfort_scores[norm_bigram1] - comfort_scores[norm_bigram2]
+            predicted_prefs.append(pred)
+            actual_prefs.append(pref)
+        else:
+            if (norm_bigram1, norm_bigram2) not in skipped_pairs:
+                missing = []
+                if norm_bigram1 not in comfort_scores:
+                    missing.append(str(bigram1))
+                if norm_bigram2 not in comfort_scores:
+                    missing.append(str(bigram2))
+                logger.info(f"Skipping pair: {missing} - Missing in comfort scores")
+                skipped_pairs.add((norm_bigram1, norm_bigram2))
+    
+    predicted_prefs = np.array(predicted_prefs)
+    actual_prefs = np.array(actual_prefs)
+    
+    logger.info(f"Predicted prefs: {len(predicted_prefs)}, Actual prefs: {len(actual_prefs)}")
+    
+    if len(predicted_prefs) > 0:
+        validation_metrics['accuracy'] = float(np.mean(
+            np.sign(predicted_prefs) == np.sign(actual_prefs)
+        ))
+        
+        if len(predicted_prefs) > 1:
+            validation_metrics['correlation'] = float(stats.spearmanr(
+                predicted_prefs, actual_prefs
+            )[0])
+    else:
+        logger.warning("Empty arrays detected: Skipping accuracy calculation.")
+    
+    # Add coverage metric
+    total_pairs = len(test_data.bigram_pairs)
+    pairs_evaluated = len(predicted_prefs)
+    validation_metrics['coverage'] = pairs_evaluated / total_pairs if total_pairs > 0 else 0.0
+    
+    logger.info(f"Coverage: {validation_metrics['coverage']:.2%} ({pairs_evaluated}/{total_pairs} pairs)")
+    
+    return validation_metrics
 
 #=========================#
 # Model Evaluation       #
@@ -285,91 +338,59 @@ def evaluate_model_performance(
     # Get posterior means for parameters
     posterior = trace.posterior
     
-    # Calculate predictions using posterior means
-    predictions = np.zeros_like(target_vector)
+    # Initialize predictions array as float64 to avoid type casting issues
+    predictions = np.zeros_like(target_vector, dtype=np.float64)
+    
+    # Ensure target vector is float64 for consistent calculations
+    target_vector = target_vector.astype(np.float64)
     
     # Add fixed effects
     for feature in design_features + control_features:
         if feature in feature_matrix.columns:
-            effect = float(posterior[feature].mean())
-            predictions += effect * feature_matrix[feature].values
-            
+            # Handle case where feature might be missing in posterior
+            if feature in posterior:
+                effect = float(posterior[feature].mean())
+                # Ensure feature values are float64
+                feature_values = feature_matrix[feature].values.astype(np.float64)
+                predictions += effect * feature_values
+    
     # Add random participant effects if present
     if 'participant_offset' in posterior:
+        # Get unique participants and their effects
         unique_participants = np.unique(participants)
-        participant_effects = posterior['participant_offset'].mean().values
+        participant_effects = posterior['participant_offset'].mean(dim=['chain', 'draw']).values
+        
+        # Ensure participant effects are float64
+        if not isinstance(participant_effects, np.ndarray):
+            participant_effects = np.array([participant_effects], dtype=np.float64)
+        else:
+            participant_effects = participant_effects.astype(np.float64)
+        
+        # Create a mapping from participant ID to effect index
+        participant_map = {p: i for i, p in enumerate(unique_participants)}
+        
+        # Add participant effects to predictions
         for i, p in enumerate(participants):
-            p_idx = np.where(unique_participants == p)[0][0]
-            predictions[i] += participant_effects[p_idx]
+            if p in participant_map:
+                p_idx = participant_map[p]
+                if p_idx < len(participant_effects):
+                    predictions[i] += participant_effects[p_idx]
     
-    # Calculate metrics
+    # Calculate metrics using float64 arrays
+    target_mean = np.mean(target_vector)
     r2 = 1 - (np.sum((target_vector - predictions) ** 2) / 
-              np.sum((target_vector - np.mean(target_vector)) ** 2))
+              np.sum((target_vector - target_mean) ** 2))
     
     rmse = np.sqrt(np.mean((target_vector - predictions) ** 2))
     mae = np.mean(np.abs(target_vector - predictions))
     correlation, _ = stats.spearmanr(predictions, target_vector)
     
     return {
-        'r2': r2,
-        'rmse': rmse,
-        'mae': mae,
-        'correlation': correlation
+        'r2': float(r2),
+        'rmse': float(rmse),
+        'mae': float(mae),
+        'correlation': float(correlation)
     }
-
-def perform_sensitivity_analysis(
-        feature_matrix: pd.DataFrame,
-        target_vector: np.ndarray,
-        participants: np.ndarray,
-        design_features: List[str],
-        control_features: List[str],
-        prior_scale_factors: List[float]) -> Dict[str, Any]:
-    """Perform sensitivity analysis on model priors."""
-    logger.info("Starting sensitivity analysis")
-    
-    parameter_estimates = {}
-    convergence_metrics = {}
-    sampling_issues = {}
-    
-    baseline_sds = {feature: np.std(feature_matrix[feature])
-                   for feature in design_features + control_features}
-    
-    for scale in prior_scale_factors:
-        config_name = f"scale_{scale:.1f}"
-        logger.info(f"Testing prior scale factor: {scale}")
-        
-        try:
-            trace, _, _ = train_bayesian_glmm(
-                feature_matrix=feature_matrix,
-                target_vector=target_vector,
-                participants=participants,
-                design_features=design_features,
-                control_features=control_features,
-                num_samples=1000,
-                chains=2
-            )
-            
-            summary = az.summary(trace)
-            parameter_estimates[config_name] = summary
-            
-            convergence_metrics[config_name] = {
-                'r_hat': summary['r_hat'].values,
-                'ess_bulk': summary['ess_bulk'].values,
-                'ess_tail': summary['ess_tail'].values
-            }
-            
-        except Exception as e:
-            logger.error(f"Error with scale factor {scale}: {str(e)}")
-            sampling_issues[config_name] = str(e)
-            continue
-    
-    results = {
-        'parameter_estimates': parameter_estimates,
-        'convergence_metrics': convergence_metrics,
-        'sampling_issues': sampling_issues
-    }
-    
-    return results
 
 #=========================#
 # Model Visualization    #
@@ -415,54 +436,6 @@ def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) 
             
     except Exception as e:
         logger.warning(f"Could not create some diagnostic plots: {str(e)}")
-
-def plot_sensitivity_analysis(parameter_estimates: Dict[str, pd.DataFrame],
-                              design_features: List[str],
-                              control_features: List[str],
-                              output_path: str) -> None:
-    """
-    Create visualization of sensitivity analysis results.
-    
-    Args:
-        parameter_estimates: Dictionary of parameter estimates
-        design_features: List of design features
-        control_features: List of control features
-        output_path: Path to save the plot
-    """
-    plt.figure(figsize=(12, 6))
-    
-    # Design features plot
-    plt.subplot(2, 1, 1)
-    data = []
-    labels = []
-    for feature in design_features:
-        means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
-        data.append(means)
-        labels.append(feature)
-    
-    plt.boxplot(data, labels=labels)
-    plt.title('Design Feature Effect Estimates')
-    plt.ylabel('Effect Size')
-    plt.grid(True, alpha=0.3)
-    
-    # Control features plot
-    if control_features:
-        plt.subplot(2, 1, 2)
-        data = []
-        labels = []
-        for feature in control_features:
-            means = [est.loc[feature, 'mean'] for est in parameter_estimates.values()]
-            data.append(means)
-            labels.append(feature)
-        
-        plt.boxplot(data, labels=labels)
-        plt.title('Control Feature Effect Estimates')
-        plt.ylabel('Effect Size')
-        plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
 
 #=========================#
 # Model Persistence      #
@@ -611,23 +584,105 @@ def validate_inputs(feature_matrix: pd.DataFrame,
         raise ValueError("Feature matrix contains null values")
     return True
 
+def normalize_bigram_format(bigram):
+    """
+    Normalize different bigram formats to a consistent tuple format.
+    
+    Handles:
+    - String tuples: "('a', 'b')"
+    - List of single-char tuples: ["('a',)", "('b',)"]
+    - Simple strings: "ab"
+    - Existing tuples: ('a', 'b')
+    
+    Returns:
+    - Tuple of two characters: ('a', 'b')
+    """
+    if isinstance(bigram, tuple) and len(bigram) == 2:
+        return bigram
+        
+    if isinstance(bigram, list) and len(bigram) == 2:
+        # Handle ["('a',)", "('b',)"] format
+        chars = []
+        for item in bigram:
+            if isinstance(item, str) and item.startswith("('") and item.endswith(",)"):
+                # Extract character from "('a',)" format
+                char = item[2]
+                chars.append(char)
+        if len(chars) == 2:
+            return tuple(chars)
+            
+    if isinstance(bigram, str):
+        if bigram.startswith("(") and bigram.endswith(")"):
+            # Handle "('a', 'b')" format
+            try:
+                return eval(bigram)
+            except:
+                pass
+        elif len(bigram) == 2:
+            # Handle "ab" format
+            return tuple(bigram)
+    
+    return None
+
 def normalize_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
-    """Normalize comfort scores to 0-1 range."""
-    min_score = min(scores.values())
-    max_score = max(scores.values())
-    return {bigram: (score - min_score) / (max_score - min_score)
-            for bigram, score in scores.items()}
+    """
+    Normalize comfort scores to 0-1 range.
+    
+    Args:
+        scores: Dictionary of bigram pairs to raw scores
+        
+    Returns:
+        Dictionary of bigram pairs to normalized scores between 0 and 1
+    """
+    if not scores:
+        return {}
+        
+    values = np.array(list(scores.values()))
+    valid_values = values[~np.isnan(values)]
+    
+    if len(valid_values) == 0:
+        return scores
+        
+    min_score = np.min(valid_values)
+    max_score = np.max(valid_values)
+    
+    # Handle case where all scores are the same
+    if np.isclose(min_score, max_score):
+        return {k: 0.5 for k in scores.keys()}
+    
+    return {
+        bigram: (score - min_score) / (max_score - min_score)
+        if not np.isnan(score) else 0.0
+        for bigram, score in scores.items()
+    }
 
 def add_mirrored_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str, str], float]:
-    """Add mirrored scores for right hand keys."""
+    """
+    Add mirrored scores for right hand keys.
+    
+    Args:
+        scores: Dictionary of bigram pairs to scores
+        
+    Returns:
+        Dictionary including original and mirrored scores
+    """
     left_keys = "qwertasdfgzxcvb"
     right_keys = "poiuy;lkjh/.,mn"
     key_mapping = dict(zip(left_keys, right_keys))
     
     mirrored = {}
     for bigram, score in scores.items():
-        right_bigram = (key_mapping.get(bigram[0], bigram[0]),
-                       key_mapping.get(bigram[1], bigram[1]))
-        mirrored[right_bigram] = score
+        if isinstance(bigram, tuple) and len(bigram) == 2 and not np.isnan(score):
+            char1, char2 = bigram
+            right_char1 = key_mapping.get(char1, char1)
+            right_char2 = key_mapping.get(char2, char2)
+            right_bigram = (right_char1, right_char2)
+            mirrored[right_bigram] = score
     
-    return {**scores, **mirrored}
+    # Combine original and mirrored scores
+    combined = {**scores, **mirrored}
+    logger.debug(f"Added {len(mirrored)} mirrored scores to {len(scores)} original scores")
+    return combined
+
+
+
