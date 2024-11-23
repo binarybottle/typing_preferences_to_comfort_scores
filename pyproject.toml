@@ -19,6 +19,7 @@ tqdm = "^4.66.5"
 seaborn = "^0.13.2"
 pyyaml = "^6.0.2"
 pyjson = "^1.4.1"
+colorama = "^0.4.6"
 
 [tool.poetry.group.dev.dependencies]
 scipy = "^1.14.1"

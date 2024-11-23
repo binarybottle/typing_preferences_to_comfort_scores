@@ -19,6 +19,10 @@ from sklearn.preprocessing import StandardScaler
 from scipy import stats
 import json
 import logging
+import sys
+from datetime import datetime
+import colorama
+from colorama import Fore, Style
 
 from data_processing import ProcessedData
 
@@ -37,7 +41,7 @@ def train_bayesian_glmm(
    num_samples: int = 1000,
    chains: int = 4
 ) -> Tuple:
-   """
+    """
     Train Bayesian Generalized Linear Mixed Model (GLMM) for keyboard layout analysis.
     
     This function fits a hierarchical model that accounts for:
@@ -61,60 +65,86 @@ def train_bayesian_glmm(
         - model: Fitted PyMC model
         - priors: Dictionary of model prior distributions
     """
-   logger.info("Starting Bayesian GLMM training")
+    logger.info("MODEL: Starting Bayesian GLMM training")
+    logger.info("MODEL: Validating features...")
+    
+    # For the MCMC sampling progress
+    class SamplingProgress:
+        def __init__(self, total_chains):
+            self.total_chains = total_chains
+            self.current_chain = 0
+        
+        def update(self, chain_num, progress):
+            logger.info(f"MODEL: Chain {chain_num+1}/{self.total_chains} "
+                       f"[{'='*int(progress*20)}{' '*(20-int(progress*20))}] "
+                       f"{progress*100:.1f}%")
 
-   # Scale features
-   scaler = StandardScaler()
-   X_scaled = pd.DataFrame(
-       scaler.fit_transform(feature_matrix),
-       columns=feature_matrix.columns
-   )
+    # Validate features
+    available_features = set(feature_matrix.columns)
+    missing_features = []
 
-   # Create participant mapping for indexing
-   unique_participants = np.unique(participants)
-   participant_map = {p: i for i, p in enumerate(unique_participants)}
-   n_participants = len(unique_participants)
+    for feature in design_features + control_features:
+        if feature not in available_features:
+            missing_features.append(feature)
 
-   with pm.Model() as model:
-       # Priors for design features
-       design_effects = {
-           feat: pm.Normal(feat, mu=0, sigma=1)
-           for feat in design_features
-       }
+    if missing_features:
+        raise ValueError(
+            f"The following features are not available in the feature matrix: "
+            f"{missing_features}\nAvailable features are: {sorted(available_features)}"
+        )
 
-       # Priors for control features
-       control_effects = {
-           feat: pm.Normal(feat, mu=0, sigma=1)
-           for feat in control_features
-       }
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = pd.DataFrame(
+        scaler.fit_transform(feature_matrix),
+        columns=feature_matrix.columns
+    )
 
-       # Random effects for participants
-       participant_sigma = pm.HalfNormal('participant_sigma', sigma=1)
-       participant_offset = pm.Normal('participant_offset',
+    # Create participant mapping for indexing
+    unique_participants = np.unique(participants)
+    participant_map = {p: i for i, p in enumerate(unique_participants)}
+    n_participants = len(unique_participants)
+
+    with pm.Model() as model:
+        # Priors for design features
+        design_effects = {
+            feat: pm.Normal(feat, mu=0, sigma=1)
+            for feat in design_features
+        }
+
+        # Priors for control features
+        control_effects = {
+            feat: pm.Normal(feat, mu=0, sigma=1)
+            for feat in control_features
+        }
+
+        # Random effects for participants
+        participant_sigma = pm.HalfNormal('participant_sigma', sigma=1)
+        participant_offset = pm.Normal('participant_offset',
                                     mu=0,
                                     sigma=participant_sigma,
                                     shape=n_participants)
 
-       # Error term
-       sigma = pm.HalfNormal('sigma', sigma=1)
+        # Error term
+        sigma = pm.HalfNormal('sigma', sigma=1)
 
-       # Expected value combining fixed and random effects
-       mu = 0
-       # Add design feature effects
-       for feat in design_features:
-           mu += design_effects[feat] * X_scaled[feat]
-       # Add control feature effects
-       for feat in control_features:
-           mu += control_effects[feat] * X_scaled[feat]
-       # Add participant random effects
-       mu += participant_offset[[participant_map[p] for p in participants]]
+        # Expected value combining fixed and random effects
+        mu = 0
+        # Add design feature effects
+        for feat in design_features:
+            mu += design_effects[feat] * X_scaled[feat]
+        # Add control feature effects
+        for feat in control_features:
+            mu += control_effects[feat] * X_scaled[feat]
+        # Add participant random effects
+        mu += participant_offset[[participant_map[p] for p in participants]]
 
-       # Likelihood
-       likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
+        # Likelihood
+        likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
 
-       # Sample using NUTS
-       logger.info(f"Using {inference_method} inference")
-       trace = pm.sample(
+        # Sample using NUTS
+        logger.info(f"Using {inference_method} inference")
+        trace = pm.sample(
             draws=num_samples,
             tune=2000,
             chains=chains,
@@ -122,19 +152,19 @@ def train_bayesian_glmm(
             return_inferencedata=True,
             compute_convergence_checks=True,
             cores=1
-       )
+        )
 
-       # Collect priors
-       priors = {
-           'design_effects': design_effects,
-           'control_effects': control_effects,
-           'participant_sigma': participant_sigma,
-           'sigma': sigma
-       }
+        # Collect priors
+        priors = {
+            'design_effects': design_effects,
+            'control_effects': control_effects,
+            'participant_sigma': participant_sigma,
+            'sigma': sigma
+        }
 
-       logger.info("Model training completed successfully")
+        logger.info("Model training completed successfully")
 
-       return trace, model, priors
+        return trace, model, priors
    
 def calculate_bigram_comfort_scores(
        trace: az.InferenceData,
@@ -591,3 +621,111 @@ def add_mirrored_scores(scores: Dict[Tuple[str, str], float]) -> Dict[Tuple[str,
     
     return {**scores, **mirrored}
 
+#=========================#
+# Logging Functions       #
+#=========================#
+class ConsoleFormatter(logging.Formatter):
+    """Formatter for console output with colors and visual markers."""
+    
+    COLORS = {
+        'DEBUG': Fore.BLUE,
+        'INFO': Fore.GREEN,
+        'WARNING': Fore.YELLOW,
+        'ERROR': Fore.RED,
+        'CRITICAL': Fore.RED + Style.BRIGHT
+    }
+    
+    MARKERS = {
+        'DATA': '[DATA]',
+        'MODEL': '[MODEL]',
+        'EVALUATION': '[EVAL]',
+        'FEATURE': '[FEAT]',
+        'TIMING': '[TIME]',
+        'WARNING': '[WARN]',
+        'ERROR': '[ERR]'
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Add timestamp
+        timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
+        
+        # Determine section
+        section = 'OTHER'
+        for key in self.MARKERS:
+            if key in record.msg.upper():
+                section = key
+                break
+        
+        # Color based on level
+        color = self.COLORS.get(record.levelname, '')
+        
+        # Format the message
+        record.msg = f"{timestamp} {self.MARKERS.get(section, '[-]')} {color}{record.msg}{Style.RESET_ALL}"
+        
+        return super().format(record)
+
+class FileFormatter(logging.Formatter):
+    """Clean formatter for file output without colors or special characters."""
+    
+    def format(self, record: logging.LogRecord) -> str:
+        # Extract section from message if present
+        section = 'OTHER'
+        for key in ['DATA', 'MODEL', 'EVALUATION', 'FEATURE', 'TIMING']:
+            if key in record.msg.upper():
+                section = key
+                break
+        
+        # Format with standard timestamp, level, and section
+        return f"{self.formatTime(record)} - {record.levelname} - {section} - {record.msg}"
+
+def setup_logging(config: Dict[str, Any]) -> None:
+    """Setup dual-format logging for console and file output."""
+    # Initialize colorama for Windows compatibility
+    colorama.init()
+    
+    # Create formatters
+    console_formatter = ConsoleFormatter('%(message)s')
+    file_formatter = FileFormatter()
+    
+    # Setup console handler with colored output
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(console_formatter)
+    
+    # Setup file handler with clean output
+    file_handler = logging.FileHandler(config['paths']['logs'])
+    file_handler.setFormatter(file_formatter)
+    
+    # Setup root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(config['logging']['level'])
+    
+    # Remove any existing handlers
+    root_logger.handlers = []
+    
+    # Add our handlers
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+
+# Example logging calls
+def log_examples():
+    logger = logging.getLogger(__name__)
+    
+    # These will appear differently in console vs log file
+    logger.info("DATA: Loading dataset...")
+    logger.info("MODEL: Starting training...")
+    logger.warning("MODEL: High correlation detected")
+    logger.error("MODEL: Failed to converge")
+
+"""
+Console output will look like:
+10:45:23 [DATA] Loading dataset...
+10:45:24 [MODEL] Starting training...
+10:45:25 [MODEL] High correlation detected
+10:45:26 [MODEL] Failed to converge
+
+Log file will contain:
+2024-11-23 10:45:23,456 - INFO - DATA - Loading dataset...
+2024-11-23 10:45:24,789 - INFO - MODEL - Starting training...
+2024-11-23 10:45:25,123 - WARNING - MODEL - High correlation detected
+2024-11-23 10:45:26,456 - ERROR - MODEL - Failed to converge
+"""

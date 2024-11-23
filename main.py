@@ -45,24 +45,38 @@ def validate_config(config: Dict[str, Any]) -> None:
         ValueError: If required configuration is missing or invalid
     """
     required_sections = [
-        'data', 'splits', 'layout', 'features', 'feature_evaluation',
-        'model', 'output', 'logging'
+        'data',           # Data settings including file, splits, layout
+        'paths',          # All file/directory paths
+        'analysis',       # Analysis settings
+        'features',       # Feature definitions and groups
+        'model',          # Model settings
+        'logging'         # Logging settings
     ]
     
     for section in required_sections:
         if section not in config:
             raise ValueError(f"Missing required config section: {section}")
     
-    # Validate model settings
-    if 'model' in config:
-        model_config = config['model']
-        if 'train' not in model_config:
-            raise ValueError("Missing 'train' setting in model config")
-        if model_config['train']:
-            required_model_settings = ['inference_method', 'num_samples', 'chains']
-            for setting in required_model_settings:
-                if setting not in model_config:
-                    raise ValueError(f"Missing required model setting: {setting}")
+    # Validate data section
+    required_data_settings = ['file', 'splits', 'layout']
+    for setting in required_data_settings:
+        if setting not in config['data']:
+            raise ValueError(f"Missing required data setting: {setting}")
+            
+    # Validate splits settings
+    if not all(key in config['data']['splits'] for key in ['generate', 'train_ratio']):
+        raise ValueError("Missing required splits settings")
+    
+    # Validate layout settings
+    if 'left_chars' not in config['data']['layout']:
+        raise ValueError("Missing left_chars in layout settings")
+    
+    # Validate model settings if training enabled
+    if config['model'].get('train', False):
+        required_model_settings = ['inference_method', 'num_samples', 'chains']
+        for setting in required_model_settings:
+            if setting not in config['model']:
+                raise ValueError(f"Missing required model setting: {setting}")
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """Setup logging configuration."""
@@ -90,37 +104,26 @@ def create_output_directories(config: Dict[str, Any]) -> None:
         config: Configuration dictionary containing output paths
     """
     dirs_to_create = [
-        # Base directories
-        Path(config['output']['base_dir']),
-        Path(config['output']['logs']),
-        
-        # Feature evaluation
-        Path(config['output']['feature_evaluation']['dir']),
-        
-        # Feature space
-        Path(config['output']['feature_space']['dir']),
-        Path(config['output']['feature_space']['analysis']).parent,
-        Path(config['output']['feature_space']['recommendations']).parent,
-        Path(config['output']['feature_space']['pca']).parent,
-        Path(config['output']['feature_space']['bigram_graph']).parent,
-        Path(config['output']['feature_space']['underrepresented']).parent,
-        
-        # Frequency timing
-        Path(config['output']['frequency_timing']['dir']),
-        Path(config['output']['frequency_timing']['analysis']).parent,
-        Path(config['output']['frequency_timing']['relationship']).parent,
-        
-        # Model outputs
-        Path(config['output']['model']['dir']),
-        Path(config['output']['model']['results']).parent,
-        Path(config['output']['model']['diagnostics']).parent,
-        Path(config['output']['model']['forest']).parent,
-        Path(config['output']['model']['posterior']).parent,
-        Path(config['output']['model']['participant_effects']).parent,
-        Path(config['output']['model']['sensitivity']).parent,
-        
-        # Scores
-        Path(config['output']['scores']).parent
+        Path(config['paths']['base']),
+        Path(config['paths']['logs']),
+        Path(config['paths']['feature_evaluation']),
+        Path(config['paths']['feature_space']['dir']),
+        Path(config['paths']['feature_space']['analysis']).parent,
+        Path(config['paths']['feature_space']['recommendations']).parent,
+        Path(config['paths']['feature_space']['pca']).parent,
+        Path(config['paths']['feature_space']['bigram_graph']).parent,
+        Path(config['paths']['feature_space']['underrepresented']).parent,
+        Path(config['paths']['frequency_timing']['dir']),
+        Path(config['paths']['frequency_timing']['analysis']).parent,
+        Path(config['paths']['frequency_timing']['relationship']).parent,
+        Path(config['paths']['model']['dir']),
+        Path(config['paths']['model']['results']).parent,
+        Path(config['paths']['model']['diagnostics']).parent,
+        Path(config['paths']['model']['forest']).parent,
+        Path(config['paths']['model']['posterior']).parent,
+        Path(config['paths']['model']['participant_effects']).parent,
+        Path(config['paths']['model']['sensitivity']).parent,
+        Path(config['paths']['scores']).parent
     ]
 
     for directory in dirs_to_create:
@@ -138,7 +141,7 @@ def main():
     config = load_config(args.config)
     
     # Create logs directory and setup logging
-    Path(config['logging']['file']).parent.mkdir(parents=True, exist_ok=True)
+    Path(config['paths']['logs']).parent.mkdir(parents=True, exist_ok=True)
     setup_logging(config)
     logger = logging.getLogger(__name__)
 
@@ -150,7 +153,7 @@ def main():
 
         # Initialize preprocessor and load data
         logger.info("Loading and preprocessing data")
-        preprocessor = DataPreprocessor(config['data']['input_file'])
+        preprocessor = DataPreprocessor(config['data']['file'])
         preprocessor.load_data()
 
         # Prepare features
@@ -197,7 +200,7 @@ def main():
                     bigram_data=processed_data,
                     bigrams=bigrams,
                     bigram_frequencies_array=bigram_frequencies_array,
-                    output_path=config['output']['frequency_timing']['relationship']
+                    output_path=config['paths']['frequency_timing']['relationship']
                 )
                 
                 if 'error' in timing_results:
@@ -206,8 +209,8 @@ def main():
                     try:
                         save_timing_analysis(
                             timing_results, 
-                            None,  # No group comparison results needed
-                            config['output']['frequency_timing']['analysis']
+                            None,
+                            config['paths']['frequency_timing']['analysis']
                         )
                         logger.info("Frequency/timing analysis completed and saved")
                         logger.info(f"Results:")
@@ -223,13 +226,14 @@ def main():
         if config['output']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             try:
+                # Feature space analysis
                 feature_space_results = analyze_feature_space(
                     feature_matrix=processed_data.feature_matrix,
-                    output_paths=config['output']['feature_space'],
+                    output_paths=config['paths']['feature_space'],
                     all_feature_differences=all_feature_differences,
                     config=config,
-                    recommend_bigrams=config['output']['feature_space']['recommend_bigrams'],
-                    num_recommendations=config['output']['feature_space']['num_recommendations']
+                    recommend_bigrams=config['analysis']['feature_space']['recommend_bigrams'],
+                    num_recommendations=config['analysis']['feature_space']['num_recommendations']
                 )
                 
                 if feature_space_results is None:
@@ -292,7 +296,7 @@ def main():
             )
 
             # Save model results
-            model_prefix = f"{config['output']['model']['results']}_{config['model']['inference_method']}"
+            model_prefix = f"{config['paths']['model']['results']}_{config['model']['inference_method']}"
             save_model_results(trace, model, model_prefix)
 
             # Plot diagnostics
@@ -300,7 +304,7 @@ def main():
                 logger.info("Generating model diagnostics")
                 plot_model_diagnostics(
                     trace=trace,
-                    output_base_path=config['output']['model']['diagnostics'],
+                    output_base_path=config['paths']['model']['diagnostics'],
                     inference_method=config['model']['inference_method']
                 )
 
@@ -308,7 +312,7 @@ def main():
                     parameter_estimates=trace,
                     design_features=config['features']['groups']['design'],
                     control_features=config['features']['groups']['control'],
-                    output_path=config['output']['model']['sensitivity'].format(
+                    output_path=config['paths']['model']['sensitivity'].format(
                         inference_method=config['model']['inference_method']
                     )
                 )
@@ -327,7 +331,7 @@ def main():
                 validate_comfort_scores(comfort_scores, test_data)
 
                 # Save comfort scores
-                output_path = Path(config['output']['scores'])
+                output_path = Path(config['paths']['scores'])
                 pd.DataFrame.from_dict(comfort_scores, orient='index',
                                      columns=['comfort_score']).to_csv(output_path)
 

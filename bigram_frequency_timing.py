@@ -162,13 +162,15 @@ def plot_frequency_timing_relationship(
         plt.legend()
         plt.grid(True)
         
-        # Add some sample points with labels
-        for i in range(min(5, len(matched_bigrams))):
+        ## Add some sample points with labels
+        #for i in range(min(5, len(matched_bigrams))):
+        # Add marker labels
+        for i in range(len(matched_bigrams)):
             bigram = matched_bigrams[i]
             plt.annotate(
                 f"{''.join(bigram)}", 
                 (log_frequencies[i], typing_times[i]),
-                xytext=(5, 5), textcoords='offset points'
+                xytext=(3, 3), textcoords='offset points'
             )
         
         # Save plot

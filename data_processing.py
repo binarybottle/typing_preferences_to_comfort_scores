@@ -514,10 +514,10 @@ def generate_train_test_splits(
                - splits.train_ratio: Proportion for training set
                - splits.splits_file: Path to save splits
     """
-    splits_config = config.get('splits', {})
-    generate_splits = splits_config.get('generate_splits', False)
-    train_ratio = splits_config.get('train_ratio', 0.8)
-    splits_file = splits_config.get('splits_file', "data/splits/train_test_indices.npz")
+    splits_config = config['data']['splits']
+    generate_splits = splits_config['generate']
+    train_ratio = splits_config['train_ratio']
+    splits_file = config['paths']['splits']
     
     if not generate_splits:
         logger.info("Skipping split generation as per configuration.")
@@ -567,7 +567,7 @@ def manage_data_splits(
         FileNotFoundError: If splits file doesn't exist
         ValueError: If indices are invalid
     """
-    splits_file = config['splits']['splits_file']
+    splits_file = config['paths']['splits']
     splits = np.load(splits_file)
     train_indices = splits['train_indices']
     test_indices = splits['test_indices']
