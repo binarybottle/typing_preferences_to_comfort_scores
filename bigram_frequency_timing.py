@@ -11,19 +11,21 @@ The analysis ensures each unique bigram is counted only once,
 with its timing averaged across all instances where it appears
 (whether as chosen or unchosen in the original pairs).
 """
+import os
 import numpy as np
 from scipy import stats
 import pandas as pd
-import logging
-from typing import List, Dict, Any, Tuple, Optional
+from sklearn.linear_model import LinearRegression
+from typing import Dict, Any, Optional
 import matplotlib.pyplot as plt
+import logging
 
 from data_processing import ProcessedData
 
 logger = logging.getLogger(__name__)
 
 def plot_frequency_timing_relationship(
-    bigram_data: pd.DataFrame,
+    bigram_data: 'ProcessedData',
     bigrams: Dict[str, int],
     bigram_frequencies_array: np.ndarray,
     output_path: str,
@@ -43,10 +45,11 @@ def plot_frequency_timing_relationship(
         Dictionary containing correlation results and group analysis
     """
     try:
-        # Calculate correlation between frequency and timing
+        # Correctly access ProcessedData attributes
+        timing_data = bigram_data.typing_times  # or appropriate attribute
         correlation, p_value = stats.spearmanr(
             bigram_frequencies_array,
-            bigram_data['typing_time']
+            timing_data
         )
         
         # Fit regression line
@@ -150,6 +153,84 @@ def plot_timing_by_frequency_groups(
         
     except Exception as e:
         logger.error(f"Error creating group plots: {str(e)}")
+
+def analyze_timing_groups(
+    bigram_data: 'ProcessedData',
+    bigram_frequencies_array: np.ndarray,
+    n_groups: int = 4
+) -> Dict[str, Any]:
+    """
+    Analyze timing differences between frequency groups.
+    
+    Args:
+        bigram_data: ProcessedData object containing typing times
+        bigram_frequencies_array: Array of bigram frequencies
+        n_groups: Number of frequency groups to analyze
+        
+    Returns:
+        Dictionary containing group statistics and analysis results
+    """
+    try:
+        # Create frequency groups using frequency array
+        freq_bins = pd.qcut(bigram_frequencies_array, n_groups, labels=False)
+        
+        # Create a DataFrame for analysis
+        analysis_df = pd.DataFrame({
+            'frequency': bigram_frequencies_array,
+            'typing_time': bigram_data.typing_times,
+            'freq_group': freq_bins
+        })
+        
+        # Calculate group statistics
+        group_stats = {}
+        for group in range(n_groups):
+            group_data = analysis_df[analysis_df['freq_group'] == group]
+            if len(group_data) > 0:
+                group_stats[group] = {
+                    'freq_range': (
+                        float(group_data['frequency'].min()),
+                        float(group_data['frequency'].max())
+                    ),
+                    'mean_timing': float(group_data['typing_time'].mean()),
+                    'std_timing': float(group_data['typing_time'].std()),
+                    'n_bigrams': len(group_data),
+                    'median_timing': float(group_data['typing_time'].median())
+                }
+        
+        # Perform ANOVA
+        groups = [group['typing_time'].values for _, group in 
+                 analysis_df.groupby('freq_group')]
+        f_stat, p_value = stats.f_oneway(*groups)
+        
+        # Perform post-hoc analysis if ANOVA is significant
+        post_hoc_results = None
+        if p_value < 0.05 and len(groups) > 2:
+            try:
+                from statsmodels.stats.multicomp import pairwise_tukeyhsd
+                post_hoc = pairwise_tukeyhsd(
+                    analysis_df['typing_time'],
+                    analysis_df['freq_group']
+                )
+                post_hoc_results = pd.DataFrame(
+                    data=post_hoc._results_table.data[1:],
+                    columns=post_hoc._results_table.data[0]
+                )
+            except Exception as e:
+                logger.warning(f"Could not perform post-hoc analysis: {str(e)}")
+        
+        return {
+            'group_stats': group_stats,
+            'f_stat': float(f_stat),
+            'p_value': float(p_value),
+            'post_hoc': post_hoc_results,
+            'n_total_bigrams': len(analysis_df),
+            'overall_mean_timing': float(analysis_df['typing_time'].mean()),
+            'overall_std_timing': float(analysis_df['typing_time'].std())
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in timing group analysis: {str(e)}")
+        return None
 
 def save_timing_analysis(
     timing_results: Dict[str, Any],

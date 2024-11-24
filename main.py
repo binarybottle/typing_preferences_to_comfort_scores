@@ -128,24 +128,13 @@ def create_output_directories(config: Dict[str, Any]) -> None:
     """
     dirs_to_create = [
         Path(config['paths']['base']),
-        Path(config['paths']['logs']),
+        Path(config['paths']['logs']).parent,
         Path(config['paths']['feature_evaluation']),
         Path(config['paths']['feature_space']['dir']),
-        Path(config['paths']['feature_space']['analysis']).parent,
-        Path(config['paths']['feature_space']['recommendations']).parent,
-        Path(config['paths']['feature_space']['pca']).parent,
-        Path(config['paths']['feature_space']['bigram_graph']).parent,
-        Path(config['paths']['feature_space']['underrepresented']).parent,
         Path(config['paths']['frequency_timing']['dir']),
-        Path(config['paths']['frequency_timing']['analysis']).parent,
-        Path(config['paths']['frequency_timing']['relationship']).parent,
+        Path(config['paths']['frequency_timing']['group_directory']),
         Path(config['paths']['model']['dir']),
         Path(config['paths']['model']['results']).parent,
-        Path(config['paths']['model']['diagnostics']).parent,
-        Path(config['paths']['model']['forest']).parent,
-        Path(config['paths']['model']['posterior']).parent,
-        Path(config['paths']['model']['participant_effects']).parent,
-        Path(config['paths']['model']['sensitivity']).parent,
         Path(config['paths']['scores']).parent
     ]
 
@@ -160,17 +149,17 @@ def main():
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     args = parser.parse_args()
 
-    # Load and validate configuration
-    config = load_config(args.config)
-    
-    # Create logs directory and setup logging
-    Path(config['paths']['logs']).parent.mkdir(parents=True, exist_ok=True)
-    setup_logging(config)
-    logger = logging.getLogger(__name__)
-
-    logger.info("Starting keyboard layout analysis pipeline")
-
     try:
+        # Load and validate configuration
+        config = load_config(args.config)
+        
+        # Create logs directory and setup logging
+        Path(config['paths']['logs']).parent.mkdir(parents=True, exist_ok=True)
+        setup_logging(config)
+        logger = logging.getLogger(__name__)
+
+        logger.info("Starting keyboard layout analysis pipeline")
+
         # Create all output directories
         create_output_directories(config)
 
@@ -202,7 +191,7 @@ def main():
         preprocessor.prepare_bigram_pairs()
         preprocessor.extract_target_vector()
         preprocessor.process_participants()
-        preprocessor.extract_typing_times()  # Add this line
+        preprocessor.extract_typing_times()
         preprocessor.create_feature_matrix(
             all_feature_differences=all_feature_differences,
             feature_names=feature_names,
@@ -260,17 +249,15 @@ def main():
         if config['analysis']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             try:
-                # Create output paths dictionary
                 base_dir = Path(config['paths']['feature_space']['dir'])
                 output_paths = {
                     'pca': str(base_dir / 'pca.png'),
                     'underrepresented': str(base_dir / 'underrepresented.png'),
+                    'bigram_graph': str(base_dir / 'bigram_graph.png'),
                     'recommendations': str(base_dir / 'recommended_bigram_pairs_scores.txt'),
-                    'analysis': str(base_dir / 'analysis.txt'),
-                    'bigram_graph': str(base_dir / 'bigram_graph.png')
+                    'analysis': str(base_dir / 'analysis.txt')
                 }
                 
-                # Feature space analysis
                 feature_space_results = analyze_feature_space(
                     feature_matrix=processed_data.feature_matrix,
                     output_paths=output_paths,
@@ -283,46 +270,31 @@ def main():
                 if feature_space_results is None:
                     logger.error("Feature space analysis returned no results")
                 else:
-                    # Log results using dedicated function
-                    log_feature_space_results(feature_space_results)
-                    
-                    # Save analysis results
                     save_feature_space_analysis_results(
                         feature_space_results, 
-                        config['paths']['feature_space']['analysis']
+                        output_paths['analysis']
                     )
-                    
+
+                    logger.info(f"Feature space analysis completed:")
+                    if 'feature_space_metrics' in feature_space_results:
+                        metrics = feature_space_results['feature_space_metrics']
+                        logger.info(f"  Hull area: {metrics['hull_area']:.3f}")
+                        logger.info(f"  Point density: {metrics['point_density']:.3f}")
+                    if 'recommendations' in feature_space_results:
+                        logger.info(f"  Generated {len(feature_space_results['recommendations'])} recommendations")
+                        
             except Exception as e:
                 logger.error(f"Error in feature space analysis: {str(e)}")
                 if config['model']['train']:
                     logger.warning("Continuing with model training despite feature space analysis failure")
 
-        def log_feature_space_results(feature_space_results: Dict[str, Any]) -> None:
-            """Log feature space analysis results with proper logger."""
-            logger = logging.getLogger(__name__)
-            
-            if feature_space_results and 'feature_space_metrics' in feature_space_results:
-                metrics = feature_space_results['feature_space_metrics']
-                logger.info("Feature space analysis metrics:")
-                logger.info(f"  Hull area: {metrics['hull_area']:.3f}")
-                logger.info(f"  Point density: {metrics['point_density']:.3f}")
-                logger.info(f"  Variance explained: PC1={metrics['variance_explained'][0]:.2%}, "
-                        f"PC2={metrics['variance_explained'][1]:.2%}")
-            
-            if feature_space_results and 'recommendations' in feature_space_results:
-                recommendations = feature_space_results['recommendations']
-                logger.info(f"Generated {len(recommendations)} bigram pair recommendations")
-                logger.info("Top 3 recommendations:")
-                for i, rec in enumerate(recommendations[:3], 1):
-                    logger.info(f"  {i}. Bigram: {rec['bigram']}, Distance: {rec['distance']:.3f}")
-
         # === SPLIT DATASET ANALYSES === #
         
-        # Now create train/test splits for evaluation and modeling
+        # Create train/test splits
         generate_train_test_splits(processed_data, config)
         train_data, test_data = manage_data_splits(processed_data, config)
 
-        # Run feature evaluation on test data
+        # Run feature evaluation if enabled
         if config['analysis']['feature_evaluation']['enabled']:            
             logger.info("Starting feature evaluation on test data")
             feature_eval_results = evaluate_feature_sets(
@@ -338,7 +310,7 @@ def main():
             )
             logger.info("Feature evaluation completed")
 
-        # Train model on training data if requested
+        # Train model if requested
         if config['model']['train']:
             logger.info("Training Bayesian GLMM on training data")
             
