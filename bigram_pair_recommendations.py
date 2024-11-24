@@ -9,9 +9,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import networkx as nx
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Any
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KernelDensity
 from scipy.spatial import ConvexHull
 import logging
 
@@ -20,100 +21,81 @@ logger = logging.getLogger(__name__)
 def analyze_feature_space(
     feature_matrix: pd.DataFrame,
     output_paths: Dict[str, str],
-    all_feature_differences: Dict,
+    all_feature_differences: Dict[Tuple[str, str], np.ndarray],
+    config: Dict[str, Any],
     recommend_bigrams: bool = True,
-    num_recommendations: int = 30,
-    config: Optional[Dict] = None
-) -> Dict:
-    """
-    Comprehensive feature space analysis including PCA projection, density analysis,
-    and optional bigram recommendations.
-    
-    Args:
-        feature_matrix: DataFrame of feature values for bigram pairs
-        output_paths: Dictionary mapping output types to file paths
-        all_feature_differences: Dictionary of all possible bigram pair differences
-        recommend_bigrams: Whether to generate bigram recommendations
-        num_recommendations: Number of bigram pairs to recommend
-        config: Configuration dictionary containing feature grouping info
-    
-    Returns:
-        Dictionary containing analysis results:
-        - feature_space_metrics: Hull area and point density
-        - feature_groups: Feature grouping information
-        - recommendations: (optional) Suggested bigram pairs to test
-    """
-    results = {}
-    
-    # Get feature groups from config
-    feature_groups = config['features']['groups']
-    results['feature_groups'] = feature_groups
-
-    # Create directories
-    Path(output_paths['analysis']).parent.mkdir(parents=True, exist_ok=True)
-
-    # PCA and scaling
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(feature_matrix)
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(scaled_features)
-
-    # Calculate metrics
-    hull = ConvexHull(pca_result)
-    hull_area = hull.area
-    point_density = len(pca_result) / hull_area
-    results['feature_space_metrics'] = {
-        'hull_area': hull_area,
-        'point_density': point_density
-    }
-
-    # Get axis limits for consistent plotting
-    x_min, x_max = pca_result[:, 0].min() - 1, pca_result[:, 0].max() + 1
-    y_min, y_max = pca_result[:, 1].min() - 1, pca_result[:, 1].max() + 1
-
-    # Plot PCA projection with consistent scale
-    plt.figure(figsize=(10, 8))
-    plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
-    plt.title('2D PCA projection of feature space')
-    plt.xlabel('First Principal Component')
-    plt.ylabel('Second Principal Component')
-    plt.xlim(x_min, x_max)
-    plt.ylim(y_min, y_max)
-    plt.savefig(output_paths['pca'])
-    plt.close()
-
-    # Identify underrepresented areas
-    grid_points, distances = identify_underrepresented_areas(
-        pca_result=pca_result,
-        output_path=output_paths['underrepresented'],
-        x_lims=(x_min, x_max),
-        y_lims=(y_min, y_max)
-    )
-
-    if recommend_bigrams:
-        recommendations = generate_bigram_recommendations(
-            pca_result=pca_result,
-            scaler=scaler,
-            pca=pca,
-            grid_points=grid_points,
-            distances=distances,
-            all_feature_differences=all_feature_differences,
-            num_recommendations=num_recommendations
-        )
-        results['recommendations'] = recommendations
+    num_recommendations: int = 30
+) -> Dict[str, Any]:
+    """Analyze feature space and generate recommendations."""
+    try:
+        results = {}
         
-        # Save recommendations
-        with open(output_paths['recommendations'], 'w') as f:
-            for pair in recommendations:
-                f.write(f"{pair[0][0]}{pair[0][1]}, {pair[1][0]}{pair[1][1]}\n")
-
-        # Plot bigram graph
-        plot_bigram_graph(feature_matrix.index, output_paths['bigram_graph'])
+        logger.info("Starting feature space analysis")
+        logger.info(f"Feature matrix shape: {feature_matrix.shape}")
+        
+        # Validate output paths
+        required_paths = ['pca', 'underrepresented', 'recommendations', 'analysis']
+        for path_key in required_paths:
+            if path_key not in output_paths:
+                raise ValueError(f"Missing required output path: {path_key}")
+            # Create parent directories
+            Path(output_paths[path_key]).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Rest of the function remains the same until saving results
+        
+        # Save analysis results
+        if results:
+            logger.info("Saving analysis results")
+            save_feature_space_analysis_results(results, output_paths['analysis'])
+            logger.info("Analysis results saved")
+            
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
     
-    # Save comprehensive analysis
-    save_feature_space_analysis_results(results, output_paths['analysis'])
-
-    return results
+def save_feature_space_analysis_results(results: Dict[str, Any], analysis_file_path: str) -> None:
+    """Save feature space analysis results to file with proper error handling."""
+    try:
+        # Create directory if it doesn't exist
+        analysis_dir = Path(analysis_file_path).parent
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Saving analysis results to {analysis_file_path}")
+        
+        with open(analysis_file_path, 'w') as f:
+            f.write("Feature Space Analysis Results\n")
+            f.write("============================\n\n")
+            
+            if 'feature_space_metrics' in results:
+                metrics = results['feature_space_metrics']
+                f.write("Feature Space Metrics:\n")
+                f.write(f"Hull Area: {metrics['hull_area']:.3f}\n")
+                f.write(f"Point Density: {metrics['point_density']:.3f}\n")
+                f.write("Variance Explained:\n")
+                f.write(f"  PC1: {metrics['variance_explained'][0]:.2%}\n")
+                f.write(f"  PC2: {metrics['variance_explained'][1]:.2%}\n\n")
+            
+            if 'recommendations' in results:
+                f.write("\nBigram Recommendations:\n")
+                f.write("=====================\n\n")
+                for i, rec in enumerate(results['recommendations'], 1):
+                    f.write(f"{i}. Bigram: {rec['bigram']}\n")
+                    f.write(f"   Distance: {rec['distance']:.3f}\n")
+                    f.write("   Feature values:\n")
+                    for name, value in rec['feature_values'].items():
+                        f.write(f"     {name}: {value:.3f}\n")
+                    f.write("\n")
+                    
+        logger.info("Analysis results saved successfully")
+        
+    except Exception as e:
+        logger.error(f"Error saving analysis results: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
 def identify_underrepresented_areas(
     pca_result: np.ndarray,

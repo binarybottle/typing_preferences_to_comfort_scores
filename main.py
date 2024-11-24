@@ -236,10 +236,18 @@ def main():
         if config['analysis']['feature_space']['enabled']:
             logger.info("Analyzing feature space")
             try:
+                # Create output paths dictionary
+                output_paths = {
+                    'pca': config['paths']['feature_space']['pca'],
+                    'underrepresented': config['paths']['feature_space']['underrepresented'],
+                    'recommendations': config['paths']['feature_space']['recommendations'],
+                    'analysis': config['paths']['feature_space']['analysis']
+                }
+                
                 # Feature space analysis
                 feature_space_results = analyze_feature_space(
                     feature_matrix=processed_data.feature_matrix,
-                    output_paths=config['paths']['feature_space'],
+                    output_paths=output_paths,
                     all_feature_differences=all_feature_differences,
                     config=config,
                     recommend_bigrams=config['analysis']['feature_space']['recommend_bigrams'],
@@ -252,7 +260,7 @@ def main():
                     # Save analysis results
                     save_feature_space_analysis_results(
                         feature_space_results, 
-                        config['analysis']['feature_space']['analysis']
+                        config['paths']['feature_space']['analysis']
                     )
 
                     # Log recommendations and feature space metrics

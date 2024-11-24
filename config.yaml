@@ -10,7 +10,7 @@ data:
 
   # Participant splits
   splits:
-    generate: false # One time per file (2024-11-23 for output_all4studies_406participants)
+    generate: true # One time per file (2024-11-23 for output_all4studies_406participants)
     train_ratio: 0.8
   
   # Keyboard layout
@@ -21,7 +21,7 @@ data:
 analysis:
   # Feature evaluation
   feature_evaluation:
-    enabled: false
+    enabled: true
     n_splits: 5
     n_samples: 1000
     test_size: 0.2
@@ -37,22 +37,22 @@ analysis:
 
   # Feature space analysis
   feature_space:
-    enabled: false
+    enabled: true
     check_multicollinearity: true
     recommend_bigrams: true
     num_recommendations: 30
 
   # Frequency/timing analysis
   frequency_timing:
-    enabled: false
+    enabled: true
     n_groups: 4
 
 # Model settings
 model:
   train: true
-  inference_method: 'variational' #'mcmc'  # or 'variational'
-  num_samples: 100 #2000
-  chains: 4 #8
+  inference_method: 'mcmc'  # or 'variational'
+  num_samples: 2000
+  chains: 8
   evaluate_test: true
   scoring:
     enabled: true
