@@ -455,34 +455,88 @@ def evaluate_model_performance(
 # Model Visualization    #
 #=========================#
 def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) -> None:
-    """Plot model diagnostics with better formatting."""
+    """
+    Plot model diagnostics with better formatting and documentation.
+    
+    Creates two types of plots:
+    1. Trace plots (left) show parameter values across MCMC iterations
+       - Each line is a different chain
+       - Good mixing shown by overlapping "fuzzy caterpillars"
+       - Different colors indicate different chains
+       
+    2. Posterior distributions (right) show parameter value distributions
+       - Shows where parameter values are concentrated
+       - Wider distributions indicate more uncertainty
+       - Narrower peaks indicate more certainty
+    """
     try:
-        # Get available variables excluding composite ones
+        if trace is None:
+            logger.warning("No trace provided for plotting")
+            return
+            
         available_vars = [var for var in trace.posterior.variables 
                          if not any(dim in var for dim in ['chain', 'draw', 'dim'])]
         
         if available_vars:
             # Increase figure size and spacing
-            plt.figure(figsize=(15, 20))
+            plt.figure(figsize=(15, len(available_vars)))
             az.plot_trace(trace, var_names=available_vars)
-            plt.suptitle('Model Parameter Traces and Distributions', y=0.95, fontsize=14)
-            plt.subplots_adjust(hspace=0.5)  # Increase vertical spacing
-            plt.savefig(output_base_path.format(inference_method=inference_method))
+            plt.suptitle('Model Parameter Traces and Distributions\n\n' +
+                        'Left: Parameter values across iterations (chains)\n' +
+                        'Right: Parameter value distributions',
+                        y=0.98, fontsize=14)
+            plt.subplots_adjust(hspace=0.8)  # Increase vertical spacing
+            plt.savefig(output_base_path.format(inference_method=inference_method),
+                       bbox_inches='tight')
             plt.close()
         
-        # Plot forest plot with better margins
+        # Forest plot with better margins and documentation
         if available_vars:
-            plt.figure(figsize=(12, len(available_vars) * 0.5))  # Adjust height based on variables
+            plt.figure(figsize=(12, len(available_vars) * 0.5))
             az.plot_forest(trace, var_names=available_vars)
-            plt.title('Parameter Estimates with 95% HDI\n(Highest Density Interval)', pad=20)
+            plt.title('Parameter Estimates with 95% Highest Density Interval (HDI)\n' +
+                     'Dots show median estimates, bars show uncertainty ranges\n' +
+                     'Parameters crossing zero may not have reliable effects',
+                     pad=20)
             plt.tight_layout()
             plt.savefig(output_base_path.format(inference_method=inference_method)
                        .replace('diagnostics', 'forest'),
-                       bbox_inches='tight')  # Prevent label cutoff
+                       bbox_inches='tight', dpi=300)
             plt.close()
             
     except Exception as e:
-        logger.warning(f"Could not create some diagnostic plots: {str(e)}")
+        logger.warning(f"Could not create diagnostic plots: {str(e)}")
+
+def save_plot_documentation(output_dir: str) -> None:
+    """Save documentation explaining the diagnostic plots."""
+    doc_path = os.path.join(output_dir, 'plot_documentation.txt')
+    
+    with open(doc_path, 'w') as f:
+        f.write("Model Diagnostic Plot Documentation\n")
+        f.write("================================\n\n")
+        
+        f.write("Trace Plots (Left Side):\n")
+        f.write("----------------------\n")
+        f.write("- Show parameter values across MCMC iterations\n")
+        f.write("- Multiple chains shown in different colors\n")
+        f.write("- Good mixing shown by overlapping 'fuzzy caterpillars'\n")
+        f.write("- Chains should explore similar regions\n\n")
+        
+        f.write("Posterior Distributions (Right Side):\n")
+        f.write("--------------------------------\n")
+        f.write("- Show distribution of parameter values\n")
+        f.write("- Narrow peaks indicate more certainty\n")
+        f.write("- Wide distributions indicate uncertainty\n")
+        f.write("- Multi-modal distributions may indicate problems\n\n")
+        
+        f.write("Forest Plot:\n")
+        f.write("-----------\n")
+        f.write("- Shows parameter estimates with uncertainty\n")
+        f.write("- Dots indicate median estimates\n")
+        f.write("- Thick bars show 50% HDI (Highest Density Interval)\n")
+        f.write("- Thin bars show 95% HDI\n")
+        f.write("- Parameters crossing zero may not be reliable\n")
+        f.write("- HDI shows most credible parameter values\n")
 
 #=========================#
 # Model Persistence      #

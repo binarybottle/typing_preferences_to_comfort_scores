@@ -26,14 +26,16 @@ analysis:
     n_samples: 1000
     test_size: 0.2
     combinations:
-      - ['same_finger', 'adjacent_finger', 'adj_finger_diff_row', 'adj_finger_skip',
-         'rows_apart', 'skip_home', 'columns_apart', 'angle_apart',
-         'outward_roll', 'outward_roll_same_row', 'outward_skip',
-         'middle_column', 'sum_engram_position_values', 'sum_row_position_values',
-         'sum_finger_values', 'finger1or4_top_above', 'finger2or3_bottom_below', 'finger_pairs']
-      - ['same_finger', 'adj_finger_skip', 'skip_home', 'angle_apart', 'outward_roll_same_row',
-         'middle_column', 'sum_engram_position_values', 'sum_row_position_values',
-         'sum_finger_values', 'finger1or4_top_above', 'finger2or3_bottom_below']
+      - ['same_finger', 'angle_apart', 
+         'outward_roll_same_row', 'middle_column', 
+         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart',
+         'outward_roll_same_row', 'middle_column', 
+         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart',
+         'outward_roll_same_row', 'middle_column', 
+         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values',
+         'finger_pairs']
 
   # Feature space analysis
   feature_space:
@@ -73,46 +75,24 @@ features:
     design:
       - 'same_finger'
       - 'adj_finger_diff_row'
-        #- 'adj_finger_skip'
       - 'rows_apart'
-        #- 'skip_home'
-        #- 'columns_apart'
       - 'angle_apart'
-        #- 'outward_roll'
       - 'outward_roll_same_row'
-        #- 'outward_skip'
       - 'middle_column'
       - 'sum_engram_position_values'
       - 'sum_row_position_values'
       - 'sum_finger_values'
-         #- 'finger1or4_top_above'
-         #- 'finger2or3_bottom_below'
+        # - 'adj_finger_skip'
+        # - 'skip_home'
+        # - 'columns_apart'
+        # - 'outward_roll'
+        # - 'outward_skip'
+        # - 'finger1or4_top_above'
+        # - 'finger2or3_bottom_below'
       - 'finger_pairs'
     control:
       - 'qwerty_bigram_frequency'
       - 'typing_time'
-
-  # All available features
-  all_features:
-    - 'qwerty_bigram_frequency'
-    - 'typing_time'
-    - 'same_finger'
-    - 'adj_finger_diff_row'
-      #- 'adj_finger_skip'
-    - 'rows_apart'
-      #- 'skip_home'
-      #- 'columns_apart'
-    - 'angle_apart'
-      #- 'outward_roll'
-    - 'outward_roll_same_row'
-      #- 'outward_skip'
-    - 'middle_column'
-    - 'sum_engram_position_values'
-    - 'sum_row_position_values'
-    - 'sum_finger_values'
-        #- 'finger1or4_top_above'
-        #- 'finger2or3_bottom_below'
-    - 'finger_pairs'
 
 # Logging settings
 logging:

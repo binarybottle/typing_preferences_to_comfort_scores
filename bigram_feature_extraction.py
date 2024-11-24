@@ -60,7 +60,7 @@ def extract_bigram_features(
     )
 
     features = {}
-    all_features = config['features']['all_features']
+    all_features = config['features']['groups']['design'] + config['features']['groups']['control']
     
     for feature_name in all_features:
         if feature_name in features_functions:

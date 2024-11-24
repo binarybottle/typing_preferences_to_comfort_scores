@@ -143,7 +143,7 @@ def analyze_feature_space(
             save_bigram_recommendations(
                 recommendations,
                 output_paths['recommendations'].replace('recommended_bigram_pairs_scores.txt', 
-                                                     'recommended_bigram_pairs.txt')
+                                                        'recommended_bigram_pairs.txt')
             )
             
             # Create bigram graph
@@ -236,6 +236,13 @@ def save_feature_space_analysis_results(results: Dict[str, Any], analysis_file_p
 
 def save_bigram_recommendations(recommendations: List[Dict], output_base_path: str) -> None:
     """Save bigram recommendations in two formats."""
+
+    # Save simple pairs list
+    with open(output_base_path, 'w') as f:
+        for rec in recommendations:
+            bigram = rec['bigram']
+            f.write(f"{format_bigram_pair(bigram)}\n")
+
     # Save detailed scores
     scores_path = output_base_path.replace('.txt', '_scores.txt')
     with open(scores_path, 'w') as f:
@@ -248,12 +255,9 @@ def save_bigram_recommendations(recommendations: List[Dict], output_base_path: s
                 f.write(f"     {name}: {value:.3f}\n")
             f.write("\n")
 
-    # Save simple pair list
-    pairs_path = output_base_path
-    with open(pairs_path, 'w') as f:
-        for rec in recommendations:
-            bigram = rec['bigram']
-            f.write(f"{bigram[0]}{bigram[1]}\n")
+def format_bigram_pair(bigram_pair: Tuple[Tuple[str, str], Tuple[str, str]]) -> str:
+    """Format a pair of bigram tuples as a comma-separated string."""
+    return f"{bigram_pair[0][0]}{bigram_pair[0][1]}, {bigram_pair[1][0]}{bigram_pair[1][1]}"
 
 def plot_underrepresented_regions(
     X_pca: np.ndarray,
@@ -262,20 +266,22 @@ def plot_underrepresented_regions(
     pca: PCA,
     output_path: str
 ) -> None:
-    """Plot underrepresented regions with distance heatmap."""
+    """Plot underrepresented regions with density heatmap."""
     plt.figure(figsize=(12, 8))
     
-    # Create heatmap
+    # Create heatmap with viridis colormap
     xx = positions[:, 0].reshape(100, 100)
     yy = positions[:, 1].reshape(100, 100)
     zz = density.reshape(100, 100)
     
-    plt.contourf(xx, yy, zz, levels=20, cmap='YlOrRd_r')
+    plt.contourf(xx, yy, zz, levels=20, cmap='viridis')
     plt.colorbar(label='Density')
     
     # Plot existing points
     plt.scatter(X_pca[:, 0], X_pca[:, 1], 
-               c='blue', alpha=0.5, s=50, label='Existing bigrams')
+               c='white', alpha=0.7, s=50,
+               edgecolors='black', linewidth=1,
+               label='Existing bigrams')
     
     plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
     plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
@@ -294,7 +300,7 @@ def generate_bigram_recommendations(
     distances: np.ndarray,
     all_feature_differences: Dict,
     num_recommendations: int = 30
-) -> List[Tuple]:
+) -> List[Dict]:
     """
     Generate recommendations for new bigram pairs to test.
     """
@@ -320,7 +326,12 @@ def generate_bigram_recommendations(
                     best_pair = pair
             
             if best_pair is not None:
-                recommendations.append(best_pair)
+                # Format as a dictionary with properly formatted bigrams
+                recommendations.append({
+                    'bigram': best_pair,
+                    'formatted': f"{format_bigram(best_pair[0])}, {format_bigram(best_pair[1])}",
+                    'distance': min_dist
+                })
         
         return recommendations[:num_recommendations]
         
@@ -332,78 +343,69 @@ def plot_bigram_graph(
     feature_matrix: pd.DataFrame,
     recommendations: List[Dict],
     output_path: str,
-    top_n: int = 50  # Number of existing bigrams to show
+    top_n: int = 50,
+    edge_threshold: float = 0.7  # Threshold for adding edges based on similarity
 ) -> None:
-    """
-    Plot a graph visualization of bigram relationships.
-    
-    Nodes are individual characters, edges represent bigrams.
-    Edge thickness represents frequency/strength of relationship.
-    Recommended bigrams are highlighted differently.
-    """
+    """Plot graph visualization of bigram relationships."""
     try:
         import networkx as nx
         
-        # Create graph
         G = nx.Graph()
         
-        # Add existing bigrams
-        for idx in feature_matrix.index[:top_n]:
+        # Helper function to format bigram
+        def format_bigram(bigram: Tuple[str, str]) -> str:
+            return f"{bigram[0]}{bigram[1]}"
+        
+        # Add existing bigrams and store feature vectors
+        existing_nodes = {}  # Map node labels to feature vectors
+        for idx, features in feature_matrix.iloc[:top_n].iterrows():
             if isinstance(idx, tuple) and len(idx) == 2:
-                char1, char2 = idx
-                # Add nodes
-                G.add_node(char1, type='existing')
-                G.add_node(char2, type='existing')
-                # Add edge
-                G.add_edge(char1, char2, type='existing', weight=1.0)
+                node_label = format_bigram(idx)
+                G.add_node(node_label, type='existing')
+                existing_nodes[node_label] = features.values
         
         # Add recommended bigrams
+        recommended_nodes = set()
         for rec in recommendations:
             bigram = rec['bigram']
             if isinstance(bigram, tuple) and len(bigram) == 2:
-                char1, char2 = bigram
-                # Add nodes if not exist
-                if char1 not in G:
-                    G.add_node(char1, type='recommended')
-                if char2 not in G:
-                    G.add_node(char2, type='recommended')
-                # Add edge
-                G.add_edge(char1, char2, type='recommended', 
-                          weight=2.0, distance=rec['distance'])
+                node_label = format_bigram(bigram)
+                if node_label not in existing_nodes:
+                    G.add_node(node_label, type='recommended')
+                    recommended_nodes.add(node_label)
+        
+        # Add edges between similar bigrams
+        for node1, features1 in existing_nodes.items():
+            for node2, features2 in existing_nodes.items():
+                if node1 < node2:  # Avoid duplicate edges
+                    # Calculate cosine similarity
+                    similarity = np.dot(features1, features2) / (
+                        np.linalg.norm(features1) * np.linalg.norm(features2))
+                    if similarity > edge_threshold:
+                        G.add_edge(node1, node2, weight=similarity)
         
         # Set up plot
         plt.figure(figsize=(12, 8))
+        pos = nx.spring_layout(G, k=1.5, weight='weight')
         
-        # Use spring layout
-        pos = nx.spring_layout(G, k=1.5)
+        # Draw edges
+        nx.draw_networkx_edges(G, pos, alpha=0.2)
         
-        # Draw existing bigrams
-        nx.draw_networkx_edges(G, pos,
-                             edgelist=[(u, v) for u, v, d in G.edges(data=True) 
-                                      if d['type'] == 'existing'],
-                             edge_color='gray', alpha=0.5)
-        
-        # Draw recommended bigrams
-        nx.draw_networkx_edges(G, pos,
-                             edgelist=[(u, v) for u, v, d in G.edges(data=True) 
-                                      if d['type'] == 'recommended'],
-                             edge_color='red', alpha=0.7, width=2)
-        
-        # Draw nodes
+        # Draw nodes by type
         nx.draw_networkx_nodes(G, pos,
+                             nodelist=list(existing_nodes.keys()),
                              node_color='lightblue',
+                             node_size=500)
+        nx.draw_networkx_nodes(G, pos,
+                             nodelist=list(recommended_nodes),
+                             node_color='lightcoral',
                              node_size=500)
         
         # Add labels
         nx.draw_networkx_labels(G, pos)
         
-        plt.title('Bigram Relationships Graph\n(Red edges: recommended bigrams)')
+        plt.title('Bigram Graph\nBlue: Existing bigrams, Red: Recommended bigrams')
         plt.axis('off')
-        
-        # Add legend
-        plt.plot([], [], 'gray', alpha=0.5, label='Existing bigrams')
-        plt.plot([], [], 'red', alpha=0.7, linewidth=2, label='Recommended bigrams')
-        plt.legend()
         
         plt.tight_layout()
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -413,8 +415,6 @@ def plot_bigram_graph(
         
     except Exception as e:
         logger.error(f"Error creating bigram graph: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
 
 def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
     """
@@ -439,13 +439,7 @@ def save_feature_space_analysis_results(results: Dict, output_path: str) -> None
                     f.write(f"\n{group_name}:\n")
                     for feature in features:
                         f.write(f"  - {feature}\n")
-            
-            # Write recommendations
-            if 'recommendations' in results:
-                f.write("\nBigram Pair Recommendations:\n")
-                for i, pair in enumerate(results['recommendations'], 1):
-                    f.write(f"{i}. {pair[0][0]}{pair[0][1]} - {pair[1][0]}{pair[1][1]}\n")
-                    
+
     except Exception as e:
         logger.error(f"Error saving analysis results: {str(e)}")
     

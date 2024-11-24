@@ -237,11 +237,11 @@ def main():
                     
                     logger.info("Frequency/timing analysis completed")
                     logger.info(f"Results:")
-                    logger.info(f"  Raw correlation: {timing_results['raw_correlation']:.3f} "
-                                f"(p = {timing_results['raw_p_value']:.3e})")
+                    logger.info(f"  Correlation: {timing_results['correlation']:.3f} "
+                                f"(p = {timing_results['correlation_p_value']:.3e})")
                     logger.info(f"  R-squared: {timing_results['r2']:.3f}")
                     logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
-                    
+
             except Exception as e:
                 logger.error(f"Error in frequency-timing analysis: {str(e)}")
 
