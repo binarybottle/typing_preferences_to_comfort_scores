@@ -455,42 +455,30 @@ def evaluate_model_performance(
 # Model Visualization    #
 #=========================#
 def plot_model_diagnostics(trace, output_base_path: str, inference_method: str) -> None:
-    """
-    Plot model diagnostic visualizations.
-    
-    Creates two plots:
-    1. Trace plots for model parameters (saved as 'diagnostics_{inference_method}.png')
-    2. Forest plot for fixed effects (saved as 'forest_{inference_method}.png')
-    
-    Related to train_bayesian_glmm() for model fitting and 
-    evaluate_model_performance() for model assessment.
-    
-    Args:
-        trace: ArviZ InferenceData object from train_bayesian_glmm()
-        output_base_path: Base path template for saving plots
-        inference_method: Name of inference method used
-        
-    See Also:
-        train_bayesian_glmm: Main model training function
-        evaluate_model_performance: Model evaluation metrics
-    """    
+    """Plot model diagnostics with better formatting."""
     try:
         # Get available variables excluding composite ones
         available_vars = [var for var in trace.posterior.variables 
                          if not any(dim in var for dim in ['chain', 'draw', 'dim'])]
         
         if available_vars:
+            # Increase figure size and spacing
+            plt.figure(figsize=(15, 20))
             az.plot_trace(trace, var_names=available_vars)
+            plt.suptitle('Model Parameter Traces and Distributions', y=0.95, fontsize=14)
+            plt.subplots_adjust(hspace=0.5)  # Increase vertical spacing
             plt.savefig(output_base_path.format(inference_method=inference_method))
             plt.close()
         
-        # Plot forest plot for parameters only
-        param_vars = [var for var in available_vars 
-                     if var not in ['participant_offset', 'participant_sigma', 'sigma']]
-        if param_vars:
-            az.plot_forest(trace, var_names=param_vars)
+        # Plot forest plot with better margins
+        if available_vars:
+            plt.figure(figsize=(12, len(available_vars) * 0.5))  # Adjust height based on variables
+            az.plot_forest(trace, var_names=available_vars)
+            plt.title('Parameter Estimates with 95% HDI\n(Highest Density Interval)', pad=20)
+            plt.tight_layout()
             plt.savefig(output_base_path.format(inference_method=inference_method)
-                       .replace('diagnostics', 'forest'))
+                       .replace('diagnostics', 'forest'),
+                       bbox_inches='tight')  # Prevent label cutoff
             plt.close()
             
     except Exception as e:

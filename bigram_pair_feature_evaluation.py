@@ -72,91 +72,139 @@ def evaluate_feature_sets(
     config: Dict[str, Any],
     n_splits: int = 5,
     n_samples: int = 1000
-) -> FeatureEvaluationResults:
+) -> Dict[str, List[float]]:
     """
-    Evaluate different combinations of features to determine their predictive power.
-    
-    This function performs multiple analyses on feature combinations:
-    1. Cross-validation to assess predictive performance using R² scores
-       - R² measures how well features predict comfort/preference scores
-       - Higher R² indicates better prediction (1.0 is perfect, 0.0 is poor)
-       - Scores are averaged across folds for stability
-    2. Feature importance calculation
-    3. Feature correlation analysis
-    4. Multicollinearity checks
+    Evaluate different feature sets using cross-validation.
     
     Args:
-        feature_matrix: DataFrame of all available features
-        target_vector: Array of target values to predict
-        participants: Array of participant IDs for grouped cross-validation
-        candidate_features: List of feature combinations to evaluate
-        feature_names: Names of all available features
-        output_dir: Directory to save evaluation results
+        feature_matrix: Matrix of feature values
+        target_vector: Target values
+        participants: Participant IDs for grouping
+        candidate_features: List of feature sets to evaluate
+        feature_names: Names of all features
+        output_dir: Directory for output files
         config: Configuration dictionary
-        n_splits: Number of cross-validation folds
-        n_samples: Number of samples for Bayesian modeling
-        
-    Returns:
-        FeatureEvaluationResults containing evaluation metrics and analysis
+        n_splits: Number of cross-validation splits
+        n_samples: Number of MCMC samples
     """
-    cv_scores = {}
-    waic_scores = {}
-    loo_scores = {}
-
-    # Validate input data
-    if feature_matrix.empty:
-        raise ValueError("Feature matrix is empty")
-    if len(target_vector) == 0:
-        raise ValueError("Target vector is empty")
-
-    # Convert participants to integer indices for cross-validation
-    unique_participants = np.unique(participants)
-    participant_map = {p: i for i, p in enumerate(unique_participants)}
-    participant_indices = np.array([participant_map[p] for p in participants])
-
-    # Evaluate each feature set
-    for set_idx, feature_set in enumerate(candidate_features):
-        set_name = f"feature_set_{set_idx}"
-        logger.info(f"Evaluating {set_name}: {feature_set}")
+    results = {}
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create summary file
+    summary_path = output_dir / "feature_evaluation_summary.txt"
+    metrics_path = output_dir / "feature_set_metrics.txt"
+    importance_path = output_dir / "feature_importance.txt"
+    
+    with open(summary_path, 'w') as summary_file, \
+         open(metrics_path, 'w') as metrics_file, \
+         open(importance_path, 'w') as importance_file:
+         
+        summary_file.write("Feature Set Evaluation Summary\n")
+        summary_file.write("===========================\n\n")
         
-        try:
-            cv_result = perform_cross_validation(
-                feature_matrix[feature_set],
-                target_vector,
-                participant_indices,
-                n_splits=n_splits
-            )
-            cv_scores[set_name] = cv_result
+        metrics_file.write("Detailed Cross-Validation Metrics\n")
+        metrics_file.write("==============================\n\n")
+        
+        importance_file.write("Feature Importance Analysis\n")
+        importance_file.write("========================\n\n")
+        
+        # Evaluate each feature set
+        for i, features in enumerate(candidate_features):
+            logger.info(f"Evaluating feature_set_{i}: {features}")
+            summary_file.write(f"\nFeature Set {i}:\n")
+            summary_file.write("-" * 50 + "\n")
+            summary_file.write("Features: " + ", ".join(features) + "\n\n")
             
-            waic_score, loo_score = calculate_waic_loo(
-                feature_matrix[feature_set], 
-                target_vector
-            )
-            waic_scores[set_name] = waic_score
-            loo_scores[set_name] = loo_score
+            # Select features for this set
+            X = feature_matrix[features].copy()
             
-        except Exception as e:
-            logger.error(f"Evaluation failed for {set_name}: {e}")
-            cv_scores[set_name] = [np.nan] * n_splits
-            waic_scores[set_name] = np.nan
-            loo_scores[set_name] = np.nan
-
-    # Calculate feature importance and correlations
-    feature_importance = calculate_feature_importance(
-        feature_matrix, target_vector, feature_names
-    )
-    feature_correlations = calculate_feature_correlations(feature_matrix)
-
-    return FeatureEvaluationResults(
-        cv_scores=cv_scores,
-        waic_scores=waic_scores,
-        loo_scores=loo_scores,
-        feature_correlations=feature_correlations,
-        feature_importance=feature_importance,
-        feature_groups=config['features']['groups'],
-        interaction_scores=None,
-        stability_metrics=None
-    )
+            # Cross-validation
+            logger.info("Starting cross-validation")
+            cv_metrics = {
+                'r2': [], 'rmse': [], 'mae': [], 
+                'correlation': [], 'accuracy': []
+            }
+            
+            # Create cross-validation splits
+            group_kfold = GroupKFold(n_splits=n_splits)
+            
+            for fold, (train_idx, val_idx) in enumerate(
+                group_kfold.split(X, target_vector, participants)
+            ):
+                # Split data
+                X_train = X.iloc[train_idx]
+                y_train = target_vector[train_idx]
+                X_val = X.iloc[val_idx]
+                y_val = target_vector[val_idx]
+                participants_train = participants[train_idx]
+                
+                # Train model
+                trace, model, _ = train_bayesian_glmm(
+                    feature_matrix=X_train,
+                    target_vector=y_train,
+                    participants=participants_train,
+                    design_features=features,
+                    control_features=[],
+                    inference_method='mcmc',
+                    num_samples=n_samples,
+                    chains=2
+                )
+                
+                # Evaluate
+                metrics = evaluate_model_performance(
+                    trace=trace,
+                    feature_matrix=X_val,
+                    target_vector=y_val,
+                    participants=participants[val_idx],
+                    design_features=features,
+                    control_features=[]
+                )
+                
+                # Record metrics
+                for metric, value in metrics.items():
+                    cv_metrics[metric].append(value)
+                
+                # Write fold results
+                metrics_file.write(f"Feature Set {i}, Fold {fold}:\n")
+                for metric, value in metrics.items():
+                    metrics_file.write(f"  {metric}: {value:.3f}\n")
+                metrics_file.write("\n")
+                
+                # Calculate and save feature importance
+                if fold == 0:  # Only for first fold
+                    importance_file.write(f"\nFeature Set {i} Importance:\n")
+                    feature_effects = az.summary(trace, var_names=features)
+                    importance_file.write(feature_effects.to_string() + "\n\n")
+                
+            # Calculate average metrics
+            avg_metrics = {
+                metric: np.mean(values) for metric, values in cv_metrics.items()
+            }
+            std_metrics = {
+                metric: np.std(values) for metric, values in cv_metrics.items()
+            }
+            
+            # Write summary results
+            summary_file.write("Average Metrics:\n")
+            for metric, mean_value in avg_metrics.items():
+                std_value = std_metrics[metric]
+                summary_file.write(f"{metric}: {mean_value:.3f} ± {std_value:.3f}\n")
+            summary_file.write("\n")
+            
+            results[f"feature_set_{i}"] = avg_metrics
+            
+            # Create visualization
+            plt.figure(figsize=(10, 6))
+            plt.boxplot([cv_metrics[m] for m in ['r2', 'correlation', 'accuracy']], 
+                       labels=['R²', 'Correlation', 'Accuracy'])
+            plt.title(f'Feature Set {i} Performance')
+            plt.ylabel('Score')
+            plt.savefig(output_dir / f"feature_set_{i}_performance.png")
+            plt.close()
+    
+    return results
 
 def perform_cross_validation(
     feature_matrix: pd.DataFrame,

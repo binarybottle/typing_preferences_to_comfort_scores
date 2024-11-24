@@ -13,12 +13,13 @@ This script orchestrates the entire keyboard layout analysis process:
    - Bayesian model training (using train_data)
    - Bayesian model testing (using test_data)
 """
-import logging
+import os
 import argparse
 from pathlib import Path
 import yaml
 from typing import Dict, Any
 import pandas as pd
+import logging
 
 from data_processing import DataPreprocessor, generate_train_test_splits, manage_data_splits
 from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_timing_by_frequency_groups,
@@ -222,25 +223,36 @@ def main():
                     bigram_data=processed_data,
                     bigrams=bigrams,
                     bigram_frequencies_array=bigram_frequencies_array,
-                    output_path=config['paths']['frequency_timing']['relationship']
+                    output_path=config['paths']['frequency_timing']['relationship'],
+                    n_groups=config['analysis']['frequency_timing']['n_groups']
                 )
                 
                 if 'error' in timing_results:
                     logger.error(f"Frequency-timing analysis failed: {timing_results['error']}")
                 else:
-                    try:
-                        save_timing_analysis(
-                            timing_results, 
-                            None,
-                            config['paths']['frequency_timing']['analysis']
+                    # Create group visualizations
+                    if 'group_analysis' in timing_results:
+                        plot_timing_by_frequency_groups(
+                            bigram_data=processed_data,
+                            bigram_frequencies_array=bigram_frequencies_array,
+                            group_results=timing_results['group_analysis'],
+                            output_dir=config['paths']['frequency_timing']['group_directory']
                         )
-                        logger.info("Frequency/timing analysis completed and saved")
-                        logger.info(f"Results:")
-                        logger.info(f"  Raw correlation: {timing_results['raw_correlation']:.3f} (p = {timing_results['raw_p_value']:.3e})")
-                        logger.info(f"  R-squared: {timing_results['r2']:.3f}")
-                        logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
-                    except Exception as e:
-                        logger.error(f"Error saving timing analysis: {str(e)}")
+                    
+                    # Save analysis results
+                    save_timing_analysis(
+                        timing_results=timing_results,
+                        group_comparison_results=timing_results.get('group_analysis'),
+                        output_path=config['paths']['frequency_timing']['analysis']
+                    )
+                    
+                    logger.info("Frequency/timing analysis completed")
+                    logger.info(f"Results:")
+                    logger.info(f"  Raw correlation: {timing_results['raw_correlation']:.3f} "
+                                f"(p = {timing_results['raw_p_value']:.3e})")
+                    logger.info(f"  R-squared: {timing_results['r2']:.3f}")
+                    logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
+                    
             except Exception as e:
                 logger.error(f"Error in frequency-timing analysis: {str(e)}")
 
@@ -249,11 +261,13 @@ def main():
             logger.info("Analyzing feature space")
             try:
                 # Create output paths dictionary
+                base_dir = Path(config['paths']['feature_space']['dir'])
                 output_paths = {
-                    'pca': config['paths']['feature_space']['pca'],
-                    'underrepresented': config['paths']['feature_space']['underrepresented'],
-                    'recommendations': config['paths']['feature_space']['recommendations'],
-                    'analysis': config['paths']['feature_space']['analysis']
+                    'pca': str(base_dir / 'pca.png'),
+                    'underrepresented': str(base_dir / 'underrepresented.png'),
+                    'recommendations': str(base_dir / 'recommended_bigram_pairs_scores.txt'),
+                    'analysis': str(base_dir / 'analysis.txt'),
+                    'bigram_graph': str(base_dir / 'bigram_graph.png')
                 }
                 
                 # Feature space analysis

@@ -10,7 +10,7 @@ data:
 
   # Participant splits
   splits:
-    generate: true # One time per file (2024-11-23 for output_all4studies_406participants)
+    generate: false # One time per file (output_all4studies_406participants/ on 2024-11-23)
     train_ratio: 0.8
   
   # Keyboard layout
@@ -49,7 +49,7 @@ analysis:
 
 # Model settings
 model:
-  train: true
+  train: false
   inference_method: 'mcmc'  # or 'variational'
   num_samples: 2000
   chains: 8
@@ -66,28 +66,27 @@ features:
   interactions:
     enabled: true
     pairs:
-      - ['adjacent_finger', 'skip_home']
+      - ['sum_engram_position_values', 'rows_apart']
 
   # Feature groups
   groups:
     design:
       - 'same_finger'
-      - 'adjacent_finger'
       - 'adj_finger_diff_row'
-      - 'adj_finger_skip'
+        #- 'adj_finger_skip'
       - 'rows_apart'
-      - 'skip_home'
-      - 'columns_apart'
+        #- 'skip_home'
+        #- 'columns_apart'
       - 'angle_apart'
-      - 'outward_roll'
+        #- 'outward_roll'
       - 'outward_roll_same_row'
-      - 'outward_skip'
+        #- 'outward_skip'
       - 'middle_column'
       - 'sum_engram_position_values'
       - 'sum_row_position_values'
       - 'sum_finger_values'
-      - 'finger1or4_top_above'
-      - 'finger2or3_bottom_below'
+         #- 'finger1or4_top_above'
+         #- 'finger2or3_bottom_below'
       - 'finger_pairs'
     control:
       - 'qwerty_bigram_frequency'
@@ -98,22 +97,21 @@ features:
     - 'qwerty_bigram_frequency'
     - 'typing_time'
     - 'same_finger'
-    - 'adjacent_finger'
     - 'adj_finger_diff_row'
-    - 'adj_finger_skip'
+      #- 'adj_finger_skip'
     - 'rows_apart'
-    - 'skip_home'
-    - 'columns_apart'
+      #- 'skip_home'
+      #- 'columns_apart'
     - 'angle_apart'
-    - 'outward_roll'
+      #- 'outward_roll'
     - 'outward_roll_same_row'
-    - 'outward_skip'
+      #- 'outward_skip'
     - 'middle_column'
     - 'sum_engram_position_values'
     - 'sum_row_position_values'
     - 'sum_finger_values'
-    - 'finger1or4_top_above'
-    - 'finger2or3_bottom_below'
+        #- 'finger1or4_top_above'
+        #- 'finger2or3_bottom_below'
     - 'finger_pairs'
 
 # Logging settings
@@ -136,7 +134,6 @@ paths:
   feature_space:
     dir: "output/feature_space"
     analysis: "output/feature_space/analysis.txt"
-    recommendations: "output/feature_space/recommendations.txt"
     pca: "output/feature_space/pca.png"
     bigram_graph: "output/feature_space/bigram_graph.png"
     underrepresented: "output/feature_space/underrepresented.png"

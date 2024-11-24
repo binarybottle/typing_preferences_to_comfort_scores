@@ -26,37 +26,174 @@ def analyze_feature_space(
     recommend_bigrams: bool = True,
     num_recommendations: int = 30
 ) -> Dict[str, Any]:
-    """Analyze feature space and generate recommendations."""
+    """
+    Analyze feature space and generate recommendations.
+    
+    Args:
+        feature_matrix: DataFrame of feature values
+        output_paths: Dictionary of output file paths
+        all_feature_differences: Dictionary of precomputed feature differences
+        config: Configuration dictionary
+        recommend_bigrams: Whether to generate bigram recommendations
+        num_recommendations: Number of bigram recommendations to generate
+        
+    Returns:
+        Dictionary containing analysis results and recommendations
+    """
     try:
         results = {}
         
         logger.info("Starting feature space analysis")
         logger.info(f"Feature matrix shape: {feature_matrix.shape}")
         
-        # Validate output paths
-        required_paths = ['pca', 'underrepresented', 'recommendations', 'analysis']
-        for path_key in required_paths:
-            if path_key not in output_paths:
-                raise ValueError(f"Missing required output path: {path_key}")
-            # Create parent directories
-            Path(output_paths[path_key]).parent.mkdir(parents=True, exist_ok=True)
+        # Convert feature matrix to numpy array for PCA
+        X = feature_matrix.values
         
-        # Rest of the function remains the same until saving results
+        # Normalize features
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        logger.debug("Features normalized")
         
-        # Save analysis results
-        if results:
-            logger.info("Saving analysis results")
-            save_feature_space_analysis_results(results, output_paths['analysis'])
-            logger.info("Analysis results saved")
+        # Perform PCA
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(X_scaled)
+        logger.info(f"PCA explained variance: {pca.explained_variance_ratio_}")
+        
+        # Calculate hull area and point density
+        hull = ConvexHull(X_pca)
+        point_density = len(X_pca) / hull.area
+        
+        results['feature_space_metrics'] = {
+            'hull_area': float(hull.area),
+            'point_density': float(point_density),
+            'variance_explained': pca.explained_variance_ratio_.tolist()
+        }
+        logger.debug(f"Feature space metrics calculated: {results['feature_space_metrics']}")
+        
+        # Plot PCA results
+        plt.figure(figsize=(10, 8))
+        plt.scatter(X_pca[:, 0], X_pca[:, 1], alpha=0.5, s=50)
+        plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+        plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+        plt.title('Feature Space PCA')
+        plt.savefig(output_paths['pca'], dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        if recommend_bigrams:
+            logger.info("Generating bigram recommendations")
+            # Find underrepresented regions
+            kde = KernelDensity(kernel='gaussian', bandwidth=0.5)
+            kde.fit(X_pca)
             
+            # Generate grid of points
+            x_min, x_max = X_pca[:, 0].min() - 1, X_pca[:, 0].max() + 1
+            y_min, y_max = X_pca[:, 1].min() - 1, X_pca[:, 1].max() + 1
+            xx, yy = np.mgrid[x_min:x_max:100j, y_min:y_max:100j]
+            
+            # Get density estimates
+            positions = np.vstack([xx.ravel(), yy.ravel()]).T
+            density = np.exp(kde.score_samples(positions))
+            
+            # Find low density regions
+            low_density_mask = density < np.percentile(density, 10)
+            low_density_points = positions[low_density_mask]
+            
+            # Plot underrepresented regions with density heatmap
+            plot_underrepresented_regions(
+                X_pca=X_pca,
+                density=density,
+                positions=positions,
+                pca=pca,
+                output_path=output_paths['underrepresented']
+            )
+            
+            # Generate recommendations
+            recommendations = []
+            feature_names = feature_matrix.columns.tolist()
+            
+            for point in low_density_points[:num_recommendations]:
+                # Reshape point to 2D array for inverse transform
+                point_2d = point.reshape(1, -1)
+                
+                # Project back to original feature space
+                feature_point = pca.inverse_transform(point_2d)
+                feature_point = scaler.inverse_transform(feature_point)
+                
+                # Find nearest existing bigram
+                distances = np.linalg.norm(X - feature_point, axis=1)
+                nearest_idx = np.argmin(distances)
+                nearest_bigram = feature_matrix.index[nearest_idx]
+                
+                recommendations.append({
+                    'bigram': nearest_bigram,
+                    'distance': float(distances[nearest_idx]),
+                    'feature_values': {
+                        name: float(value) 
+                        for name, value in zip(feature_names, feature_point.flatten())
+                    }
+                })
+            
+            # Sort recommendations by distance
+            recommendations.sort(key=lambda x: x['distance'])
+            recommendations = recommendations[:num_recommendations]
+            results['recommendations'] = recommendations
+            logger.info(f"Generated {len(recommendations)} recommendations")
+            
+            # Save recommendations in both formats
+            save_bigram_recommendations(
+                recommendations,
+                output_paths['recommendations'].replace('recommended_bigram_pairs_scores.txt', 
+                                                     'recommended_bigram_pairs.txt')
+            )
+            
+            # Create bigram graph
+            plot_bigram_graph(
+                feature_matrix=feature_matrix,
+                recommendations=recommendations,
+                output_path=output_paths['bigram_graph']
+            )
+        
+        # Save full analysis
+        with open(output_paths['analysis'], 'w') as f:
+            f.write("Feature Space Analysis Results\n")
+            f.write("============================\n\n")
+            
+            # Write metrics
+            metrics = results['feature_space_metrics']
+            f.write("Feature Space Metrics:\n")
+            f.write(f"Hull Area: {metrics['hull_area']:.3f}\n")
+            f.write(f"Point Density: {metrics['point_density']:.3f}\n")
+            f.write("Variance Explained:\n")
+            f.write(f"  PC1: {metrics['variance_explained'][0]:.2%}\n")
+            f.write(f"  PC2: {metrics['variance_explained'][1]:.2%}\n\n")
+            
+            # Write feature importance (based on PCA loadings)
+            f.write("Feature Importance (PCA Loadings):\n")
+            feature_importance = pd.DataFrame(
+                pca.components_.T,
+                columns=['PC1', 'PC2'],
+                index=feature_names
+            )
+            for feature in feature_names:
+                f.write(f"{feature}:\n")
+                f.write(f"  PC1: {feature_importance.loc[feature, 'PC1']:.3f}\n")
+                f.write(f"  PC2: {feature_importance.loc[feature, 'PC2']:.3f}\n")
+            f.write("\n")
+            
+            if 'recommendations' in results:
+                f.write("Top Recommended Bigrams:\n")
+                for i, rec in enumerate(results['recommendations'][:10], 1):
+                    f.write(f"{i}. {rec['bigram'][0]}{rec['bigram'][1]} "
+                           f"(distance: {rec['distance']:.3f})\n")
+        
         return results
         
     except Exception as e:
-        logger.error(f"Error generating recommendations: {str(e)}")
+        logger.error(f"Error in feature space analysis: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
-    
+   
 def save_feature_space_analysis_results(results: Dict[str, Any], analysis_file_path: str) -> None:
     """Save feature space analysis results to file with proper error handling."""
     try:
@@ -97,48 +234,57 @@ def save_feature_space_analysis_results(results: Dict[str, Any], analysis_file_p
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
 
-def identify_underrepresented_areas(
-    pca_result: np.ndarray,
-    output_path: str,
-    x_lims: Tuple[float, float],
-    y_lims: Tuple[float, float],
-    num_grid: int = 20
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Identify and visualize underrepresented areas in feature space.
-    """
-    try:
-        # Create grid
-        x = np.linspace(x_lims[0], x_lims[1], num_grid)
-        y = np.linspace(y_lims[0], y_lims[1], num_grid)
-        X, Y = np.meshgrid(x, y)
-        grid_points = np.column_stack((X.ravel(), Y.ravel()))
-        
-        # Calculate distances to nearest points
-        distances = np.zeros(len(grid_points))
-        for i, point in enumerate(grid_points):
-            dist_to_all = np.sqrt(np.sum((pca_result - point) ** 2, axis=1))
-            distances[i] = np.min(dist_to_all)
-        
-        # Plot heatmap
-        plt.figure(figsize=(10, 8))
-        plt.scatter(pca_result[:, 0], pca_result[:, 1], 
-                   c='black', alpha=0.6, label='Data points')
-        plt.tricontourf(grid_points[:, 0], grid_points[:, 1], 
-                       distances.reshape(-1))
-        plt.colorbar(label='Distance to nearest point')
-        plt.title('Underrepresented Areas in Feature Space')
-        plt.xlabel('First Principal Component')
-        plt.ylabel('Second Principal Component')
-        plt.legend()
-        plt.savefig(output_path)
-        plt.close()
-        
-        return grid_points, distances
-        
-    except Exception as e:
-        logger.error(f"Error in underrepresented areas analysis: {str(e)}")
-        return None
+def save_bigram_recommendations(recommendations: List[Dict], output_base_path: str) -> None:
+    """Save bigram recommendations in two formats."""
+    # Save detailed scores
+    scores_path = output_base_path.replace('.txt', '_scores.txt')
+    with open(scores_path, 'w') as f:
+        f.write("Bigram Recommendations with Scores:\n\n")
+        for i, rec in enumerate(recommendations, 1):
+            f.write(f"{i}. Bigram: {rec['bigram']}\n")
+            f.write(f"   Distance: {rec['distance']:.3f}\n")
+            f.write("   Feature values:\n")
+            for name, value in rec['feature_values'].items():
+                f.write(f"     {name}: {value:.3f}\n")
+            f.write("\n")
+
+    # Save simple pair list
+    pairs_path = output_base_path
+    with open(pairs_path, 'w') as f:
+        for rec in recommendations:
+            bigram = rec['bigram']
+            f.write(f"{bigram[0]}{bigram[1]}\n")
+
+def plot_underrepresented_regions(
+    X_pca: np.ndarray,
+    density: np.ndarray,
+    positions: np.ndarray,
+    pca: PCA,
+    output_path: str
+) -> None:
+    """Plot underrepresented regions with distance heatmap."""
+    plt.figure(figsize=(12, 8))
+    
+    # Create heatmap
+    xx = positions[:, 0].reshape(100, 100)
+    yy = positions[:, 1].reshape(100, 100)
+    zz = density.reshape(100, 100)
+    
+    plt.contourf(xx, yy, zz, levels=20, cmap='YlOrRd_r')
+    plt.colorbar(label='Density')
+    
+    # Plot existing points
+    plt.scatter(X_pca[:, 0], X_pca[:, 1], 
+               c='blue', alpha=0.5, s=50, label='Existing bigrams')
+    
+    plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+    plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+    plt.title('Feature Space Density with Existing Bigrams')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
 
 def generate_bigram_recommendations(
     pca_result: np.ndarray,
@@ -182,31 +328,93 @@ def generate_bigram_recommendations(
         logger.error(f"Error generating recommendations: {str(e)}")
         return None
 
-def plot_bigram_graph(bigram_pairs: List[Tuple], output_path: str) -> None:
+def plot_bigram_graph(
+    feature_matrix: pd.DataFrame,
+    recommendations: List[Dict],
+    output_path: str,
+    top_n: int = 50  # Number of existing bigrams to show
+) -> None:
     """
-    Create graph visualization of bigram relationships.
+    Plot a graph visualization of bigram relationships.
+    
+    Nodes are individual characters, edges represent bigrams.
+    Edge thickness represents frequency/strength of relationship.
+    Recommended bigrams are highlighted differently.
     """
     try:
+        import networkx as nx
+        
+        # Create graph
         G = nx.Graph()
         
-        # Add nodes and edges
-        for pair in bigram_pairs:
-            b1, b2 = pair
-            G.add_edge(f"{b1[0]}{b1[1]}", f"{b2[0]}{b2[1]}")
+        # Add existing bigrams
+        for idx in feature_matrix.index[:top_n]:
+            if isinstance(idx, tuple) and len(idx) == 2:
+                char1, char2 = idx
+                # Add nodes
+                G.add_node(char1, type='existing')
+                G.add_node(char2, type='existing')
+                # Add edge
+                G.add_edge(char1, char2, type='existing', weight=1.0)
         
-        # Create layout
-        pos = nx.kamada_kawai_layout(G)
+        # Add recommended bigrams
+        for rec in recommendations:
+            bigram = rec['bigram']
+            if isinstance(bigram, tuple) and len(bigram) == 2:
+                char1, char2 = bigram
+                # Add nodes if not exist
+                if char1 not in G:
+                    G.add_node(char1, type='recommended')
+                if char2 not in G:
+                    G.add_node(char2, type='recommended')
+                # Add edge
+                G.add_edge(char1, char2, type='recommended', 
+                          weight=2.0, distance=rec['distance'])
         
-        # Plot
+        # Set up plot
         plt.figure(figsize=(12, 8))
-        nx.draw(G, pos, with_labels=True, node_color='lightblue',
-               node_size=1000, font_size=10, font_weight='bold')
-        plt.title('Bigram Relationship Graph')
-        plt.savefig(output_path)
+        
+        # Use spring layout
+        pos = nx.spring_layout(G, k=1.5)
+        
+        # Draw existing bigrams
+        nx.draw_networkx_edges(G, pos,
+                             edgelist=[(u, v) for u, v, d in G.edges(data=True) 
+                                      if d['type'] == 'existing'],
+                             edge_color='gray', alpha=0.5)
+        
+        # Draw recommended bigrams
+        nx.draw_networkx_edges(G, pos,
+                             edgelist=[(u, v) for u, v, d in G.edges(data=True) 
+                                      if d['type'] == 'recommended'],
+                             edge_color='red', alpha=0.7, width=2)
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(G, pos,
+                             node_color='lightblue',
+                             node_size=500)
+        
+        # Add labels
+        nx.draw_networkx_labels(G, pos)
+        
+        plt.title('Bigram Relationships Graph\n(Red edges: recommended bigrams)')
+        plt.axis('off')
+        
+        # Add legend
+        plt.plot([], [], 'gray', alpha=0.5, label='Existing bigrams')
+        plt.plot([], [], 'red', alpha=0.7, linewidth=2, label='Recommended bigrams')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         
+        logger.info(f"Bigram graph saved to {output_path}")
+        
     except Exception as e:
-        logger.error(f"Error plotting bigram graph: {str(e)}")
+        logger.error(f"Error creating bigram graph: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
 def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
     """
