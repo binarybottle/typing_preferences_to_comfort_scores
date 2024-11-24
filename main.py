@@ -79,25 +79,37 @@ def validate_config(config: Dict[str, Any]) -> None:
                 raise ValueError(f"Missing required model setting: {setting}")
 
 def setup_logging(config: Dict[str, Any]) -> None:
-    """Setup logging configuration."""
-    handlers = [
-        logging.FileHandler(config['paths']['logs']),
-        logging.StreamHandler()
-    ]
+    """Setup logging configuration with proper stream and file handlers."""
+    # Get log level from config
+    log_level = getattr(logging, config['logging']['level'].upper())
+    
+    # Create formatters
+    file_formatter = logging.Formatter(config['logging']['format'])
+    stream_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # Setup root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(config['logging']['level'])
+    root_logger.setLevel(log_level)
     
-    # Create and set formatter
-    formatter = logging.Formatter(config['logging']['format'])
+    # Clear any existing handlers
+    root_logger.handlers = []
     
-    # Add handlers with formatter
-    for handler in handlers:
-        handler.setFormatter(formatter)
-        root_logger.addHandler(handler)
-        
+    # Create file handler
+    file_handler = logging.FileHandler(config['paths']['logs'])
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(log_level)
+    root_logger.addHandler(file_handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(stream_formatter)
+    console_handler.setLevel(log_level)
+    root_logger.addHandler(console_handler)
+    
+    logger = logging.getLogger(__name__)
     logger.info("Logging setup completed")
+    logger.info(f"Log file: {config['paths']['logs']}")
+    logger.info(f"Log level: {config['logging']['level']}")
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load and validate configuration from YAML file."""
@@ -257,23 +269,38 @@ def main():
                 if feature_space_results is None:
                     logger.error("Feature space analysis returned no results")
                 else:
+                    # Log results using dedicated function
+                    log_feature_space_results(feature_space_results)
+                    
                     # Save analysis results
                     save_feature_space_analysis_results(
                         feature_space_results, 
                         config['paths']['feature_space']['analysis']
                     )
-
-                    # Log recommendations and feature space metrics
-                    logger.info(f"Feature space analysis completed:")
-                    if 'feature_space_metrics' in feature_space_results:
-                        logger.info(f"  Hull area: {feature_space_results['feature_space_metrics']['hull_area']:.3f}")
-                        logger.info(f"  Point density: {feature_space_results['feature_space_metrics']['point_density']:.3f}")
-                    if 'recommendations' in feature_space_results:
-                        logger.info(f"  Generated {len(feature_space_results['recommendations'])} bigram pair recommendations")
+                    
             except Exception as e:
                 logger.error(f"Error in feature space analysis: {str(e)}")
                 if config['model']['train']:
                     logger.warning("Continuing with model training despite feature space analysis failure")
+
+        def log_feature_space_results(feature_space_results: Dict[str, Any]) -> None:
+            """Log feature space analysis results with proper logger."""
+            logger = logging.getLogger(__name__)
+            
+            if feature_space_results and 'feature_space_metrics' in feature_space_results:
+                metrics = feature_space_results['feature_space_metrics']
+                logger.info("Feature space analysis metrics:")
+                logger.info(f"  Hull area: {metrics['hull_area']:.3f}")
+                logger.info(f"  Point density: {metrics['point_density']:.3f}")
+                logger.info(f"  Variance explained: PC1={metrics['variance_explained'][0]:.2%}, "
+                        f"PC2={metrics['variance_explained'][1]:.2%}")
+            
+            if feature_space_results and 'recommendations' in feature_space_results:
+                recommendations = feature_space_results['recommendations']
+                logger.info(f"Generated {len(recommendations)} bigram pair recommendations")
+                logger.info("Top 3 recommendations:")
+                for i, rec in enumerate(recommendations[:3], 1):
+                    logger.info(f"  {i}. Bigram: {rec['bigram']}, Distance: {rec['distance']:.3f}")
 
         # === SPLIT DATASET ANALYSES === #
         
