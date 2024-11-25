@@ -458,11 +458,15 @@ def evaluate_model_performance(
     mae = np.mean(np.abs(target_vector - predictions))
     correlation, _ = stats.spearmanr(predictions, target_vector)
     
+    threshold = 0.5  # or whatever makes sense for your scale
+    accuracy = np.mean(np.abs(predictions - target_vector) < threshold)
+    
     return {
         'r2': float(r2),
         'rmse': float(rmse),
         'mae': float(mae),
-        'correlation': float(correlation)
+        'correlation': float(correlation),
+        'accuracy': float(accuracy)
     }
 
 #=========================#

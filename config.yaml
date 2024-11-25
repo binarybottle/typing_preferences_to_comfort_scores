@@ -27,16 +27,18 @@ analysis:
     chains: 8 # When set to 8: "The effective sample size per chain is smaller than 100 for some parameters."
     target_accept: 0.85
     combinations:
-      - ['same_finger', 'angle_apart', 
-         'outward_roll_same_row', 'middle_column', 
+      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+         'sum_engram_position_values', 'sum_finger_values']
+      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+         'sum_row_position_values', 'sum_finger_values']
+      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
          'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart',
-         'outward_roll_same_row', 'middle_column', 
+      - ['same_finger', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
          'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart',
-         'outward_roll_same_row', 'middle_column', 
-         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values',
-         'finger_pairs']
+      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
+         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
+         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values', 'finger_pairs']
 
   # Feature space analysis
   feature_space:
@@ -71,6 +73,7 @@ features:
     enabled: true
     pairs:
       - ['sum_engram_position_values', 'rows_apart']
+      - ['outward_roll', 'rows_apart']
 
   # Feature groups
   groups:
@@ -79,7 +82,7 @@ features:
       - 'adj_finger_diff_row'
       - 'rows_apart'
       - 'angle_apart'
-      - 'outward_roll_same_row'
+      - 'outward_roll'
       - 'middle_column'
       - 'sum_engram_position_values'
       - 'sum_row_position_values'
@@ -87,7 +90,7 @@ features:
         # - 'adj_finger_skip'
         # - 'skip_home'
         # - 'columns_apart'
-        # - 'outward_roll'
+        # - 'outward_roll_same_row'
         # - 'outward_skip'
         # - 'finger1or4_top_above'
         # - 'finger2or3_bottom_below'
