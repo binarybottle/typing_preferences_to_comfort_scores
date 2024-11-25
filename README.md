@@ -80,8 +80,28 @@ engram3/
     └── scores/
         └── bigram_comfort_scores.csv
 
-# Installation
+## Scripts
+- **`main.py`**: Orchestrates the entire pipeline from data processing to modeling.
+- **`bayesian_modeling.py`**: Implements Bayesian modeling for latent bigram typing comfort estimation.
+- **`bigram_feature_extraction.py`**: Extracts features from bigrams for analysis.
+- **`bigram_frequency_timing.py`**: Analyzes timing and frequency of bigram typing.
+- **`bigram_pair_feature_evaluation.py`**: Evaluates feature effectiveness using test data.
+- **`bigram_pair_recommendations.py`**: Recommends additional bigram pairs for data collection.
+- **`data_processing.py`**: Processes raw data into a format suitable for analysis.
+- **`config.yaml`**: Configuration file for customizing paths, analysis settings, and model parameters.
+
+## Installation
 pip install -r requirements.txt
 
-# Running the pipeline
+## Running the pipeline
 python main.py --config config.yaml
+
+## Configuration
+Key settings can be customized in `config.yaml`:
+- **Data settings**: Specify input data files and participant splits.
+- **Analysis settings**: Enable or disable frequency, feature space, and evaluation analyses.
+- **Model settings**: Configure training parameters like sampling method and evaluation.
+- **Logging**: Adjust verbosity and log output location.
+
+## Dependencies
+The required dependencies are listed in `requirements.txt`.

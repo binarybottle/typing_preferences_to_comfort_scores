@@ -10,7 +10,7 @@ data:
 
   # Participant splits
   splits:
-    generate: false # One time per file (output_all4studies_406participants/ on 2024-11-23)
+    generate: false # One time per file (output_all4studies_406participants/ on 2024-11-25)
     train_ratio: 0.8
   
   # Keyboard layout
@@ -19,26 +19,10 @@ data:
 
 # Analysis settings
 analysis:
-  # Feature evaluation
-  feature_evaluation:
+  # Frequency/timing analysis
+  frequency_timing:
     enabled: true
-    n_splits: 5
-    n_samples: 10000
-    chains: 8 # When set to 8: "The effective sample size per chain is smaller than 100 for some parameters."
-    target_accept: 0.85
-    combinations:
-      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_engram_position_values', 'sum_finger_values']
-      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
-      - ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
-         'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values', 'finger_pairs']
+    n_groups: 4
 
   # Feature space analysis
   feature_space:
@@ -47,10 +31,196 @@ analysis:
     recommend_bigrams: true
     num_recommendations: 30
 
-  # Frequency/timing analysis
-  frequency_timing:
+  # Feature evaluation
+  feature_evaluation:
     enabled: true
-    n_groups: 4
+    n_splits: 5
+    n_samples: 10000
+    chains: 8 # When set to 8: "The effective sample size per chain is smaller than 100 for some parameters."
+    target_accept: 0.85
+    combinationsOFF:
+      - name: "base4"
+        features: ['same_finger', 'angle_apart', 'outward_roll', 'middle_column']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+      - name: "base5"
+        features: ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+      - name: "base6_engram"
+        features: ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_engram_position_values', 'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart']
+          - ['sum_engram_position_values', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+      - name: "base6_row"
+        features: ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_row_position_values', 'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart']
+          - ['sum_row_position_values', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+      - name: "base7"
+        features: ['same_finger', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart']
+          - ['sum_engram_position_values', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart']
+          - ['sum_row_position_values', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+      - name: "base8"
+        features: ['same_finger', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart']
+          - ['sum_engram_position_values', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart']
+          - ['sum_row_position_values', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'same_finger']
+          - ['rows_apart', 'angle_apart']
+          - ['rows_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values']
+          - ['rows_apart', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+      - name: "base9"
+        features: ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart']
+          - ['sum_engram_position_values', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart']
+          - ['sum_row_position_values', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'same_finger']
+          - ['rows_apart', 'angle_apart']
+          - ['rows_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values']
+          - ['rows_apart', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'rows_apart']
+          - ['adj_finger_diff_row', 'angle_apart']
+          - ['adj_finger_diff_row', 'outward_roll']
+          - ['adj_finger_diff_row', 'sum_engram_position_values']
+          - ['adj_finger_diff_row', 'sum_row_position_values']
+          - ['adj_finger_diff_row', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_row_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values', 'outward_roll']
+    combinations:
+      - name: "base10"
+        features: ['same_finger', 'adj_finger_diff_row', 'rows_apart', 'angle_apart', 'outward_roll', 'middle_column', 
+                   'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values', 'finger_pairs']
+        interactions:
+          - ['same_finger', 'middle_column']
+          - ['angle_apart', 'outward_roll']
+          - ['outward_roll', 'middle_column']
+          - ['sum_finger_values', 'angle_apart']
+          - ['sum_finger_values', 'outward_roll']
+          - ['sum_finger_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart']
+          - ['sum_engram_position_values', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart']
+          - ['sum_row_position_values', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'same_finger']
+          - ['rows_apart', 'angle_apart']
+          - ['rows_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values']
+          - ['rows_apart', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll']
+          - ['rows_apart', 'sum_engram_position_values', 'sum_row_position_values', 'angle_apart', 'outward_roll', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'rows_apart']
+          - ['adj_finger_diff_row', 'angle_apart']
+          - ['adj_finger_diff_row', 'outward_roll']
+          - ['adj_finger_diff_row', 'sum_engram_position_values']
+          - ['adj_finger_diff_row', 'sum_row_position_values']
+          - ['adj_finger_diff_row', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_row_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values']
+          - ['adj_finger_diff_row', 'sum_engram_position_values', 'sum_row_position_values', 'sum_finger_values', 'outward_roll']
 
 # Model settings
 model:

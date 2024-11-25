@@ -306,12 +306,10 @@ def main():
                 feature_matrix=test_data.feature_matrix,
                 target_vector=test_data.target_vector,
                 participants=test_data.participants,
-                candidate_features=config['analysis']['feature_evaluation']['combinations'],
+                feature_sets=config['analysis']['feature_evaluation']['combinations'],  # Updated
                 output_dir=Path(config['paths']['feature_evaluation']),
                 n_splits=config['analysis']['feature_evaluation']['n_splits'],
-                n_samples=config['analysis']['feature_evaluation']['n_samples'],
-                chains=config['analysis']['feature_evaluation']['chains'],
-                target_accept=config['analysis']['feature_evaluation']['target_accept']
+                n_samples=config['analysis']['feature_evaluation']['n_samples']
             )
             logger.info("Feature evaluation completed")
 

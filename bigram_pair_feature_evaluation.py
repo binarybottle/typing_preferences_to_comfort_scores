@@ -66,150 +66,219 @@ class FeatureEvaluationResults:
 # Core Evaluation   #
 #===================#
 def evaluate_feature_sets(
-    feature_matrix: pd.DataFrame,
-    target_vector: np.ndarray,
-    participants: np.ndarray,
-    candidate_features: List[List[str]],
-    output_dir: Path,
-    n_splits: int = 5,
-    n_samples: int = 10000,
-    chains: int = 8,
-    target_accept: float = 0.85
+   feature_matrix: pd.DataFrame,
+   target_vector: np.ndarray,
+   participants: np.ndarray,
+   feature_sets: List[Dict[str, Any]],
+   output_dir: Path,
+   n_splits: int = 5,
+   n_samples: int = 10000,
+   chains: int = 8,
+   target_accept: float = 0.85
 ) -> Dict[str, List[float]]:
-    """
-    Evaluate different feature sets using cross-validation.
-    
-    Args:
-        feature_matrix: Matrix of feature values
-        target_vector: Target values
-        participants: Participant IDs for grouping
-        candidate_features: List of feature sets to evaluate
-        output_dir: Directory for output files
-        n_splits: Number of cross-validation splits
-        n_samples: Number of MCMC samples
-        chains: Number of independent MCMC chains
-        target_accept: Target acceptance rate for proposals in the NUTS sampler
+   """
+   Evaluate different feature sets using cross-validation.
+   
+   Args:
+       feature_matrix: Matrix of feature values
+       target_vector: Target values
+       participants: Participant IDs for grouping
+       feature_sets: List of dictionaries containing:
+           - name: Name of the feature set
+           - features: List of features to include
+           - interactions: List of feature lists to test for interactions
+       output_dir: Directory for output files
+       n_splits: Number of cross-validation splits
+       n_samples: Number of MCMC samples
+       chains: Number of independent MCMC chains
+       target_accept: Target acceptance rate for proposals in the NUTS sampler
+   """
+   results = {}
+   all_cv_metrics = {}
+   all_feature_effects = {}
 
-    """
-    results = {}
-    
-    # Create output directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create summary file
-    summary_path = output_dir / "feature_evaluation_summary.txt"
-    metrics_path = output_dir / "feature_set_metrics.txt"
-    importance_path = output_dir / "feature_importance.txt"
-    
-    with open(summary_path, 'w') as summary_file, \
-         open(metrics_path, 'w') as metrics_file, \
-         open(importance_path, 'w') as importance_file:
-         
-        summary_file.write("Feature Set Evaluation Summary\n")
-        summary_file.write("===========================\n\n")
+   output_dir.mkdir(parents=True, exist_ok=True)
+   
+   summary_path = output_dir / "feature_evaluation_summary.txt"
+   metrics_path = output_dir / "feature_set_metrics.txt"
+   importance_path = output_dir / "feature_importance.txt"
+   
+   with open(summary_path, 'w') as summary_file, \
+        open(metrics_path, 'w') as metrics_file, \
+        open(importance_path, 'w') as importance_file:
         
-        metrics_file.write("Detailed Cross-Validation Metrics\n")
-        metrics_file.write("==============================\n\n")
-        
-        importance_file.write("Feature Importance Analysis\n")
-        importance_file.write("========================\n\n")
-        
-        # Evaluate each feature set
-        for i, features in enumerate(candidate_features):
-            logger.info(f"Evaluating feature_set_{i}: {features}")
-            summary_file.write(f"\nFeature Set {i}:\n")
-            summary_file.write("-" * 50 + "\n")
-            summary_file.write("Features: " + ", ".join(features) + "\n\n")
-            
-            # Select features for this set
-            X = feature_matrix[features].copy()
-            
-            # Cross-validation
-            logger.info("Starting cross-validation")
-            cv_metrics = {
-                'r2': [], 'rmse': [], 'mae': [], 
-                'correlation': [], 'accuracy': []
-            }
-            
-            # Create cross-validation splits
-            group_kfold = GroupKFold(n_splits=n_splits)
-            
-            for fold, (train_idx, val_idx) in enumerate(
-                group_kfold.split(X, target_vector, participants)
-            ):
-                # Split data
-                X_train = X.iloc[train_idx]
-                y_train = target_vector[train_idx]
-                X_val = X.iloc[val_idx]
-                y_val = target_vector[val_idx]
-                participants_train = participants[train_idx]
-                
-                # Train model
-                trace, model, _ = train_bayesian_glmm(
-                    feature_matrix=X_train,
-                    target_vector=y_train,
-                    participants=participants_train,
-                    design_features=features,
-                    control_features=[],
-                    inference_method='mcmc',
-                    n_samples=n_samples,
-                    chains=chains,
-                    target_accept=target_accept
-                )
-                
-                # Evaluate
-                metrics = evaluate_model_performance(
-                    trace=trace,
-                    feature_matrix=X_val,
-                    target_vector=y_val,
-                    participants=participants[val_idx],
-                    design_features=features,
-                    control_features=[]
-                )
-                
-                # Record metrics
-                for metric, value in metrics.items():
-                    cv_metrics[metric].append(value)
-                
-                # Write fold results
-                metrics_file.write(f"Feature Set {i}, Fold {fold}:\n")
-                for metric, value in metrics.items():
-                    metrics_file.write(f"  {metric}: {value:.3f}\n")
-                metrics_file.write("\n")
-                
-                # Calculate and save feature importance
-                if fold == 0:  # Only for first fold
-                    importance_file.write(f"\nFeature Set {i} Importance:\n")
-                    feature_effects = az.summary(trace, var_names=features)
-                    importance_file.write(feature_effects.to_string() + "\n\n")
-                
-            # Calculate average metrics
-            avg_metrics = {
-                metric: np.mean(values) for metric, values in cv_metrics.items()
-            }
-            std_metrics = {
-                metric: np.std(values) for metric, values in cv_metrics.items()
-            }
-            
-            # Write summary results
-            summary_file.write("Average Metrics:\n")
-            for metric, mean_value in avg_metrics.items():
-                std_value = std_metrics[metric]
-                summary_file.write(f"{metric}: {mean_value:.3f} ± {std_value:.3f}\n")
-            summary_file.write("\n")
-            
-            results[f"feature_set_{i}"] = avg_metrics
-            
-            # Create visualization
-            plt.figure(figsize=(10, 6))
-            plt.boxplot([cv_metrics[m] for m in ['r2', 'correlation', 'accuracy']], 
-                       labels=['R²', 'Correlation', 'Accuracy'])
-            plt.title(f'Feature Set {i} Performance')
-            plt.ylabel('Score')
-            plt.savefig(output_dir / f"feature_set_{i}_performance.png")
-            plt.close()
-    
-    return results
+       summary_file.write("Feature Set Evaluation Summary\n")
+       summary_file.write("===========================\n\n")
+       
+       metrics_file.write("Detailed Cross-Validation Metrics\n")
+       metrics_file.write("==============================\n\n")
+       
+       importance_file.write("Feature Importance Analysis\n")
+       importance_file.write("========================\n\n")
+       
+       for feature_set in feature_sets:
+           set_name = feature_set['name']
+           features = feature_set['features'].copy()
+           interactions = feature_set.get('interactions', [])
+           
+           logger.info(f"Evaluating {set_name}: {features}")
+           logger.info(f"Testing interactions: {interactions}")
+           
+           summary_file.write(f"\nFeature Set: {set_name}\n")
+           summary_file.write("-" * 50 + "\n")
+           summary_file.write("Base Features: " + ", ".join(features) + "\n")
+           if interactions:
+               summary_file.write("Interactions: " + 
+                                ", ".join(["×".join(interaction) for interaction in interactions]) + "\n")
+           summary_file.write("\n")
+           
+           # Select features and create interaction terms
+           X = feature_matrix[features].copy()
+           
+           # Add interaction terms only if all features are present
+           valid_interactions = []
+           for interaction in interactions:
+               if all(feat in features for feat in interaction):
+                   interaction_name = "_".join(interaction)
+                   # Create interaction term as product of all features
+                   X[interaction_name] = X[interaction[0]].copy()
+                   for feat in interaction[1:]:
+                       X[interaction_name] *= X[feat]
+                   features.append(interaction_name)
+                   valid_interactions.append(interaction)
+               else:
+                   logger.warning(f"Skipping interaction {' × '.join(interaction)} - "
+                               f"not all features present in {set_name}")
+           
+           # Create storage dictionary for feature effects
+           feature_effects_all_folds = {feature: [] for feature in features}
+
+           # Cross-validation
+           logger.info("Starting cross-validation")
+           cv_metrics = {
+               'r2': [], 'rmse': [], 'mae': [], 
+               'correlation': [], 'accuracy': []
+           }
+           
+           # Create cross-validation splits
+           group_kfold = GroupKFold(n_splits=n_splits)
+           
+           for fold, (train_idx, val_idx) in enumerate(
+               group_kfold.split(X, target_vector, participants)
+           ):
+               # Split data
+               X_train = X.iloc[train_idx]
+               y_train = target_vector[train_idx]
+               X_val = X.iloc[val_idx]
+               y_val = target_vector[val_idx]
+               participants_train = participants[train_idx]
+               
+               # Train model
+               trace, model, _ = train_bayesian_glmm(
+                   feature_matrix=X_train,
+                   target_vector=y_train,
+                   participants=participants_train,
+                   design_features=features,
+                   control_features=[],
+                   inference_method='mcmc',
+                   n_samples=n_samples,
+                   chains=chains,
+                   target_accept=target_accept
+               )
+               
+               # Evaluate
+               metrics = evaluate_model_performance(
+                   trace=trace,
+                   feature_matrix=X_val,
+                   target_vector=y_val,
+                   participants=participants[val_idx],
+                   design_features=features,
+                   control_features=[]
+               )
+               
+               # Record metrics
+               for metric, value in metrics.items():
+                   cv_metrics[metric].append(value)
+               
+               # Write fold results
+               metrics_file.write(f"Feature Set {set_name}, Fold {fold}:\n")
+               for metric, value in metrics.items():
+                   metrics_file.write(f"  {metric}: {value:.3f}\n")
+               metrics_file.write("\n")
+                               
+               # Store feature effects for each fold
+               try:
+                   feature_effects = az.summary(trace, var_names=features)
+                   for feature in features:
+                       feature_effects_all_folds[feature].append(feature_effects.loc[feature])
+               except Exception as e:
+                   logger.warning(f"Could not compute feature effects for fold {fold}: {str(e)}")
+
+           # Write aggregate feature importance
+           importance_file.write(f"\nFeature Set {set_name} Feature Importance (across {n_splits} folds):\n")
+           importance_file.write("-" * 50 + "\n")
+           for feature in features:
+               effects = pd.DataFrame(feature_effects_all_folds[feature])
+               importance_file.write(f"\n{feature}:\n")
+               importance_file.write("Mean effects:\n")
+               importance_file.write(effects.mean().to_string() + "\n")
+               importance_file.write("\nStd across folds:\n")
+               importance_file.write(effects.std().to_string() + "\n")
+               importance_file.write("\nEffects by fold:\n")
+               importance_file.write(effects.to_string() + "\n")
+           importance_file.write("\n" + "="*50 + "\n")
+
+           # Add interaction-specific analysis
+           if valid_interactions:
+               importance_file.write(f"\nFeature Interactions for {set_name}:\n")
+               importance_file.write("-" * 50 + "\n")
+               for interaction in valid_interactions:
+                   interaction_name = "_".join(interaction)
+                   effects = pd.DataFrame(feature_effects_all_folds[interaction_name])
+                   importance_file.write(f"\n{' × '.join(interaction)}:\n")
+                   importance_file.write("Mean interaction effect:\n")
+                   importance_file.write(effects.mean().to_string() + "\n")
+                   importance_file.write("\nStd across folds:\n")
+                   importance_file.write(effects.std().to_string() + "\n")
+                   
+           # Calculate average metrics
+           avg_metrics = {
+               metric: np.mean(values) for metric, values in cv_metrics.items()
+           }
+           std_metrics = {
+               metric: np.std(values) for metric, values in cv_metrics.items()
+           }
+           
+           # Write summary results
+           summary_file.write("Average Metrics:\n")
+           for metric, mean_value in avg_metrics.items():
+               std_value = std_metrics[metric]
+               summary_file.write(f"{metric}: {mean_value:.3f} ± {std_value:.3f}\n")
+           summary_file.write("\n")
+           
+           # Create visualization
+           plt.figure(figsize=(10, 6))
+           plt.boxplot([cv_metrics[m] for m in ['r2', 'correlation', 'accuracy']], 
+                      labels=['R²', 'Correlation', 'Accuracy'])
+           plt.title(f'Feature Set {set_name} Performance')
+           plt.ylabel('Score')
+           plt.savefig(output_dir / f"feature_set_{set_name}_performance.png")
+           plt.close()
+   
+           # Store results with meaningful names
+           results[set_name] = avg_metrics
+           all_cv_metrics[set_name] = cv_metrics
+           all_feature_effects[set_name] = feature_effects_all_folds
+   
+   # Analyze results
+   analyze_and_recommend(
+       output_dir=output_dir,
+       cv_metrics=all_cv_metrics,
+       feature_effects=all_feature_effects,
+       feature_sets=feature_sets
+   )
+   
+   return results
 
 def perform_cross_validation(
     feature_matrix: pd.DataFrame,
@@ -689,3 +758,244 @@ def save_evaluation_results(
     except Exception as e:
         logger.error(f"Error saving evaluation results: {str(e)}")
         raise
+
+def analyze_and_recommend(
+    output_dir: Path,
+    cv_metrics: Dict[str, Dict[str, List[float]]],
+    feature_effects: Dict[str, Dict[str, List[Any]]],
+    feature_sets: List[Dict[str, Any]],
+    correlation_threshold: float = 0.7,
+    importance_threshold: float = 0.1,
+    variability_threshold: float = 0.5
+) -> None:
+    """
+    Analyze evaluation results and provide feature recommendations.
+    
+    Args:
+        output_dir: Directory containing evaluation results
+        cv_metrics: Dictionary mapping set names to their cross-validation metrics
+        feature_effects: Dictionary mapping set names to their feature effects
+        feature_sets: List of feature set configurations
+        correlation_threshold: Threshold for concerning feature correlations
+        importance_threshold: Threshold for feature importance significance
+        variability_threshold: Threshold for concerning effect variability
+    """
+    analysis_path = output_dir / "feature_recommendations.txt"
+    
+    with open(analysis_path, 'w') as f:
+        f.write("Feature Analysis and Recommendations\n")
+        f.write("=================================\n\n")
+        
+        # 1. Analyze Feature Set Performance
+        f.write("1. Feature Set Performance\n")
+        f.write("-----------------------\n")
+        
+        # Calculate and sort mean performance
+        feature_set_performance = {}
+        for set_name, metrics in cv_metrics.items():
+            mean_r2 = np.mean(metrics['r2'])
+            std_r2 = np.std(metrics['r2'])
+            feature_set_performance[set_name] = {
+                'r2_mean': mean_r2,
+                'r2_std': std_r2,
+                'correlation_mean': np.mean(metrics['correlation']),
+                'correlation_std': np.std(metrics['correlation']),
+                'rmse_mean': np.mean(metrics['rmse']),
+                'rmse_std': np.std(metrics['rmse']),
+                'accuracy_mean': np.mean(metrics['accuracy']),
+                'accuracy_std': np.std(metrics['accuracy'])
+            }
+        
+        # Sort by R² score
+        sorted_sets = sorted(feature_set_performance.items(), 
+                           key=lambda x: x[1]['r2_mean'], 
+                           reverse=True)
+        
+        # Report all sets
+        f.write("\nAll Feature Sets (sorted by R²):\n")
+        for set_name, perf in sorted_sets:
+            f.write(f"\n{set_name}:\n")
+            f.write(f"  R² = {perf['r2_mean']:.3f} ± {perf['r2_std']:.3f}\n")
+            f.write(f"  Correlation = {perf['correlation_mean']:.3f} ± {perf['correlation_std']:.3f}\n")
+            f.write(f"  RMSE = {perf['rmse_mean']:.3f} ± {perf['rmse_std']:.3f}\n")
+            f.write(f"  Accuracy = {perf['accuracy_mean']:.3f} ± {perf['accuracy_std']:.3f}\n")
+
+        # Performance improvement analysis
+        f.write("\nPerformance Improvement Analysis:\n")
+        baseline_r2 = sorted_sets[-1][1]['r2_mean']  # Worst performing set as baseline
+        for set_name, perf in sorted_sets[:-1]:  # Skip baseline
+            improvement = (perf['r2_mean'] - baseline_r2) / baseline_r2 * 100
+            f.write(f"{set_name}: {improvement:.1f}% improvement over baseline\n")
+        
+        # 2. Individual Feature Analysis
+        f.write("\n2. Individual Feature Analysis\n")
+        f.write("---------------------------\n")
+        
+        # Analyze each feature across all sets it appears in
+        all_features = set()
+        feature_performance = {}
+        
+        for set_name, effects in feature_effects.items():
+            for feature, effect_data in effects.items():
+                if not feature.endswith('_interaction'):  # Skip interaction terms for now
+                    all_features.add(feature)
+                    if feature not in feature_performance:
+                        feature_performance[feature] = []
+                    
+                    effects_df = pd.DataFrame(effect_data)
+                    mean_effect = effects_df['mean'].mean()
+                    effect_std = effects_df['mean'].std()
+                    
+                    feature_performance[feature].append({
+                        'set_name': set_name,
+                        'mean_effect': mean_effect,
+                        'effect_std': effect_std,
+                        'stability': effect_std / abs(mean_effect) if abs(mean_effect) > 0 else float('inf'),
+                        'consistent_sign': np.all(np.sign(effects_df['mean']) == 
+                                               np.sign(effects_df['mean'].iloc[0]))
+                    })
+        
+        # Categorize features
+        strong_features = []
+        weak_features = []
+        unstable_features = []
+        
+        for feature in all_features:
+            # Average metrics across sets
+            metrics = feature_performance[feature]
+            avg_effect = np.mean([m['mean_effect'] for m in metrics])
+            avg_stability = np.mean([m['stability'] for m in metrics])
+            consistent_across_sets = all(m['consistent_sign'] for m in metrics)
+            
+            if abs(avg_effect) > importance_threshold:
+                if avg_stability < variability_threshold and consistent_across_sets:
+                    strong_features.append((feature, avg_effect, avg_stability))
+                else:
+                    unstable_features.append((feature, avg_effect, avg_stability))
+            else:
+                weak_features.append((feature, avg_effect, avg_stability))
+        
+        # Report feature categories
+        f.write("\nStrong Features (Keep):\n")
+        for feature, effect, stability in sorted(strong_features, 
+                                               key=lambda x: abs(x[1]), 
+                                               reverse=True):
+            f.write(f"{feature}:\n")
+            f.write(f"  Average Effect: {effect:.3f}\n")
+            f.write(f"  Stability: {stability:.3f}\n")
+            f.write("  Performance across sets:\n")
+            for metric in feature_performance[feature]:
+                f.write(f"    {metric['set_name']}: {metric['mean_effect']:.3f} ± {metric['effect_std']:.3f}\n")
+        
+        f.write("\nUnstable Features (Review):\n")
+        for feature, effect, stability in unstable_features:
+            f.write(f"{feature}:\n")
+            f.write(f"  Average Effect: {effect:.3f}\n")
+            f.write(f"  Stability: {stability:.3f}\n")
+            f.write("  Performance across sets:\n")
+            for metric in feature_performance[feature]:
+                f.write(f"    {metric['set_name']}: {metric['mean_effect']:.3f} ± {metric['effect_std']:.3f}\n")
+        
+        f.write("\nWeak Features (Consider Removing):\n")
+        for feature, effect, stability in weak_features:
+            f.write(f"{feature}:\n")
+            f.write(f"  Average Effect: {effect:.3f}\n")
+            
+        # 3. Interaction Analysis
+        f.write("\n3. Feature Interactions\n")
+        f.write("---------------------\n")
+        
+        # Analyze interactions across all sets
+        interaction_performance = {}
+        
+        for set_name, effects in feature_effects.items():
+            feature_set = next(fs for fs in feature_sets if fs['name'] == set_name)
+            interactions = feature_set.get('interactions', [])
+            
+            for feat1, feat2 in interactions:
+                interaction_name = f"{feat1}_{feat2}"
+                if interaction_name in effects:
+                    if interaction_name not in interaction_performance:
+                        interaction_performance[interaction_name] = []
+                        
+                    effects_df = pd.DataFrame(effects[interaction_name])
+                    mean_effect = effects_df['mean'].mean()
+                    effect_std = effects_df['mean'].std()
+                    
+                    interaction_performance[interaction_name].append({
+                        'set_name': set_name,
+                        'mean_effect': mean_effect,
+                        'effect_std': effect_std,
+                        'features': (feat1, feat2)
+                    })
+        
+        if interaction_performance:
+            f.write("\nInteraction Effects:\n")
+            for interaction, metrics in interaction_performance.items():
+                feat1, feat2 = metrics[0]['features']
+                avg_effect = np.mean([m['mean_effect'] for m in metrics])
+                
+                f.write(f"\n{feat1} × {feat2}:\n")
+                f.write(f"  Average Effect: {avg_effect:.3f}\n")
+                f.write("  Performance across sets:\n")
+                for metric in metrics:
+                    f.write(f"    {metric['set_name']}: {metric['mean_effect']:.3f} ± {metric['effect_std']:.3f}\n")
+                
+                if abs(avg_effect) > importance_threshold:
+                    f.write("  Recommendation: Keep interaction\n")
+                else:
+                    f.write("  Recommendation: Remove interaction\n")
+        
+        # 4. Final Recommendations
+        f.write("\n4. Final Recommendations\n")
+        f.write("----------------------\n")
+        
+        # Best feature set
+        best_set_name = sorted_sets[0][0]
+        best_set_perf = sorted_sets[0][1]
+        f.write(f"\n1. Recommended Base Feature Set: {best_set_name}\n")
+        f.write(f"   R² = {best_set_perf['r2_mean']:.3f} ± {best_set_perf['r2_std']:.3f}\n")
+        
+        # Feature modifications
+        f.write("\n2. Feature Recommendations:\n")
+        
+        f.write("\n   Keep these features (strong, stable effects):\n")
+        for feature, effect, _ in strong_features:
+            f.write(f"   - {feature} (effect: {effect:.3f})\n")
+        
+        if unstable_features:
+            f.write("\n   Review these features (important but unstable):\n")
+            for feature, effect, stability in unstable_features:
+                f.write(f"   - {feature} (effect: {effect:.3f}, stability: {stability:.3f})\n")
+        
+        if weak_features:
+            f.write("\n   Consider removing these features (weak effects):\n")
+            for feature, effect, _ in weak_features:
+                f.write(f"   - {feature} (effect: {effect:.3f})\n")
+        
+        # Interaction recommendations
+        if interaction_performance:
+            f.write("\n3. Interaction Recommendations:\n")
+            
+            keep_interactions = []
+            remove_interactions = []
+            
+            for interaction, metrics in interaction_performance.items():
+                avg_effect = np.mean([m['mean_effect'] for m in metrics])
+                if abs(avg_effect) > importance_threshold:
+                    keep_interactions.append((interaction, avg_effect))
+                else:
+                    remove_interactions.append((interaction, avg_effect))
+            
+            if keep_interactions:
+                f.write("\n   Keep these interactions:\n")
+                for interaction, effect in sorted(keep_interactions, key=lambda x: abs(x[1]), reverse=True):
+                    f.write(f"   - {interaction} (effect: {effect:.3f})\n")
+            
+            if remove_interactions:
+                f.write("\n   Remove these interactions:\n")
+                for interaction, effect in remove_interactions:
+                    f.write(f"   - {interaction} (effect: {effect:.3f})\n")
+        
+        logger.info(f"Analysis and recommendations written to {analysis_path}")
+
