@@ -341,81 +341,103 @@ def generate_bigram_recommendations(
 
 def plot_bigram_graph(
     feature_matrix: pd.DataFrame,
-    recommendations: List[Dict],
-    output_path: str,
-    top_n: int = 50,
-    edge_threshold: float = 0.7  # Threshold for adding edges based on similarity
+    recommendations: List[Dict] = None,
+    output_path: str = None
 ) -> None:
-    """Plot graph visualization of bigram relationships."""
     try:
         import networkx as nx
         
         G = nx.Graph()
         
-        # Helper function to format bigram
-        def format_bigram(bigram: Tuple[str, str]) -> str:
-            return f"{bigram[0]}{bigram[1]}"
+        # Add edges from the feature matrix index
+        for bigram_pair in feature_matrix.index:
+            chosen_bigram = ''.join(bigram_pair[0])
+            unchosen_bigram = ''.join(bigram_pair[1])
+            G.add_edge(chosen_bigram, unchosen_bigram)
+            
+        # Try different layout algorithms for fewer crossings
+        # pos = nx.spring_layout(G, k=2, iterations=100)  # Increase k and iterations
+        pos = nx.kamada_kawai_layout(G)  # Often better for avoiding crossings
+        # pos = nx.circular_layout(G)  # Try circular layout
         
-        # Add existing bigrams and store feature vectors
-        existing_nodes = {}  # Map node labels to feature vectors
-        for idx, features in feature_matrix.iloc[:top_n].iterrows():
-            if isinstance(idx, tuple) and len(idx) == 2:
-                node_label = format_bigram(idx)
-                G.add_node(node_label, type='existing')
-                existing_nodes[node_label] = features.values
-        
-        # Add recommended bigrams
-        recommended_nodes = set()
-        for rec in recommendations:
-            bigram = rec['bigram']
-            if isinstance(bigram, tuple) and len(bigram) == 2:
-                node_label = format_bigram(bigram)
-                if node_label not in existing_nodes:
-                    G.add_node(node_label, type='recommended')
-                    recommended_nodes.add(node_label)
-        
-        # Add edges between similar bigrams
-        for node1, features1 in existing_nodes.items():
-            for node2, features2 in existing_nodes.items():
-                if node1 < node2:  # Avoid duplicate edges
-                    # Calculate cosine similarity
-                    similarity = np.dot(features1, features2) / (
-                        np.linalg.norm(features1) * np.linalg.norm(features2))
-                    if similarity > edge_threshold:
-                        G.add_edge(node1, node2, weight=similarity)
-        
-        # Set up plot
-        plt.figure(figsize=(12, 8))
-        pos = nx.spring_layout(G, k=1.5, weight='weight')
+        plt.figure(figsize=(15, 15))
         
         # Draw edges
-        nx.draw_networkx_edges(G, pos, alpha=0.2)
+        nx.draw_networkx_edges(G, pos, 
+                             edge_color='gray',
+                             alpha=0.3,
+                             width=0.5)
         
-        # Draw nodes by type
-        nx.draw_networkx_nodes(G, pos,
-                             nodelist=list(existing_nodes.keys()),
-                             node_color='lightblue',
-                             node_size=500)
-        nx.draw_networkx_nodes(G, pos,
-                             nodelist=list(recommended_nodes),
-                             node_color='lightcoral',
-                             node_size=500)
+        # Draw nodes and create legend elements
+        legend_elements = []
         
-        # Add labels
-        nx.draw_networkx_labels(G, pos)
+        if recommendations:
+            node_size = 50
+            recommended_bigrams = set()
+            for rec in recommendations:
+                bigram = rec['bigram']
+                recommended_bigrams.add(''.join(bigram[0]))
+                recommended_bigrams.add(''.join(bigram[1]))
+            
+            # Regular nodes
+            regular_nodes = [node for node in G.nodes() if node not in recommended_bigrams]
+            if regular_nodes:
+                nx.draw_networkx_nodes(G, pos,
+                                     nodelist=regular_nodes,
+                                     node_color='lightblue',
+                                     node_size=node_size,
+                                     alpha=0.5)
+                legend_elements.append(plt.scatter([], [], c='lightblue', alpha=0.5,
+                                       s=node_size, label='Existing bigrams'))
+            
+            # Recommended nodes
+            recommended_nodes = [node for node in G.nodes() if node in recommended_bigrams]
+            if recommended_nodes:
+                nx.draw_networkx_nodes(G, pos,
+                                     nodelist=recommended_nodes,
+                                     node_color='red',
+                                     node_size=node_size,
+                                     alpha=0.5)
+                legend_elements.append(plt.scatter([], [], c='red', alpha=0.5,
+                                       s=node_size, label='Recommended bigrams'))
+        else:
+            nx.draw_networkx_nodes(G, pos,
+                                 node_color='lightblue',
+                                 node_size=node_size,
+                                 alpha=0.5)
+            legend_elements.append(plt.scatter([], [], c='lightblue', alpha=0.6,
+                                            s=node_size, label='Bigrams'))
         
-        plt.title('Bigram Graph\nBlue: Existing bigrams, Red: Recommended bigrams')
+        # Add edge to legend
+        legend_elements.append(plt.Line2D([0], [0], color='lightgray', alpha=0.5,
+                               label='Appears together in data'))
+        
+        # Add labels with small offset
+        label_pos = {node: (coord[0], coord[1] + 0.03) for node, coord in pos.items()}
+        nx.draw_networkx_labels(G, label_pos, font_size=8, font_weight='regular')
+        
+        plt.title('Bigram Pair Network')
         plt.axis('off')
         
-        plt.tight_layout()
+        # Add legend
+        plt.legend(handles=legend_elements, 
+                  loc='center left',
+                  bbox_to_anchor=(1, 0.5))
+        
+        plt.margins(0.2)
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        logger.info(f"Bigram graph saved to {output_path}")
+        return {
+            'n_bigrams': G.number_of_nodes(),
+            'n_connections': G.number_of_edges(),
+            'avg_degree': sum(dict(G.degree()).values()) / G.number_of_nodes()
+        }
         
     except Exception as e:
         logger.error(f"Error creating bigram graph: {str(e)}")
-
+        return None
+        
 def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
     """
     Save feature space analysis results to a file.

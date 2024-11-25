@@ -237,10 +237,15 @@ def main():
                     
                     logger.info("Frequency/timing analysis completed")
                     logger.info(f"Results:")
-                    logger.info(f"  Correlation: {timing_results['correlation']:.3f} "
-                                f"(p = {timing_results['correlation_p_value']:.3e})")
+                    logger.info(f"  Median correlation: {timing_results['correlation_median']:.3f} "
+                                f"(p = {timing_results['correlation_median_p']:.3e})")
+                    logger.info(f"  Mean correlation: {timing_results['correlation_mean']:.3f} "
+                                f"(p = {timing_results['correlation_mean_p']:.3e})")
                     logger.info(f"  R-squared: {timing_results['r2']:.3f}")
+                    logger.info(f"  ANOVA F-stat: {timing_results['anova_f_stat']:.3f} "
+                                f"(p = {timing_results['anova_p_value']:.3e})")
                     logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
+                    logger.info(f"  Total timing instances: {timing_results['total_occurrences']}")
 
             except Exception as e:
                 logger.error(f"Error in frequency-timing analysis: {str(e)}")
@@ -302,11 +307,11 @@ def main():
                 target_vector=test_data.target_vector,
                 participants=test_data.participants,
                 candidate_features=config['analysis']['feature_evaluation']['combinations'],
-                feature_names=feature_names,
                 output_dir=Path(config['paths']['feature_evaluation']),
-                config=config,
                 n_splits=config['analysis']['feature_evaluation']['n_splits'],
-                n_samples=config['analysis']['feature_evaluation']['n_samples']
+                n_samples=config['analysis']['feature_evaluation']['n_samples'],
+                chains=config['analysis']['feature_evaluation']['chains'],
+                target_accept=config['analysis']['feature_evaluation']['target_accept']
             )
             logger.info("Feature evaluation completed")
 
@@ -322,8 +327,9 @@ def main():
                 design_features=config['features']['groups']['design'],
                 control_features=config['features']['groups']['control'],
                 inference_method=config['model']['inference_method'],
-                num_samples=config['model']['num_samples'],
-                chains=config['model']['chains']
+                n_samples=config['model']['n_samples'],
+                chains=config['model']['chains'],
+                target_accept=config['model']['target_accept']
             )
 
             # Save model results

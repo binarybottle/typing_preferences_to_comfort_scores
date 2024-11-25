@@ -38,8 +38,9 @@ def train_bayesian_glmm(
    design_features: List[str],
    control_features: List[str],
    inference_method: str = 'mcmc',
-   num_samples: int = 1000,
-   chains: int = 4
+   n_samples: int = 10000,
+   chains: int = 8,
+   target_accept: float = 0.85
 ) -> Tuple:
     """
     Train Bayesian Generalized Linear Mixed Model (GLMM) for keyboard layout analysis.
@@ -56,9 +57,10 @@ def train_bayesian_glmm(
         design_features: Names of features related to keyboard layout design
         control_features: Names of features to control for (e.g., typing time)
         inference_method: MCMC method to use ('nuts' recommended)
-        num_samples: Number of posterior samples to draw
+        n_samples: Number of posterior samples to draw
         chains: Number of independent MCMC chains
-        
+        target_accept: Target acceptance rate for proposals in the NUTS sampler
+
     Returns:
         Tuple containing:
         - trace: ArviZ InferenceData object with posterior samples
@@ -68,6 +70,10 @@ def train_bayesian_glmm(
     logger.info("MODEL: Starting Bayesian GLMM training")
     logger.info("MODEL: Validating features...")
     
+    # Assertions to catch potential float values early
+    assert isinstance(n_samples, int), "n_samples must be an integer"
+    assert isinstance(chains, int), "chains must be an integer"
+
     # For the MCMC sampling progress
     class SamplingProgress:
         def __init__(self, total_chains):
@@ -105,28 +111,29 @@ def train_bayesian_glmm(
     participant_map = {p: i for i, p in enumerate(unique_participants)}
     n_participants = len(unique_participants)
 
+    effects_sigma = 2
     with pm.Model() as model:
         # Priors for design features
         design_effects = {
-            feat: pm.Normal(feat, mu=0, sigma=1)
+            feat: pm.Normal(feat, mu=0, sigma=effects_sigma)
             for feat in design_features
         }
 
         # Priors for control features
         control_effects = {
-            feat: pm.Normal(feat, mu=0, sigma=1)
+            feat: pm.Normal(feat, mu=0, sigma=effects_sigma)
             for feat in control_features
         }
 
         # Random effects for participants
-        participant_sigma = pm.HalfNormal('participant_sigma', sigma=1)
+        participant_sigma = pm.HalfNormal('participant_sigma', sigma=effects_sigma)
         participant_offset = pm.Normal('participant_offset',
                                     mu=0,
                                     sigma=participant_sigma,
                                     shape=n_participants)
 
         # Error term
-        sigma = pm.HalfNormal('sigma', sigma=1)
+        sigma = pm.HalfNormal('sigma', sigma=effects_sigma)
 
         # Expected value combining fixed and random effects
         mu = 0
@@ -139,42 +146,49 @@ def train_bayesian_glmm(
         # Add participant random effects
         mu += participant_offset[[participant_map[p] for p in participants]]
 
-        # Likelihood
-        #likelihood = pm.Normal('likelihood', mu=mu, sigma=sigma, observed=target_vector)
+        # Likelihood with potential for outliers
+        likelihood = pm.StudentT('likelihood', 
+                               nu=4,  # Degrees of freedom - more robust than Normal
+                               mu=mu, 
+                               sigma=sigma, 
+                               observed=target_vector)
 
         # Different sampling based on inference method
         logger.info(f"Using {inference_method} inference")
         
-        if inference_method.lower() == 'variational':
-            # Use ADVI for variational inference
-            logger.info(f"Note: Using variational inference can lead to shape validation failure")
-            approx = pm.fit(
-                n=num_samples,
-                method='advi',
-                obj_optimizer=pm.adam(learning_rate=0.1)
-            )
-            trace = approx.sample(num_samples)
-            
-        else:  # default to MCMC/NUTS
+        # Add adaptation steps for better sampling
+        with model:
+            # Start with MAP to find good initial values
+            start = pm.find_MAP()
+
             trace = pm.sample(
-                draws=num_samples,
-                tune=2000,
-                chains=chains,
-                target_accept=0.99,
+                draws=n_samples,              # Actual samples kept for inference (match config)
+                tune=n_samples//2,             # "Burn-in" period: sampler adjusts parameters and discards samples
+                chains=chains,                # Independent sampling sequences, used to assess convergence (match config)
+                cores=chains,                 # Number of CPU cores for parallel chain sampling
+                target_accept=target_accept,  # Target acceptance rate for proposals in NUTS sampler (0.8-0.9 good for exploration)
+                init='jitter+adapt_diag',
+                start=start,            
                 return_inferencedata=True,
                 compute_convergence_checks=True,
-                cores=1
+                random_seed=42                # For reproducibility
             )
 
-        # Collect priors
-        priors = {
-            'design_effects': design_effects,
-            'control_effects': control_effects,
-            'participant_sigma': participant_sigma,
-            'sigma': sigma
-        }
+            # Collect priors
+            priors = {
+                'design_effects': design_effects,
+                'control_effects': control_effects,
+                'participant_sigma': participant_sigma,
+                'sigma': sigma
+            }
 
         logger.info("Model training completed successfully")
+        logger.info("\nSampling diagnostics:")
+        summary = az.summary(trace)
+        for param in summary.index:
+            ess = summary.loc[param, 'ess_bulk']
+            rhat = summary.loc[param, 'r_hat']
+            logger.info(f"{param}: ESS={ess:.1f}, R-hat={rhat:.3f}")
 
         return trace, model, priors
    

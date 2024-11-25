@@ -23,8 +23,9 @@ analysis:
   feature_evaluation:
     enabled: true
     n_splits: 5
-    n_samples: 1000
-    test_size: 0.2
+    n_samples: 10000
+    chains: 8 # When set to 8: "The effective sample size per chain is smaller than 100 for some parameters."
+    target_accept: 0.85
     combinations:
       - ['same_finger', 'angle_apart', 
          'outward_roll_same_row', 'middle_column', 
@@ -52,9 +53,10 @@ analysis:
 # Model settings
 model:
   train: false
-  inference_method: 'mcmc'  # or 'variational'
-  num_samples: 2000
+  inference_method: 'mcmc'
+  n_samples: 10000
   chains: 8
+  target_accept: 0.85
   evaluate_test: true
   scoring:
     enabled: true
@@ -122,7 +124,7 @@ paths:
     dir: "output/frequency_timing"
     analysis: "output/frequency_timing/analysis.txt"
     relationship: "output/frequency_timing/relationship.png"
-    group_directory: "output/frequency_timing/groups"
+    group_directory: "output/frequency_timing"
   
   model:
     dir: "output/model"

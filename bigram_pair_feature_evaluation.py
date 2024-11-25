@@ -70,11 +70,11 @@ def evaluate_feature_sets(
     target_vector: np.ndarray,
     participants: np.ndarray,
     candidate_features: List[List[str]],
-    feature_names: List[str],
     output_dir: Path,
-    config: Dict[str, Any],
     n_splits: int = 5,
-    n_samples: int = 1000
+    n_samples: int = 10000,
+    chains: int = 8,
+    target_accept: float = 0.85
 ) -> Dict[str, List[float]]:
     """
     Evaluate different feature sets using cross-validation.
@@ -84,11 +84,12 @@ def evaluate_feature_sets(
         target_vector: Target values
         participants: Participant IDs for grouping
         candidate_features: List of feature sets to evaluate
-        feature_names: Names of all features
         output_dir: Directory for output files
-        config: Configuration dictionary
         n_splits: Number of cross-validation splits
         n_samples: Number of MCMC samples
+        chains: Number of independent MCMC chains
+        target_accept: Target acceptance rate for proposals in the NUTS sampler
+
     """
     results = {}
     
@@ -151,8 +152,9 @@ def evaluate_feature_sets(
                     design_features=features,
                     control_features=[],
                     inference_method='mcmc',
-                    num_samples=n_samples,
-                    chains=2
+                    n_samples=n_samples,
+                    chains=chains,
+                    target_accept=target_accept
                 )
                 
                 # Evaluate
@@ -277,13 +279,14 @@ def perform_cross_validation(
                 
                 # Sample
                 trace = pm.sample(
-                    draws=500,
+                    draws=5000,
                     tune=2000,
                     chains=4,
-                    target_accept=0.99,
-                    init='adapt_diag',
+                    target_accept=0.85,
+                    init='jitter+adapt_diag',
                     return_inferencedata=True,
-                    cores=1
+                    cores=4,
+                    random_seed=42
                 )
             
             # Make predictions

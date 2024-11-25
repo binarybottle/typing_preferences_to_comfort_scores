@@ -33,7 +33,10 @@ def plot_frequency_timing_relationship(
     n_groups: int = 4
 ) -> Dict[str, Any]:
     """
-    Analyze and plot relationship between bigram frequency and typing time.
+    Analyze and plot relationship between bigram frequency and typing time distributions.
+    Creates two plots:
+    1. Distribution plot showing median times with error bars and sample sizes
+    2. Minimum time plot showing fastest typing time for each bigram with labels
     """
     try:
         # Create dictionary mapping bigrams to their frequencies
@@ -41,10 +44,8 @@ def plot_frequency_timing_relationship(
             b: freq for b, freq in zip(bigrams, bigram_frequencies_array)
         }
         
-        # Create DataFrame with both chosen and unchosen bigrams and their timing
+        # Collect all timing instances for each bigram
         timing_data = []
-        
-        # Process both chosen and unchosen bigrams
         for i, bigram_tuple in enumerate(bigram_data.bigram_pairs):
             chosen_bigram = ''.join(bigram_tuple[0])
             unchosen_bigram = ''.join(bigram_tuple[1])
@@ -53,17 +54,17 @@ def plot_frequency_timing_relationship(
             # Add both bigrams with their timing
             timing_data.append({'bigram': chosen_bigram, 'timing': timing})
             timing_data.append({'bigram': unchosen_bigram, 'timing': timing})
-        
+
         df = pd.DataFrame(timing_data)
-        
+
         # Calculate timing statistics for each unique bigram
         aggregated_timings = df.groupby('bigram').agg({
-            'timing': ['median', 'mean', 'std', 'count']
+            'timing': ['median', 'mean', 'std', 'count', 'min']
         }).reset_index()
-        
+
         # Flatten column names
         aggregated_timings.columns = ['bigram', 'median_timing', 'mean_timing', 
-                                    'std_timing', 'n_occurrences']
+                                    'std_timing', 'n_occurrences', 'min_timing']
 
         # Add frequencies and create frequency groups
         aggregated_timings['frequency'] = aggregated_timings['bigram'].map(bigram_frequencies)
@@ -73,95 +74,263 @@ def plot_frequency_timing_relationship(
             n_groups, 
             labels=[f"Group {i+1}" for i in range(n_groups)]
         )
-        
-        # Calculate correlation between frequency and timing
-        correlation, p_value = stats.spearmanr(
-            aggregated_timings['frequency'],
-            aggregated_timings['median_timing']
-        )
-        
-        # Fit regression line
-        X = aggregated_timings['frequency'].values.reshape(-1, 1)
-        y = aggregated_timings['median_timing'].values
-        reg = LinearRegression().fit(X, y)
-        r2 = reg.score(X, y)
-        
-        # Create scatter plot
+
+        # Calculate correlations
+        correlations = {
+            'median': stats.spearmanr(aggregated_timings['frequency'], 
+                                    aggregated_timings['median_timing']),
+            'mean': stats.spearmanr(aggregated_timings['frequency'], 
+                                  aggregated_timings['mean_timing']),
+            'min': stats.spearmanr(aggregated_timings['frequency'],
+                                 aggregated_timings['min_timing'])
+        }
+
+        #--------------------------
+        # Plot 1: Distribution plot
+        #--------------------------
         plt.figure(figsize=(10, 6))
-        plt.scatter(aggregated_timings['frequency'], 
-                   aggregated_timings['median_timing'],
-                   alpha=0.5,
-                   s=aggregated_timings['n_occurrences'] * 10)  # Size by occurrence count
+        plt.semilogx()  # Use log scale for frequency axis
+        scatter = plt.scatter(aggregated_timings['frequency'], 
+                            aggregated_timings['median_timing'],
+                            alpha=0.5,
+                            s=aggregated_timings['n_occurrences'] / 10)
         
-        # Add regression line
-        plt.plot(X, reg.predict(X), color='red', 
-                label=f'R² = {r2:.3f}')
-        
+        plt.errorbar(aggregated_timings['frequency'], 
+                    aggregated_timings['median_timing'],
+                    yerr=aggregated_timings['std_timing'],
+                    fmt='none',
+                    alpha=0.2)
+
+        # Need to modify regression visualization for log scale
+        x_log = np.log10(aggregated_timings['frequency'].values).reshape(-1, 1)
+        reg_log = LinearRegression().fit(x_log, aggregated_timings['median_timing'].values)
+        r2_log = reg_log.score(x_log, aggregated_timings['median_timing'].values)
+
+        # Generate points for regression line
+        x_range = np.logspace(
+            np.log10(aggregated_timings['frequency'].min()),
+            np.log10(aggregated_timings['frequency'].max()),
+            2
+        )
+        plt.plot(x_range, 
+                reg_log.predict(np.log10(x_range).reshape(-1, 1)),
+                color='red',
+                label=f'R² = {r2_log:.3f}')
+
+        # Add legend for sample sizes
+        legend_elements = [plt.scatter([],[], s=n/10, 
+                                     label=f'n={n} samples', 
+                                     alpha=0.5)
+                           for n in [10, 50, 100, 500, 1000]]
+        plt.legend(handles=legend_elements, 
+                  title="Number of timing samples",
+                  bbox_to_anchor=(1.05, 1), 
+                  loc='upper left')
+
         plt.xlabel('Bigram Frequency')
         plt.ylabel('Median Typing Time (ms)')
-        plt.title('Bigram Frequency vs Median Typing Time')
-        plt.legend()
-        
-        # Add correlation info
+        plt.title('Distribution of Typing Times vs. Frequency')
+
         plt.text(0.05, 0.95, 
-                f'Correlation: {correlation:.3f}\np-value: {p_value:.3e}',
+                f"Correlation: {correlations['median'][0]:.3f}\n"
+                f"p-value: {correlations['median'][1]:.3e}",
+                transform=plt.gca().transAxes,
+                verticalalignment='top')
+
+        dist_plot_path = output_path.replace('.png', '_distribution.png')
+        plt.savefig(dist_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        #---------------------
+        # Plot 2: Minimum times
+        #---------------------
+        plt.figure(figsize=(10, 6))
+        plt.semilogx()  # Use log scale for frequency axis
+        
+        # Scatter plot
+        plt.scatter(aggregated_timings['frequency'], 
+                   aggregated_timings['min_timing'],
+                   alpha=0.8)
+
+        # Add bigram labels to each point
+        for _, row in aggregated_timings.iterrows():
+            plt.annotate(row['bigram'], 
+                        (row['frequency'], row['min_timing']),
+                        xytext=(3,3),  # 3 points offset
+                        textcoords='offset points',
+                        fontsize=8,
+                        alpha=0.7)
+
+        # Add regression line for minimum times with log scale
+        x_min_log = np.log10(aggregated_timings['frequency'].values).reshape(-1, 1)
+        reg_min_log = LinearRegression().fit(
+            x_min_log,
+            aggregated_timings['min_timing'].values
+        )
+        r2_min_log = reg_min_log.score(
+            x_min_log,
+            aggregated_timings['min_timing'].values
+        )
+        
+        # Generate points for regression line
+        x_range = np.logspace(
+            np.log10(aggregated_timings['frequency'].min()),
+            np.log10(aggregated_timings['frequency'].max()),
+            100
+        )
+        
+        plt.plot(x_range,
+                reg_min_log.predict(np.log10(x_range).reshape(-1, 1)),
+                color='red',
+                label=f'R² = {r2_min_log:.3f}')
+
+        plt.xlabel('Bigram Frequency (log scale)')
+        plt.ylabel('Minimum Typing Time (ms)')
+        plt.title('Fastest Times vs. Frequency')
+        
+        plt.text(0.05, 0.95, 
+                f"Correlation: {correlations['min'][0]:.3f}\n"
+                f"p-value: {correlations['min'][1]:.3e}",
                 transform=plt.gca().transAxes,
                 verticalalignment='top')
         
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.legend()
+        plt.tight_layout()
+
+        min_plot_path = output_path.replace('.png', '_minimum.png')
+        plt.savefig(min_plot_path, dpi=300, bbox_inches='tight')
         plt.close()
+
+        #---------------------
+        # Plot 3: Median times
+        #---------------------
+        plt.figure(figsize=(10, 6))
+        plt.semilogx()  # Use log scale for frequency axis
         
-        # Create directory for additional plots if it doesn't exist
-        output_dir = os.path.dirname(output_path)
-        
-        # Generate additional visualizations
-        plot_timing_by_frequency_groups(
-            aggregated_data=aggregated_timings,
-            output_dir=output_dir
+        # Scatter plot
+        plt.scatter(aggregated_timings['frequency'], 
+                   aggregated_timings['median_timing'],
+                   alpha=0.8)
+
+        # Add bigram labels to each point
+        for _, row in aggregated_timings.iterrows():
+            plt.annotate(row['bigram'], 
+                        (row['frequency'], row['median_timing']),
+                        xytext=(3,3),  # 3 points offset
+                        textcoords='offset points',
+                        fontsize=8,
+                        alpha=0.7)
+
+        # Add regression line for median times with log scale
+        x_med_log = np.log10(aggregated_timings['frequency'].values).reshape(-1, 1)
+        reg_med_log = LinearRegression().fit(
+            x_med_log,
+            aggregated_timings['median_timing'].values
+        )
+        r2_med_log = reg_med_log.score(
+            x_med_log,
+            aggregated_timings['median_timing'].values
         )
         
-        # Analyze groups
-        group_stats = {}
-        for group_label in aggregated_timings['freq_group'].unique():
-            group_data = aggregated_timings[aggregated_timings['freq_group'] == group_label]
-            if len(group_data) > 0:
-                group_stats[group_label] = {
+        # Generate points for regression line
+        x_range = np.logspace(
+            np.log10(aggregated_timings['frequency'].min()),
+            np.log10(aggregated_timings['frequency'].max()),
+            100
+        )
+        
+        plt.plot(x_range,
+                reg_med_log.predict(np.log10(x_range).reshape(-1, 1)),
+                color='red',
+                label=f'R² = {r2_med_log:.3f}')
+
+        plt.xlabel('Bigram Frequency (log scale)')
+        plt.ylabel('Median Typing Time (ms)')
+        plt.title('Median Times vs. Frequency')
+        
+        plt.text(0.05, 0.95, 
+                f"Correlation: {correlations['median'][0]:.3f}\n"
+                f"p-value: {correlations['median'][1]:.3e}",
+                transform=plt.gca().transAxes,
+                verticalalignment='top')
+        
+        plt.legend()
+        plt.tight_layout()
+
+        med_plot_path = output_path.replace('.png', '_median.png')
+        plt.savefig(med_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        #--------------
+        # Perform ANOVA
+        #--------------
+        groups = [group_data['median_timing'].values 
+                 for _, group_data in aggregated_timings.groupby('freq_group', observed=True)]
+        f_stat, anova_p = stats.f_oneway(*groups)
+
+        # Post-hoc analysis if ANOVA is significant
+        post_hoc_results = None
+        if anova_p < 0.05 and len(groups) > 2:
+            try:
+                from statsmodels.stats.multicomp import pairwise_tukeyhsd
+                post_hoc = pairwise_tukeyhsd(
+                    aggregated_timings['median_timing'],
+                    aggregated_timings['freq_group']
+                )
+                post_hoc_results = pd.DataFrame(
+                    data=post_hoc._results_table.data[1:],
+                    columns=post_hoc._results_table.data[0]
+                )
+            except Exception as e:
+                logger.warning(f"Could not perform post-hoc analysis: {str(e)}")
+
+        # Generate group visualizations showing distributions
+        plot_timing_by_frequency_groups(
+            aggregated_data=aggregated_timings,
+            output_dir=os.path.dirname(output_path)
+        )
+
+        #----------------
+        # Prepare results
+        #----------------
+        results = {
+            'correlation_median': correlations['median'][0],
+            'correlation_median_p': correlations['median'][1],
+            'correlation_mean': correlations['mean'][0],
+            'correlation_mean_p': correlations['mean'][1],
+            'correlation_min': correlations['min'][0],
+            'correlation_min_p': correlations['min'][1],
+            'r2': r2_log,
+            'r2_min': r2_min_log,
+            'n_unique_bigrams': len(aggregated_timings),
+            'total_occurrences': aggregated_timings['n_occurrences'].sum(),
+            'anova_f_stat': float(f_stat),
+            'anova_p_value': float(anova_p),
+            'post_hoc': post_hoc_results,
+            'group_stats': {
+                group: {
                     'freq_range': (
                         float(group_data['frequency'].min()),
                         float(group_data['frequency'].max())
                     ),
-                    'mean_timing': float(group_data['median_timing'].mean()),
-                    'std_timing': float(group_data['median_timing'].std()),
+                    'median_timing': float(group_data['median_timing'].mean()),
+                    'mean_timing': float(group_data['mean_timing'].mean()),
+                    'min_timing': float(group_data['min_timing'].min()),
+                    'timing_std': float(group_data['std_timing'].mean()),
                     'n_bigrams': len(group_data),
                     'total_occurrences': int(group_data['n_occurrences'].sum())
                 }
-        
-        # Perform ANOVA on median timings
-        if len(group_stats) >= 2:
-            groups = [group['median_timing'].values for _, group in 
-                    aggregated_timings.groupby('freq_group', observed=True) if len(group) > 0]
-            f_stat, p_value = stats.f_oneway(*groups)
-        else:
-            f_stat, p_value = None, None
-            
-        # Prepare results
-        results = {
-            'correlation': correlation,
-            'correlation_p_value': p_value,
-            'r2': r2,
-            'n_unique_bigrams': len(aggregated_timings),
-            'group_stats': group_stats,
-            'anova_f_stat': f_stat,
-            'anova_p_value': p_value,
-            'total_occurrences': int(aggregated_timings['n_occurrences'].sum())
+                for group in aggregated_timings['freq_group'].unique()
+                for group_data in [aggregated_timings[aggregated_timings['freq_group'] == group]]
+            }
         }
-        
+
         return results
-        
+
     except Exception as e:
         logger.error(f"Error in frequency timing analysis: {str(e)}")
         return {'error': str(e)}
-    
+  
 def plot_timing_by_frequency_groups(
     aggregated_data: pd.DataFrame,
     output_dir: str
@@ -175,17 +344,7 @@ def plot_timing_by_frequency_groups(
         sns.boxplot(data=aggregated_data, x='freq_group', y='median_timing')
         plt.xlabel('Frequency Group')
         plt.ylabel('Median Typing Time (ms)')
-        plt.title('Distribution of Median Typing Times by Frequency Group')
-        
-        # Add group size annotations
-        for i in range(len(aggregated_data['freq_group'].unique())):
-            group_data = aggregated_data[aggregated_data['freq_group'] == i]
-            n_bigrams = len(group_data)
-            n_occurrences = group_data['n_occurrences'].sum()
-            plt.text(i, plt.ylim()[0], 
-                    f"n={n_bigrams}\n(occ={n_occurrences})", 
-                    ha='center', va='top')
-        
+        plt.title('Distribution of Median Typing Times by Frequency Group')     
         plt.savefig(os.path.join(output_dir, 'timing_by_group_box.png'), 
                     dpi=300, bbox_inches='tight')
         plt.close()
@@ -294,9 +453,7 @@ def save_timing_analysis(
     group_comparison_results: Optional[Dict[str, Any]],
     output_path: str
 ) -> None:
-    """
-    Save timing analysis results to file.
-    """
+    """Save timing analysis results to file."""
     try:
         with open(output_path, 'w') as f:
             f.write("Bigram Timing Analysis Results\n")
@@ -305,35 +462,38 @@ def save_timing_analysis(
             # Write correlation results
             f.write("Overall Correlation Analysis:\n")
             f.write("--------------------------\n")
-            f.write(f"Correlation: {timing_results['correlation']:.3f}")
-            f.write(f" (p = {timing_results['correlation_p_value']:.3e})\n")            
+            f.write(f"Median correlation: {timing_results['correlation_median']:.3f}")
+            f.write(f" (p = {timing_results['correlation_median_p']:.3e})\n")
+            f.write(f"Mean correlation: {timing_results['correlation_mean']:.3f}")
+            f.write(f" (p = {timing_results['correlation_mean_p']:.3e})\n")
             f.write(f"R-squared: {timing_results['r2']:.3f}\n")
-            f.write(f"Number of unique bigrams: {timing_results['n_unique_bigrams']}\n\n")
+            f.write(f"Number of unique bigrams: {timing_results['n_unique_bigrams']}\n")
+            f.write(f"Total timing instances: {timing_results['total_occurrences']}\n\n")
             
-            # Write group comparison results if available
-            if timing_results.get('group_stats'):
-                f.write("Group Comparison Analysis:\n")
-                f.write("------------------------\n")
-                f.write("Frequency Groups:\n")
-                
-                # Write group statistics
-                for group_label, stats in timing_results['group_stats'].items():
-                    f.write(f"\n{group_label}:\n")
-                    f.write(f"  Frequency range: {stats['freq_range']}\n")
-                    f.write(f"  Mean timing: {stats['mean_timing']:.3f} ms\n")
-                    f.write(f"  Std timing: {stats['std_timing']:.3f} ms\n")
-                    f.write(f"  Number of bigrams: {stats['n_bigrams']}\n")
-                    f.write(f"  Total occurrences: {stats['total_occurrences']}\n")
-                
-                # Write ANOVA results if available
-                if timing_results.get('anova_f_stat') is not None:
-                    f.write("\nANOVA Results:\n")
-                    f.write(f"F-statistic: {timing_results['anova_f_stat']:.3f}\n")
-                    f.write(f"p-value: {timing_results['anova_p_value']:.3e}\n")
-            else:
-                f.write("\nNo group comparison analysis results available.\n")
-                f.write("Note: Group analysis requires sufficient data in each frequency group.\n")
-                f.write("Consider adjusting group parameters or collecting more data.\n")
+            # Write ANOVA results
+            f.write("ANOVA Results:\n")
+            f.write("-------------\n")
+            f.write(f"F-statistic: {timing_results['anova_f_stat']:.3f}\n")
+            f.write(f"p-value: {timing_results['anova_p_value']:.3e}\n\n")
+            
+            # Write group statistics
+            f.write("Frequency Group Analysis:\n")
+            f.write("----------------------\n")
+            for group, stats in timing_results['group_stats'].items():
+                f.write(f"\n{group}:\n")
+                f.write(f"  Frequency range: {stats['freq_range']}\n")
+                f.write(f"  Median typing time: {stats['median_timing']:.3f} ms\n")
+                f.write(f"  Mean typing time: {stats['mean_timing']:.3f} ms\n")
+                f.write(f"  Timing std dev: {stats['timing_std']:.3f} ms\n")
+                f.write(f"  Number of unique bigrams: {stats['n_bigrams']}\n")
+                f.write(f"  Total timing instances: {stats['total_occurrences']}\n")
+            
+            # Write post-hoc results if available
+            if timing_results['post_hoc'] is not None:
+                f.write("\nPost-hoc Analysis (Tukey HSD):\n")
+                f.write("---------------------------\n")
+                f.write(timing_results['post_hoc'].to_string())
+                f.write("\n")
                 
     except Exception as e:
         logger.error(f"Error saving timing analysis: {str(e)}")
