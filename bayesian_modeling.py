@@ -168,7 +168,7 @@ def train_bayesian_glmm(
                 cores=chains,                 # Number of CPU cores for parallel chain sampling
                 target_accept=target_accept,  # Target acceptance rate for proposals in NUTS sampler (0.8-0.9 good for exploration)
                 init='jitter+adapt_diag',
-                start=start,            
+                initvals=start,            
                 return_inferencedata=True,
                 compute_convergence_checks=True,
                 random_seed=42                # For reproducibility
