@@ -17,7 +17,7 @@ import os
 import argparse
 from pathlib import Path
 import yaml
-from typing import Dict, Any
+from typing import Dict, List, Any
 import pandas as pd
 import logging
 
@@ -49,7 +49,6 @@ def validate_config(config: Dict[str, Any]) -> None:
         'data',           # Data settings including file, splits, layout
         'paths',          # All file/directory paths
         'analysis',       # Analysis settings
-        'features',       # Feature definitions and groups
         'model',          # Model settings
         'logging'         # Logging settings
     ]
@@ -72,9 +71,13 @@ def validate_config(config: Dict[str, Any]) -> None:
     if 'left_chars' not in config['data']['layout']:
         raise ValueError("Missing left_chars in layout settings")
     
+    # Validate features are under model section
+    if 'features' not in config['model']:
+        raise ValueError("Missing required 'features' section under 'model'")
+        
     # Validate model settings if training enabled
     if config['model'].get('train', False):
-        required_model_settings = ['inference_method', 'num_samples', 'chains']
+        required_model_settings = ['inference_method', 'n_samples', 'chains']
         for setting in required_model_settings:
             if setting not in config['model']:
                 raise ValueError(f"Missing required model setting: {setting}")
@@ -144,6 +147,11 @@ def create_output_directories(config: Dict[str, Any]) -> None:
             directory.mkdir(parents=True, exist_ok=True)
 
 def main():
+    # Initialize basic logging before config load
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Keyboard Layout Analysis Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
@@ -153,10 +161,9 @@ def main():
         # Load and validate configuration
         config = load_config(args.config)
         
-        # Create logs directory and setup logging
+        # Create logs directory and setup proper logging
         Path(config['paths']['logs']).parent.mkdir(parents=True, exist_ok=True)
         setup_logging(config)
-        logger = logging.getLogger(__name__)
 
         logger.info("Starting keyboard layout analysis pipeline")
 
@@ -168,8 +175,18 @@ def main():
         preprocessor = DataPreprocessor(config['data']['file'])
         preprocessor.load_data()
 
-        # Prepare features
+        # Prepare features with conditional computation
         logger.info("Computing bigram features")
+        should_compute_interactions = (
+            config['model']['train'] and 
+            config['model'].get('features', {}).get('interactions', {}).get('enabled', False)
+        )
+        
+        if should_compute_interactions:
+            logger.info("Computing full feature set including interactions")
+        else:
+            logger.info("Computing base features only - skipping interactions")
+        
         all_bigrams, all_bigram_features, feature_names, samekey_bigrams, \
             samekey_bigram_features, samekey_feature_names = precompute_all_bigram_features(
                 layout_chars=config['data']['layout']['left_chars'],
@@ -183,8 +200,18 @@ def main():
                 config=config
             )
 
-        # Compute feature differences
-        all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
+        # Compute feature differences conditionally
+        if should_compute_interactions:
+            all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
+        else:
+            # Filter out interaction features from the values (not the keys)
+            filtered_features = {}
+            for bigram, features in all_bigram_features.items():
+                filtered_features[bigram] = {
+                    k: v for k, v in features.items() 
+                    if not k.startswith('interaction_')
+                }
+            all_feature_differences = precompute_bigram_feature_differences(filtered_features)
 
         # Process data
         logger.info("Processing data")
@@ -248,7 +275,8 @@ def main():
                     logger.info(f"  Total timing instances: {timing_results['total_occurrences']}")
 
             except Exception as e:
-                logger.error(f"Error in frequency-timing analysis: {str(e)}")
+                logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
+                raise
 
         # Evaluate feature space
         if config['analysis']['feature_space']['enabled']:
@@ -302,6 +330,19 @@ def main():
         # Run feature evaluation if enabled
         if config['analysis']['feature_evaluation']['enabled']:            
             logger.info("Starting feature evaluation on test data")
+
+            def load_interactions(filepath: str) -> List[List[str]]:
+                """Load interactions from file."""
+                with open(filepath, 'r') as f:
+                    content = yaml.safe_load(f)
+                    return content.get('interactions', [])
+
+            for feature_set in config['analysis']['feature_evaluation']['combinations']:
+                if 'interactions_file' in feature_set:
+                    interactions_path = feature_set['interactions_file']
+                    feature_set['interactions'] = load_interactions(interactions_path)
+                    del feature_set['interactions_file']  # Remove the file reference
+
             feature_eval_results = evaluate_feature_sets(
                 feature_matrix=test_data.feature_matrix,
                 target_vector=test_data.target_vector,
@@ -322,8 +363,8 @@ def main():
                 feature_matrix=train_data.feature_matrix,
                 target_vector=train_data.target_vector,
                 participants=train_data.participants,
-                design_features=config['features']['groups']['design'],
-                control_features=config['features']['groups']['control'],
+                design_features=config['model']['features']['groups']['design'],
+                control_features=config['model']['features']['groups']['control'],
                 inference_method=config['model']['inference_method'],
                 n_samples=config['model']['n_samples'],
                 chains=config['model']['chains'],
@@ -349,7 +390,7 @@ def main():
                 comfort_scores = calculate_bigram_comfort_scores(
                     trace,
                     train_data.feature_matrix,
-                    features_for_design=config['features']['groups']['design'],
+                    features_for_design=config['model']['features']['groups']['design'],
                     mirror_left_right_scores=config['model']['scoring'].get('mirror_left_right_scores', True)
                 )
 
@@ -369,8 +410,8 @@ def main():
                     feature_matrix=test_data.feature_matrix,
                     target_vector=test_data.target_vector,
                     participants=test_data.participants,
-                    design_features=config['features']['groups']['design'],
-                    control_features=config['features']['groups']['control']
+                    design_features=config['model']['features']['groups']['design'],
+                    control_features=config['model']['features']['groups']['control']
                 )
                 logger.info(f"Test set performance metrics:")
                 for metric, value in test_score.items():

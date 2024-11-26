@@ -171,93 +171,84 @@ class DataPreprocessor:
             raise
 
     def create_feature_matrix(
-        self, 
-        all_feature_differences: Dict, 
-        feature_names: List[str],
-        config: Dict
-    ) -> None:
-        """
-        Create feature matrix using provided feature differences and add typing times.
-        Handles filtering and alignment of data.
-        """
-        logger.info("Creating feature matrix")
-        try:
-            # Get initial valid pairs (those that exist in feature differences)
-            valid_pairs = [
-                bigram for bigram in self.bigram_pairs
-                if bigram in all_feature_differences
-            ]
-            logger.info(f"Found {len(valid_pairs)} valid pairs out of {len(self.bigram_pairs)}")
-            
-            # Get indices of valid pairs for filtering other data
-            valid_indices = [i for i, pair in enumerate(self.bigram_pairs)
-                            if pair in all_feature_differences]
-            logger.info(f"Valid indices: {len(valid_indices)}")
-            
-            # Create feature matrix for valid pairs
-            feature_matrix_data = [
-                all_feature_differences[bigram_pair]
-                for bigram_pair in valid_pairs
-            ]
-            
-            # Create basic feature matrix
-            self.feature_matrix = pd.DataFrame(
-                feature_matrix_data,
-                columns=feature_names,
-                index=valid_pairs
-            )
-            
-            # Add typing time as a feature
-            if self.typing_times is not None:
-                logger.info(f"Adding typing times to feature matrix")
-                logger.info(f"Original typing times shape: {self.typing_times.shape}")
+            self, 
+            all_feature_differences: Dict, 
+            feature_names: List[str],
+            config: Dict
+        ) -> None:
+            """
+            Create feature matrix using provided feature differences and add typing times.
+            Handles filtering and alignment of data.
+            """
+            logger.info("Creating feature matrix")
+            try:
+                # Get initial valid pairs (those that exist in feature differences)
+                valid_pairs = [
+                    bigram for bigram in self.bigram_pairs
+                    if bigram in all_feature_differences
+                ]
+                logger.info(f"Found {len(valid_pairs)} valid pairs out of {len(self.bigram_pairs)}")
                 
-                # Filter typing times to match valid pairs
-                filtered_typing_times = self.typing_times[valid_indices]
-                logger.info(f"Filtered typing times shape: {filtered_typing_times.shape}")
+                # Get indices of valid pairs for filtering other data
+                valid_indices = [i for i, pair in enumerate(self.bigram_pairs)
+                                if pair in all_feature_differences]
+                logger.info(f"Valid indices: {len(valid_indices)}")
                 
-                # Check for null values in filtered times
-                null_count = np.isnan(filtered_typing_times).sum()
-                if null_count > 0:
-                    logger.warning(f"Found {null_count} null values in typing times")
-                    mean_time = np.nanmean(filtered_typing_times)
-                    filtered_typing_times = np.nan_to_num(filtered_typing_times, nan=mean_time)
-                    logger.info(f"Filled null typing times with mean: {mean_time:.2f}")
+                # Create feature matrix for valid pairs
+                feature_matrix_data = [
+                    all_feature_differences[bigram_pair]
+                    for bigram_pair in valid_pairs
+                ]
                 
-                # Verify lengths match before assignment
-                if len(filtered_typing_times) != len(self.feature_matrix):
-                    raise ValueError(
-                        f"Filtered typing times length ({len(filtered_typing_times)}) "
-                        f"does not match feature matrix length ({len(self.feature_matrix)})"
-                    )
-                
-                # Add to feature matrix
-                self.feature_matrix = self.feature_matrix.assign(
-                    typing_time=filtered_typing_times
+                # Create basic feature matrix
+                self.feature_matrix = pd.DataFrame(
+                    feature_matrix_data,
+                    columns=feature_names,  # feature_names should already include interaction columns
+                    index=valid_pairs
                 )
-                logger.info("Added typing times to feature matrix")
-
-            # Add interactions if enabled
-            if config['features']['interactions']['enabled']:
-                for pair in config['features']['interactions']['pairs']:
-                    interaction_name = f"{pair[0]}_{pair[1]}"
+                
+                # Add typing time as a feature
+                if self.typing_times is not None:
+                    logger.info(f"Adding typing times to feature matrix")
+                    logger.info(f"Original typing times shape: {self.typing_times.shape}")
+                    
+                    # Filter typing times to match valid pairs
+                    filtered_typing_times = self.typing_times[valid_indices]
+                    logger.info(f"Filtered typing times shape: {filtered_typing_times.shape}")
+                    
+                    # Check for null values in filtered times
+                    null_count = np.isnan(filtered_typing_times).sum()
+                    if null_count > 0:
+                        logger.warning(f"Found {null_count} null values in typing times")
+                        mean_time = np.nanmean(filtered_typing_times)
+                        filtered_typing_times = np.nan_to_num(filtered_typing_times, nan=mean_time)
+                        logger.info(f"Filled null typing times with mean: {mean_time:.2f}")
+                    
+                    # Verify lengths match before assignment
+                    if len(filtered_typing_times) != len(self.feature_matrix):
+                        raise ValueError(
+                            f"Filtered typing times length ({len(filtered_typing_times)}) "
+                            f"does not match feature matrix length ({len(self.feature_matrix)})"
+                        )
+                    
+                    # Add to feature matrix
                     self.feature_matrix = self.feature_matrix.assign(
-                        **{interaction_name: self.feature_matrix[pair[0]] * self.feature_matrix[pair[1]]}
+                        typing_time=filtered_typing_times
                     )
-                logger.info("Added feature interactions")
-            
-            logger.info(f"Final feature matrix shape: {self.feature_matrix.shape}")
-            
-            # Update other arrays to match
-            self.bigram_pairs = valid_pairs
-            self.target_vector = self.target_vector[valid_indices]
-            self.participants = self.participants[valid_indices]
-            if self.typing_times is not None:
-                self.typing_times = filtered_typing_times
-            
-        except Exception as e:
-            logger.error(f"Error creating feature matrix: {str(e)}")
-            raise
+                    logger.info("Added typing times to feature matrix")
+                
+                logger.info(f"Final feature matrix shape: {self.feature_matrix.shape}")
+                
+                # Update other arrays to match
+                self.bigram_pairs = valid_pairs
+                self.target_vector = self.target_vector[valid_indices]
+                self.participants = self.participants[valid_indices]
+                if self.typing_times is not None:
+                    self.typing_times = filtered_typing_times
+                
+            except Exception as e:
+                logger.error(f"Error creating feature matrix: {str(e)}")
+                raise
 
     def _update_arrays_after_filtering(self, valid_pairs: List[Tuple]) -> None:
         """
@@ -613,12 +604,12 @@ def validate_features(
         ValueError: If required features are missing or invalid
     """
     # Check control features exist
-    for feature in config['features']['groups']['control']:
+    for feature in config['model']['features']['groups']['control']:
         if feature not in feature_matrix.columns:
             raise ValueError(f"Control feature {feature} missing from data")
             
     # Check typing_time specifically
-    if 'typing_time' in config['features']['groups']['control']:
+    if 'typing_time' in config['model']['features']['groups']['control']:
         if feature_matrix['typing_time'].isnull().any():
             raise ValueError("Missing timing data")
             
@@ -627,8 +618,8 @@ def validate_features(
     for combo in config['feature_evaluation']['combinations']:
         eval_features.update(combo)
 
-    model_features = set(config['features']['groups']['design'] +
-                        config['features']['groups']['control'])
+    model_features = set(config['model']['features']['groups']['design'] +
+                        config['model']['features']['groups']['control'])
                         
     if not eval_features.issubset(model_features):
         raise ValueError("Evaluated features not subset of model features")

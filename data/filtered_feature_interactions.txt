@@ -1,0 +1,77 @@
+# LLM prompt: "Below are 9 features. Generate all possible pairs, triples, and quadruples, 
+# but no pair in "exclusions" can be included in the output."
+
+features: ['same_finger', 'sum_finger_values', 'adj_finger_diff_row', 
+           'rows_apart', 'angle_apart', 'outward_roll', 
+           'middle_column', 'sum_engram_position_values', 'sum_row_position_values']
+exclusions: [['same_finger','adj_finger_diff_row'], ['same_finger','angle_apart'],
+             ['same_finger','outward_roll'],['same_finger','middle_column'],
+             ['same_finger','sum_engram_position_values'],
+             ['sum_finger_values','middle_column'], 
+             ['adj_finger_diff_row','middle_column'], 
+             ['rows_apart','angle_apart'],['rows_apart','middle_column'], 
+             ['angle_apart','middle_column'],['angle_apart','sum_row_position_values'], 
+             ['outward_roll','middle_column'], 
+             ['middle_column','sum_engram_position_values'],['middle_column','sum_row_position_values'],
+             ['sum_engram_position_values','sum_row_position_values']] 
+interactions:
+  - ['same_finger', 'sum_finger_values']
+  - ['same_finger', 'rows_apart']
+  - ['same_finger', 'sum_row_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row']
+  - ['sum_finger_values', 'rows_apart']
+  - ['sum_finger_values', 'angle_apart']
+  - ['sum_finger_values', 'outward_roll']
+  - ['sum_finger_values', 'sum_engram_position_values']
+  - ['sum_finger_values', 'sum_row_position_values']
+  - ['adj_finger_diff_row', 'rows_apart']
+  - ['adj_finger_diff_row', 'angle_apart']
+  - ['adj_finger_diff_row', 'outward_roll']
+  - ['adj_finger_diff_row', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'sum_row_position_values']
+  - ['rows_apart', 'outward_roll']
+  - ['rows_apart', 'sum_engram_position_values']
+  - ['rows_apart', 'sum_row_position_values']
+  - ['angle_apart', 'outward_roll']
+  - ['angle_apart', 'sum_engram_position_values']
+  - ['outward_roll', 'sum_engram_position_values']
+  - ['outward_roll', 'sum_row_position_values']
+  - ['same_finger', 'sum_finger_values', 'rows_apart']
+  - ['same_finger', 'sum_finger_values', 'sum_row_position_values']
+  #- ['same_finger', 'rows_apart', 'sum_row_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'rows_apart']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'angle_apart']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'outward_roll']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'sum_engram_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
+  - ['sum_finger_values', 'rows_apart', 'outward_roll']
+  - ['sum_finger_values', 'rows_apart', 'sum_engram_position_values']
+  - ['sum_finger_values', 'rows_apart', 'sum_row_position_values']
+  - ['sum_finger_values', 'angle_apart', 'outward_roll']
+  - ['sum_finger_values', 'angle_apart', 'sum_engram_position_values']
+  - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
+  - ['sum_finger_values', 'outward_roll', 'sum_row_position_values']
+  - ['adj_finger_diff_row', 'rows_apart', 'outward_roll']
+  - ['adj_finger_diff_row', 'rows_apart', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'rows_apart', 'sum_row_position_values']
+  - ['adj_finger_diff_row', 'angle_apart', 'outward_roll']
+  - ['adj_finger_diff_row', 'angle_apart', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'outward_roll', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'outward_roll', 'sum_row_position_values']
+  - ['rows_apart', 'outward_roll', 'sum_engram_position_values']
+  - ['rows_apart', 'outward_roll', 'sum_row_position_values']
+  - ['angle_apart', 'outward_roll', 'sum_engram_position_values']
+  - ['same_finger', 'sum_finger_values', 'rows_apart', 'sum_row_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'rows_apart', 'outward_roll']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'rows_apart', 'sum_engram_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'rows_apart', 'sum_row_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'angle_apart', 'outward_roll']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'angle_apart', 'sum_engram_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'outward_roll', 'sum_engram_position_values']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'outward_roll', 'sum_row_position_values']
+  - ['sum_finger_values', 'rows_apart', 'outward_roll', 'sum_engram_position_values']
+  - ['sum_finger_values', 'rows_apart', 'outward_roll', 'sum_row_position_values']
+  - ['sum_finger_values', 'angle_apart', 'outward_roll', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'rows_apart', 'outward_roll', 'sum_engram_position_values']
+  - ['adj_finger_diff_row', 'rows_apart', 'outward_roll', 'sum_row_position_values']
+  - ['adj_finger_diff_row', 'angle_apart', 'outward_roll', 'sum_engram_position_values']

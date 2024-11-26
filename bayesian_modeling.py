@@ -19,9 +19,6 @@ from sklearn.preprocessing import StandardScaler
 from scipy import stats
 import json
 import logging
-import sys
-from datetime import datetime
-import colorama
 from colorama import Fore, Style
 
 from data_processing import ProcessedData

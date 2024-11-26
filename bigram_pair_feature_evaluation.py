@@ -22,14 +22,17 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
+from sklearn.metrics import roc_auc_score, accuracy_score
 import pymc as pm
 import arviz as az
 from scipy import stats
+import yaml
 import logging
 from dataclasses import dataclass
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import pytensor.tensor as pt 
 
 from bayesian_modeling import (train_bayesian_glmm, evaluate_model_performance)
 
@@ -65,6 +68,171 @@ class FeatureEvaluationResults:
 #===================#
 # Core Evaluation   #
 #===================#
+def load_interactions_from_file(filepath: str) -> List[List[str]]:
+    """
+    Load feature interactions from a YAML file.
+    
+    Args:
+        filepath: Path to YAML file containing interaction definitions
+        
+    Returns:
+        List of feature interaction lists
+    """
+    logger.info(f"Loading interactions from {filepath}")
+    try:
+        import yaml
+        with open(filepath, 'r') as f:
+            content = yaml.safe_load(f)
+            
+        if not content or 'interactions' not in content:
+            logger.warning(f"No interactions found in {filepath}")
+            return []
+            
+        interactions = content['interactions']
+        
+        if not isinstance(interactions, list):
+            logger.error("Interactions must be a list")
+            return []
+            
+        # Validate each interaction
+        valid_interactions = []
+        for interaction in interactions:
+            if isinstance(interaction, list) and all(isinstance(f, str) for f in interaction):
+                valid_interactions.append(interaction)
+            else:
+                logger.warning(f"Skipping invalid interaction format: {interaction}")
+                
+        logger.info(f"Loaded {len(valid_interactions)} valid interactions")
+        return valid_interactions
+        
+    except Exception as e:
+        logger.error(f"Error loading interactions file: {str(e)}")
+        return []
+    
+def create_interaction_features(
+    feature_matrix: pd.DataFrame,
+    base_features: List[str],
+    interactions: List[List[str]]
+) -> pd.DataFrame:
+    """Create interaction features from base features."""
+    augmented_matrix = feature_matrix.copy()
+    
+    for interaction in interactions:
+        if not all(f in base_features for f in interaction):
+            continue
+            
+        # Create interaction term
+        interaction_name = "_".join(interaction)
+        interaction_value = feature_matrix[interaction[0]].copy()
+        for feature in interaction[1:]:
+            interaction_value *= feature_matrix[feature]
+            
+        augmented_matrix[interaction_name] = interaction_value
+        
+    return augmented_matrix
+
+def validate_model_inputs(
+    X: np.ndarray,
+    y: np.ndarray,
+    participants: np.ndarray
+) -> bool:
+    """
+    Validate input data before model fitting to catch potential issues.
+    
+    Args:
+        X: Feature matrix
+        y: Target vector
+        participants: Participant IDs
+        
+    Returns:
+        bool: True if validation passes, raises ValueError otherwise
+    """
+    # Check for NaN or infinite values
+    if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+        raise ValueError("Feature matrix contains NaN or infinite values")
+        
+    if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        raise ValueError("Target vector contains NaN or infinite values")
+    
+    # Check data shapes
+    if len(X) != len(y) or len(y) != len(participants):
+        raise ValueError(f"Inconsistent lengths: X={len(X)}, y={len(y)}, participants={len(participants)}")
+        
+    # Check target values are binary
+    if not np.all(np.isin(y, [0, 1])):
+        raise ValueError("Target vector contains non-binary values")
+        
+    # Check feature scale
+    feature_means = np.mean(X, axis=0)
+    feature_stds = np.std(X, axis=0)
+    if np.any(np.abs(feature_means) > 1e3) or np.any(feature_stds > 1e3):
+        raise ValueError("Features have unusually large values or standard deviations")
+        
+    # Check participant ID validity
+    if len(np.unique(participants)) < 2:
+        raise ValueError("Need at least 2 unique participants for hierarchical model")
+        
+    # Check class balance
+    class_balance = np.mean(y)
+    if class_balance < 0.01 or class_balance > 0.99:
+        raise ValueError(f"Severe class imbalance: {class_balance:.3f} positive class")
+    
+    return True
+
+def fit_hierarchical_model(
+    X: np.ndarray,
+    y: np.ndarray,
+    participants: np.ndarray,
+    n_samples: int
+) -> Dict[str, float]:
+    """
+    Fit a hierarchical logistic regression model using PyMC.
+    """
+    unique_participants = np.unique(participants)
+    n_participants = len(unique_participants)
+    n_features = X.shape[1]
+    
+    # Standard scaling
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    try:
+        with pm.Model() as model:
+            # Simple global priors
+            beta = pm.Normal('beta', mu=0, sigma=1, shape=n_features)
+            
+            # Simple participant-level effects
+            participant_offset = pm.Normal('participant_offset', mu=0, sigma=1, shape=n_participants)
+            
+            # Linear predictor - keeping it simple
+            participant_idx = pd.Categorical(participants).codes
+            mu = pm.Deterministic('mu', pt.dot(X_scaled, beta) + participant_offset[participant_idx])
+            
+            # Likelihood
+            y_obs = pm.Bernoulli('y', logit_p=mu, observed=y)
+            
+            # Basic sampling settings that were working
+            trace = pm.sample(
+                draws=n_samples,
+                tune=1000,
+                chains=4,
+                return_inferencedata=True
+            )
+            
+            # Simple prediction aggregation
+            ppc = pm.sample_posterior_predictive(trace)
+            y_pred_proba = np.mean(ppc.posterior_predictive['y'], axis=(0, 1))
+        
+        return {
+            'auc': roc_auc_score(y, y_pred_proba),
+            'accuracy': accuracy_score(y, y_pred_proba > 0.5),
+            'trace': trace
+        }
+        
+    except Exception as e:
+        logger.error(f"Model fitting error: {str(e)}")
+        raise
+
 def evaluate_feature_sets(
    feature_matrix: pd.DataFrame,
    target_vector: np.ndarray,
@@ -76,209 +244,207 @@ def evaluate_feature_sets(
    chains: int = 8,
    target_accept: float = 0.85
 ) -> Dict[str, List[float]]:
-   """
-   Evaluate different feature sets using cross-validation.
-   
-   Args:
-       feature_matrix: Matrix of feature values
-       target_vector: Target values
-       participants: Participant IDs for grouping
-       feature_sets: List of dictionaries containing:
-           - name: Name of the feature set
-           - features: List of features to include
-           - interactions: List of feature lists to test for interactions
-       output_dir: Directory for output files
-       n_splits: Number of cross-validation splits
-       n_samples: Number of MCMC samples
-       chains: Number of independent MCMC chains
-       target_accept: Target acceptance rate for proposals in the NUTS sampler
-   """
-   results = {}
-   all_cv_metrics = {}
-   all_feature_effects = {}
+    """
+    Evaluate different feature sets using cross-validation.
+    
+    Args:
+        feature_matrix: Matrix of feature values
+        target_vector: Target values
+        participants: Participant IDs for grouping
+        feature_sets: List of dictionaries containing:
+            - name: Name of the feature set
+            - features: List of features to include
+            - interactions: List of feature lists to test for interactions
+        output_dir: Directory for output files
+        n_splits: Number of cross-validation splits
+        n_samples: Number of MCMC samples
+        chains: Number of independent MCMC chains
+        target_accept: Target acceptance rate for proposals in the NUTS sampler
+     """
+    results = {}
+    all_cv_metrics = {}
+    all_feature_effects = {}
 
-   output_dir.mkdir(parents=True, exist_ok=True)
-   
-   summary_path = output_dir / "feature_evaluation_summary.txt"
-   metrics_path = output_dir / "feature_set_metrics.txt"
-   importance_path = output_dir / "feature_importance.txt"
-   
-   with open(summary_path, 'w') as summary_file, \
-        open(metrics_path, 'w') as metrics_file, \
-        open(importance_path, 'w') as importance_file:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    summary_path = output_dir / "feature_evaluation_summary.txt"
+    metrics_path = output_dir / "feature_set_metrics.txt"
+    importance_path = output_dir / "feature_importance.txt"
+    
+    with open(summary_path, 'w') as summary_file, \
+         open(metrics_path, 'w') as metrics_file, \
+         open(importance_path, 'w') as importance_file:
         
-       summary_file.write("Feature Set Evaluation Summary\n")
-       summary_file.write("===========================\n\n")
-       
-       metrics_file.write("Detailed Cross-Validation Metrics\n")
-       metrics_file.write("==============================\n\n")
-       
-       importance_file.write("Feature Importance Analysis\n")
-       importance_file.write("========================\n\n")
-       
-       for feature_set in feature_sets:
-           set_name = feature_set['name']
-           features = feature_set['features'].copy()
-           interactions = feature_set.get('interactions', [])
-           
-           logger.info(f"Evaluating {set_name}: {features}")
-           logger.info(f"Testing interactions: {interactions}")
-           
-           summary_file.write(f"\nFeature Set: {set_name}\n")
-           summary_file.write("-" * 50 + "\n")
-           summary_file.write("Base Features: " + ", ".join(features) + "\n")
-           if interactions:
-               summary_file.write("Interactions: " + 
-                                ", ".join(["×".join(interaction) for interaction in interactions]) + "\n")
-           summary_file.write("\n")
-           
-           # Select features and create interaction terms
-           X = feature_matrix[features].copy()
-           
-           # Add interaction terms only if all features are present
-           valid_interactions = []
-           for interaction in interactions:
-               if all(feat in features for feat in interaction):
-                   interaction_name = "_".join(interaction)
-                   # Create interaction term as product of all features
-                   X[interaction_name] = X[interaction[0]].copy()
-                   for feat in interaction[1:]:
-                       X[interaction_name] *= X[feat]
-                   features.append(interaction_name)
-                   valid_interactions.append(interaction)
-               else:
-                   logger.warning(f"Skipping interaction {' × '.join(interaction)} - "
-                               f"not all features present in {set_name}")
-           
-           # Create storage dictionary for feature effects
-           feature_effects_all_folds = {feature: [] for feature in features}
+        summary_file.write("Feature Set Evaluation Summary\n")
+        summary_file.write("===========================\n\n")
+        
+        metrics_file.write("Detailed Cross-Validation Metrics\n")
+        metrics_file.write("==============================\n\n")
+        
+        importance_file.write("Feature Importance Analysis\n")
+        importance_file.write("========================\n\n")
+        
+        for feature_set in feature_sets:
+            set_name = feature_set['name']
+            features = feature_set['features'].copy()
+            
+            # Handle interactions - either from file or direct list
+            interactions = []
+            if 'interactions' in feature_set:
+                if isinstance(feature_set['interactions'], str):
+                    # Load from file
+                    interactions = load_interactions_from_file(feature_set['interactions'])
+                    logger.info(f"Loaded {len(interactions)} interactions from file")
+                elif isinstance(feature_set['interactions'], list):
+                    # Direct list
+                    interactions = feature_set['interactions']
+                    logger.info(f"Using {len(interactions)} direct interactions")
+            
+            logger.info(f"Evaluating {set_name}: {features}")
+            if interactions:
+                logger.info(f"Testing interactions: {[' × '.join(i) for i in interactions]}")
+            
+            summary_file.write(f"\nFeature Set: {set_name}\n")
+            summary_file.write("-" * 50 + "\n")
+            summary_file.write("Base Features: " + ", ".join(features) + "\n")
+            if interactions:
+                summary_file.write("Interactions: " + 
+                                 ", ".join(["×".join(interaction) for interaction in interactions]) + "\n")
+            summary_file.write("\n")
+            
+            # Select features and create interaction terms
+            X = feature_matrix[features].copy()
+            
+            # Add interaction terms only if all features are present
+            valid_interactions = []
+            for interaction in interactions:
+                if all(feat in features for feat in interaction):
+                    interaction_name = "_".join(interaction)
+                    # Create interaction term as product of all features
+                    X[interaction_name] = X[interaction[0]].copy()
+                    for feat in interaction[1:]:
+                        X[interaction_name] *= X[feat]
+                    features.append(interaction_name)
+                    valid_interactions.append(interaction)
+                    logger.info(f"Added interaction term: {' × '.join(interaction)}")
+                else:
+                    missing = [f for f in interaction if f not in features]
+                    logger.warning(f"Skipping interaction {' × '.join(interaction)} - "
+                                f"missing features: {', '.join(missing)}")
+        
+            # Create storage dictionary for feature effects
+            feature_effects_all_folds = {feature: [] for feature in features}
 
-           # Cross-validation
-           logger.info("Starting cross-validation")
-           cv_metrics = {
-               'r2': [], 'rmse': [], 'mae': [], 
-               'correlation': [], 'accuracy': []
-           }
-           
-           # Create cross-validation splits
-           group_kfold = GroupKFold(n_splits=n_splits)
-           
-           for fold, (train_idx, val_idx) in enumerate(
-               group_kfold.split(X, target_vector, participants)
-           ):
-               # Split data
-               X_train = X.iloc[train_idx]
-               y_train = target_vector[train_idx]
-               X_val = X.iloc[val_idx]
-               y_val = target_vector[val_idx]
-               participants_train = participants[train_idx]
-               
-               # Train model
-               trace, model, _ = train_bayesian_glmm(
-                   feature_matrix=X_train,
-                   target_vector=y_train,
-                   participants=participants_train,
-                   design_features=features,
-                   control_features=[],
-                   inference_method='mcmc',
-                   n_samples=n_samples,
-                   chains=chains,
-                   target_accept=target_accept
-               )
-               
-               # Evaluate
-               metrics = evaluate_model_performance(
-                   trace=trace,
-                   feature_matrix=X_val,
-                   target_vector=y_val,
-                   participants=participants[val_idx],
-                   design_features=features,
-                   control_features=[]
-               )
-               
-               # Record metrics
-               for metric, value in metrics.items():
-                   cv_metrics[metric].append(value)
-               
-               # Write fold results
-               metrics_file.write(f"Feature Set {set_name}, Fold {fold}:\n")
-               for metric, value in metrics.items():
-                   metrics_file.write(f"  {metric}: {value:.3f}\n")
-               metrics_file.write("\n")
-                               
-               # Store feature effects for each fold
-               try:
-                   feature_effects = az.summary(trace, var_names=features)
-                   for feature in features:
-                       feature_effects_all_folds[feature].append(feature_effects.loc[feature])
-               except Exception as e:
-                   logger.warning(f"Could not compute feature effects for fold {fold}: {str(e)}")
+            # Cross-validation
+            logger.info("Starting cross-validation")
+            cv_metrics = {
+                'r2': [], 'rmse': [], 'mae': [], 
+                'correlation': [], 'accuracy': []
+            }
+            
+            # Create cross-validation splits
+            group_kfold = GroupKFold(n_splits=n_splits)
+            
+            for fold, (train_idx, val_idx) in enumerate(
+                group_kfold.split(X, target_vector, participants)
+            ):
+                # Split data
+                X_train = X.iloc[train_idx]
+                y_train = target_vector[train_idx]
+                X_val = X.iloc[val_idx]
+                y_val = target_vector[val_idx]
+                participants_train = participants[train_idx]
+                
+                # Train model
+                trace, model, _ = train_bayesian_glmm(
+                    feature_matrix=X_train,
+                    target_vector=y_train,
+                    participants=participants_train,
+                    design_features=features,
+                    control_features=[],
+                    inference_method='mcmc',
+                    n_samples=n_samples,
+                    chains=chains,
+                    target_accept=target_accept
+                )
+                
+                # Evaluate
+                metrics = evaluate_model_performance(
+                    trace=trace,
+                    feature_matrix=X_val,
+                    target_vector=y_val,
+                    participants=participants[val_idx],
+                    design_features=features,
+                    control_features=[]
+                )
+                
+                # Record metrics
+                for metric, value in metrics.items():
+                    cv_metrics[metric].append(value)
+                
+                # Write fold results
+                metrics_file.write(f"Feature Set {set_name}, Fold {fold}:\n")
+                for metric, value in metrics.items():
+                    metrics_file.write(f"  {metric}: {value:.3f}\n")
+                metrics_file.write("\n")
+                                
+                # Store feature effects for each fold
+                try:
+                    feature_effects = az.summary(trace, var_names=features)
+                    for feature in features:
+                        feature_effects_all_folds[feature].append(feature_effects.loc[feature])
+                except Exception as e:
+                    logger.warning(f"Could not compute feature effects for fold {fold}: {str(e)}")
 
-           # Write aggregate feature importance
-           importance_file.write(f"\nFeature Set {set_name} Feature Importance (across {n_splits} folds):\n")
-           importance_file.write("-" * 50 + "\n")
-           for feature in features:
-               effects = pd.DataFrame(feature_effects_all_folds[feature])
-               importance_file.write(f"\n{feature}:\n")
-               importance_file.write("Mean effects:\n")
-               importance_file.write(effects.mean().to_string() + "\n")
-               importance_file.write("\nStd across folds:\n")
-               importance_file.write(effects.std().to_string() + "\n")
-               importance_file.write("\nEffects by fold:\n")
-               importance_file.write(effects.to_string() + "\n")
-           importance_file.write("\n" + "="*50 + "\n")
+            # Write aggregate feature importance
+            importance_file.write(f"\nFeature Set {set_name} Feature Importance (across {n_splits} folds):\n")
+            importance_file.write("-" * 50 + "\n")
+            for feature in features:
+                effects = pd.DataFrame(feature_effects_all_folds[feature])
+                importance_file.write(f"\n{feature}:\n")
+                importance_file.write("Mean effects:\n")
+                importance_file.write(effects.mean().to_string() + "\n")
+                importance_file.write("\nStd across folds:\n")
+                importance_file.write(effects.std().to_string() + "\n")
+                importance_file.write("\nEffects by fold:\n")
+                importance_file.write(effects.to_string() + "\n")
+            importance_file.write("\n" + "="*50 + "\n")
 
-           # Add interaction-specific analysis
-           if valid_interactions:
-               importance_file.write(f"\nFeature Interactions for {set_name}:\n")
-               importance_file.write("-" * 50 + "\n")
-               for interaction in valid_interactions:
-                   interaction_name = "_".join(interaction)
-                   effects = pd.DataFrame(feature_effects_all_folds[interaction_name])
-                   importance_file.write(f"\n{' × '.join(interaction)}:\n")
-                   importance_file.write("Mean interaction effect:\n")
-                   importance_file.write(effects.mean().to_string() + "\n")
-                   importance_file.write("\nStd across folds:\n")
-                   importance_file.write(effects.std().to_string() + "\n")
-                   
-           # Calculate average metrics
-           avg_metrics = {
-               metric: np.mean(values) for metric, values in cv_metrics.items()
-           }
-           std_metrics = {
-               metric: np.std(values) for metric, values in cv_metrics.items()
-           }
-           
-           # Write summary results
-           summary_file.write("Average Metrics:\n")
-           for metric, mean_value in avg_metrics.items():
-               std_value = std_metrics[metric]
-               summary_file.write(f"{metric}: {mean_value:.3f} ± {std_value:.3f}\n")
-           summary_file.write("\n")
-           
-           # Create visualization
-           plt.figure(figsize=(10, 6))
-           plt.boxplot([cv_metrics[m] for m in ['r2', 'correlation', 'accuracy']], 
-                      labels=['R²', 'Correlation', 'Accuracy'])
-           plt.title(f'Feature Set {set_name} Performance')
-           plt.ylabel('Score')
-           plt.savefig(output_dir / f"feature_set_{set_name}_performance.png")
-           plt.close()
-   
-           # Store results with meaningful names
-           results[set_name] = avg_metrics
-           all_cv_metrics[set_name] = cv_metrics
-           all_feature_effects[set_name] = feature_effects_all_folds
-   
-   # Analyze results
-   analyze_and_recommend(
-       output_dir=output_dir,
-       cv_metrics=all_cv_metrics,
-       feature_effects=all_feature_effects,
-       feature_sets=feature_sets
-   )
-   
-   return results
+            # Add interaction-specific analysis
+            if valid_interactions:
+                importance_file.write(f"\nFeature Interactions for {set_name}:\n")
+                importance_file.write("-" * 50 + "\n")
+                for interaction in valid_interactions:
+                    interaction_name = "_".join(interaction)
+                    effects = pd.DataFrame(feature_effects_all_folds[interaction_name])
+                    importance_file.write(f"\n{' × '.join(interaction)}:\n")
+                    importance_file.write("Mean interaction effect:\n")
+                    importance_file.write(effects.mean().to_string() + "\n")
+                    importance_file.write("\nStd across folds:\n")
+                    importance_file.write(effects.std().to_string() + "\n")
+                    
+            # Calculate average metrics
+            avg_metrics = {
+                metric: np.mean(values) for metric, values in cv_metrics.items()
+            }
+            std_metrics = {
+                metric: np.std(values) for metric, values in cv_metrics.items()
+            }
+            
+            # Store results with meaningful names
+            results[set_name] = avg_metrics
+            all_cv_metrics[set_name] = cv_metrics
+            all_feature_effects[set_name] = feature_effects_all_folds
+    
+    # Analyze results
+    analyze_and_recommend(
+        output_dir=output_dir,
+        cv_metrics=all_cv_metrics,
+        feature_effects=all_feature_effects,
+        feature_sets=feature_sets
+    )
+    
+    return results
 
 def perform_cross_validation(
     feature_matrix: pd.DataFrame,

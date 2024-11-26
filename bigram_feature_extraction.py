@@ -12,14 +12,16 @@ The module computes three types of features:
 
 import numpy as np
 import pandas as pd
-from itertools import product
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
+import logging
 
 from bigram_feature_definitions import (
     column_map, row_map, finger_map, engram_position_values,
     row_position_values, bigrams, bigram_frequencies_array,
     function_map
 )
+
+logger = logging.getLogger(__name__)
 
 def extract_bigram_features(
     char1: str, 
@@ -28,11 +30,8 @@ def extract_bigram_features(
     row_map: Dict[str, int], 
     finger_map: Dict[str, int],
     engram_position_values: Dict[str, float],
-    row_position_values: Dict[str, float],
-    bigrams: List[Tuple[str, str]],
-    bigram_frequencies_array: np.ndarray,
-    config: Dict
-) -> Tuple[Dict[str, float], List[str]]:
+    row_position_values: Dict[str, float]
+) -> Dict[str, float]:
     """
     Extract features for a bigram (two-character combination).
 
@@ -44,77 +43,87 @@ def extract_bigram_features(
         finger_map: Mapping of characters to fingers used
         engram_position_values: Comfort scores for key positions
         row_position_values: Comfort scores for row positions
-        bigrams: List of all possible bigram combinations
-        bigram_frequencies_array: Array of bigram frequency values
-        config: Configuration dictionary containing feature settings
 
     Returns:
-        Tuple containing:
-        - Dictionary mapping feature names to their computed values
-        - List of computed feature names
+        Dictionary mapping feature names to their computed values
     """
-    features_functions = function_map(
-        char1, char2, column_map, row_map, finger_map,
-        engram_position_values, row_position_values,
-        bigrams, bigram_frequencies_array
-    )
-
     features = {}
-    all_features = config['features']['groups']['design'] + config['features']['groups']['control']
     
-    for feature_name in all_features:
-        if feature_name in features_functions:
-            features[feature_name] = features_functions[feature_name]()
+    # Same finger usage
+    features['same_finger'] = 1.0 if finger_map[char1] == finger_map[char2] else 0.0
     
-    feature_names = list(features.keys())
+    # Finger values
+    features['sum_finger_values'] = finger_map[char1] + finger_map[char2]
     
-    # Add interaction features if enabled
-    if config['features']['interactions']['enabled']:
-        for pair in config['features']['interactions']['pairs']:
-            interaction_name = f"{pair[0]}_{pair[1]}"
-            features[interaction_name] = features[pair[0]] * features[pair[1]]
-            feature_names.append(interaction_name)
+    # Adjacent finger difference within row
+    features['adj_finger_diff_row'] = (
+        1.0 if abs(finger_map[char1] - finger_map[char2]) == 1 and 
+        row_map[char1] == row_map[char2] else 0.0
+    )
     
-    return features, feature_names
+    # Row positions
+    features['rows_apart'] = abs(row_map[char1] - row_map[char2])
+    
+    # Angular distance between keys
+    col_diff = column_map[char2] - column_map[char1]
+    row_diff = row_map[char2] - row_map[char1]
+    features['angle_apart'] = np.sqrt(col_diff**2 + row_diff**2)
+    
+    # Outward rolling motion
+    features['outward_roll'] = (
+        1.0 if (finger_map[char2] > finger_map[char1] and column_map[char2] > column_map[char1]) or
+               (finger_map[char2] < finger_map[char1] and column_map[char2] < column_map[char1])
+        else 0.0
+    )
+    
+    # Middle column usage
+    features['middle_column'] = (
+        1.0 if column_map[char1] == 3 or column_map[char2] == 3 else 0.0
+    )
+    
+    # Position values
+    features['sum_engram_position_values'] = (
+        engram_position_values[char1] + engram_position_values[char2]
+    )
+    features['sum_row_position_values'] = (
+        row_position_values[char1] + row_position_values[char2]
+    )
+    
+    return features
 
-def extract_samekey_features(
-    char: str, 
-    finger_map: Dict[str, int]
-) -> Tuple[Dict[str, int], List[str]]:
+def compute_samekey_features(char: str, finger_map: Dict[str, int]) -> Dict[str, float]:
     """
-    Extract features for same-key bigrams (double-taps).
+    Compute features for same-key bigrams (double-taps).
     
     Args:
         char: The character being analyzed
-        finger_map: Mapping of characters to fingers (1-4)
+        finger_map: Mapping of characters to fingers
 
     Returns:
-        Tuple containing:
-        - Dictionary mapping finger positions to binary values (1 if used, 0 if not)
-        - List of feature names ('finger1' through 'finger4')
+        Dictionary of feature values for the same-key press
     """
-    features = {
-        'finger1': int(finger_map[char] == 1),
-        'finger2': int(finger_map[char] == 2),
-        'finger3': int(finger_map[char] == 3),
-        'finger4': int(finger_map[char] == 4)
-    }
-    feature_names = list(features.keys())
+    features = {}
     
-    return features, feature_names
+    # Basic finger position
+    finger_pos = finger_map[char]
+    features['finger_position'] = float(finger_pos)
+    
+    # Finger grouping (index/middle vs ring/pinky)
+    features['outer_finger'] = 1.0 if finger_pos in [1, 4] else 0.0
+    
+    return features
 
 def precompute_all_bigram_features(
-    layout_chars: List[str], 
+    layout_chars: List[str],
     column_map: Dict[str, int], 
     row_map: Dict[str, int], 
-    finger_map: Dict[str, int], 
+    finger_map: Dict[str, int],
     engram_position_values: Dict[str, float],
     row_position_values: Dict[str, float],
     bigrams: List[Tuple[str, str]],
     bigram_frequencies_array: np.ndarray,
-    config: Dict
-) -> Tuple[List[Tuple[str, str]], pd.DataFrame, List[str],
-           List[Tuple[str, str]], pd.DataFrame, List[str]]:
+    config: Dict[str, Any]
+) -> Tuple[List[Tuple[str, str]], Dict, List[str], List[Tuple[str, str]], Dict, List[str]]:
     """
     Precompute features for all possible bigrams in the layout.
     
@@ -128,86 +137,118 @@ def precompute_all_bigram_features(
         bigrams: List of all possible bigram combinations
         bigram_frequencies_array: Array of bigram frequency values
         config: Configuration dictionary
-    
+
     Returns:
         Tuple containing:
-        - all_bigrams: List of all possible two-character combinations
-        - features_df: DataFrame of features for regular bigrams
-        - feature_names: List of regular bigram feature names
-        - samekey_bigrams: List of same-key bigrams
-        - samekey_features_df: DataFrame of features for same-key bigrams
-        - samekey_feature_names: List of same-key feature names
+        - List of all possible bigrams
+        - Dictionary of features for regular bigrams
+        - List of feature names
+        - List of same-key bigrams
+        - Dictionary of features for same-key bigrams
+        - List of same-key feature names
     """
-    # Generate all possible 2-key bigrams
-    all_bigrams = [(x, y) for x, y in product(layout_chars, repeat=2) if x != y]
-    # Generate same-key bigrams
-    samekey_bigrams = [(char, char) for char in layout_chars]
-
-    # Extract features for each type
-    feature_vectors = []
-    feature_names = None
-    samekey_feature_vectors = []
-    samekey_feature_names = None
-
-    # Process regular bigrams
-    for char1, char2 in all_bigrams:
-        features, names = extract_bigram_features(
-            char1, char2, column_map, row_map, 
-            finger_map, engram_position_values, 
-            row_position_values, bigrams, 
-            bigram_frequencies_array,
-            config
-        )
-        feature_vectors.append(list(features.values()))
-        if feature_names is None:
-            feature_names = names
-
-    # Process same-key bigrams
-    for char1, char2 in samekey_bigrams:
-        samekey_features, names = extract_samekey_features(char1, finger_map)
-        samekey_feature_vectors.append(list(samekey_features.values()))
-        if samekey_feature_names is None:
-            samekey_feature_names = names
-
-    # Convert to DataFrames with MultiIndex
-    features_df = pd.DataFrame(feature_vectors, columns=feature_names, index=all_bigrams)
-    features_df.index = pd.MultiIndex.from_tuples(features_df.index)
+    logger.info("Computing base features")
     
-    samekey_features_df = pd.DataFrame(
-        samekey_feature_vectors, 
-        columns=samekey_feature_names, 
-        index=samekey_bigrams
-    )
-    samekey_features_df.index = pd.MultiIndex.from_tuples(samekey_features_df.index)
-
-    return (all_bigrams, features_df, feature_names, 
-            samekey_bigrams, samekey_features_df, samekey_feature_names)
+    # Compute base features
+    all_bigrams = []
+    all_bigram_features = {}
+    
+    # Process all possible bigram combinations
+    for char1 in layout_chars:
+        for char2 in layout_chars:
+            bigram = (char1, char2)
+            all_bigrams.append(bigram)
+            
+            # Extract basic features
+            features = extract_bigram_features(
+                char1, char2, column_map, row_map, finger_map,
+                engram_position_values, row_position_values
+            )
+            
+            all_bigram_features[bigram] = features
+    
+    # Get feature names from first computed features
+    feature_names = list(next(iter(all_bigram_features.values())).keys())
+    
+    # Compute interactions if enabled and model training is active
+    if (config['model']['train'] and 
+        config['model'].get('features', {}).get('interactions', {}).get('enabled', False)):
+        logger.info("Computing feature interactions")
+        try:
+            interactions = config['model']['features']['interactions'].get('interactions', [])
+            
+            for bigram in all_bigrams:
+                base_features = all_bigram_features[bigram]
+                
+                for interaction in interactions:
+                    # Skip if not all features available
+                    if not all(f in base_features for f in interaction):
+                        continue
+                        
+                    # Compute interaction
+                    interaction_name = "_".join(interaction)
+                    interaction_value = np.prod([base_features[f] for f in interaction])
+                    all_bigram_features[bigram][interaction_name] = interaction_value
+                    
+                    # Add interaction name to feature list if new
+                    if interaction_name not in feature_names:
+                        feature_names.append(interaction_name)
+                        
+        except Exception as e:
+            logger.warning(f"Error computing interactions: {str(e)}")
+    
+    # Compute same-key features
+    logger.info("Computing same-key features")
+    samekey_bigrams = []
+    samekey_bigram_features = {}
+    
+    for char in layout_chars:
+        bigram = (char, char)
+        samekey_bigrams.append(bigram)
+        samekey_bigram_features[bigram] = compute_samekey_features(char, finger_map)
+    
+    samekey_feature_names = list(next(iter(samekey_bigram_features.values())).keys())
+    
+    return (all_bigrams, all_bigram_features, feature_names,
+            samekey_bigrams, samekey_bigram_features, samekey_feature_names)
 
 def precompute_bigram_feature_differences(
-    bigram_features: pd.DataFrame
+    bigram_features: Dict[Tuple[str, str], Dict[str, float]]
 ) -> Dict[Tuple[Tuple[str, str], Tuple[str, str]], np.ndarray]:
     """
     Precompute feature differences between all possible bigram pairs.
     
     Args:
-        bigram_features: DataFrame of precomputed features for each bigram
+        bigram_features: Dictionary mapping bigram tuples to their feature dictionaries
+            Example: {('a', 'b'): {'same_finger': 1.0, 'rows_apart': 2.0}}
 
     Returns:
-        Dictionary mapping bigram pairs to their feature differences.
-        Keys are tuples of bigram tuples: ((char1, char2), (char3, char4))
-        Values are numpy arrays of absolute feature differences.
+        Dictionary mapping bigram pairs to their feature differences
     """
+    logger.info("Computing bigram feature differences")
     bigram_feature_differences = {}
-    bigrams_list = list(bigram_features.index)
-
+    bigrams_list = list(bigram_features.keys())
+    
+    # Get consistent feature ordering from first bigram
+    first_bigram = bigrams_list[0]
+    feature_names = list(bigram_features[first_bigram].keys())
+    
+    # Pre-log what we're computing
+    logger.info(f"Computing differences for {len(feature_names)} features across {len(bigrams_list)} bigrams")
+    
     # Compute differences for all pairs
     for i, bigram1 in enumerate(bigrams_list):
         for j, bigram2 in enumerate(bigrams_list):
             if i <= j:  # Only compute unique pairs
-                abs_feature_diff = np.abs(bigram_features.loc[bigram1].values - 
-                                        bigram_features.loc[bigram2].values)
+                # Convert feature dictionaries to arrays in consistent order
+                features1 = np.array([bigram_features[bigram1][feat] for feat in feature_names])
+                features2 = np.array([bigram_features[bigram2][feat] for feat in feature_names])
+                
+                abs_feature_diff = np.abs(features1 - features2)
+                
                 # Store both directions
                 bigram_feature_differences[(bigram1, bigram2)] = abs_feature_diff
                 bigram_feature_differences[(bigram2, bigram1)] = abs_feature_diff
 
+    logger.info(f"Completed feature difference computation")
     return bigram_feature_differences
