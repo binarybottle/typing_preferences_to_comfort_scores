@@ -27,7 +27,7 @@ from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_ti
 from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
                                         row_position_values, bigrams, bigram_frequencies_array)
 from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences)
-from bigram_pair_feature_evaluation import evaluate_feature_sets
+from bigram_pair_feature_evaluation import evaluate_feature_sets, analyze_and_recommend
 from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
 from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
                                save_model_results, plot_model_diagnostics, evaluate_model_performance, 
@@ -330,29 +330,31 @@ def main():
         # Run feature evaluation if enabled
         if config['analysis']['feature_evaluation']['enabled']:            
             logger.info("Starting feature evaluation on test data")
-
-            def load_interactions(filepath: str) -> List[List[str]]:
-                """Load interactions from file."""
-                with open(filepath, 'r') as f:
-                    content = yaml.safe_load(f)
-                    return content.get('interactions', [])
-
-            for feature_set in config['analysis']['feature_evaluation']['combinations']:
-                if 'interactions_file' in feature_set:
-                    interactions_path = feature_set['interactions_file']
-                    feature_set['interactions'] = load_interactions(interactions_path)
-                    del feature_set['interactions_file']  # Remove the file reference
-
-            feature_eval_results = evaluate_feature_sets(
+            evaluation_results = evaluate_feature_sets(
                 feature_matrix=test_data.feature_matrix,
                 target_vector=test_data.target_vector,
                 participants=test_data.participants,
-                feature_sets=config['analysis']['feature_evaluation']['combinations'],  # Updated
+                feature_sets=config['analysis']['feature_evaluation']['combinations'],
                 output_dir=Path(config['paths']['feature_evaluation']),
                 n_splits=config['analysis']['feature_evaluation']['n_splits'],
-                n_samples=config['analysis']['feature_evaluation']['n_samples']
+                n_samples=config['analysis']['feature_evaluation']['n_samples'],
+                chains=config['analysis']['feature_evaluation']['chains'],
+                target_accept=config['analysis']['feature_evaluation']['target_accept']
             )
             logger.info("Feature evaluation completed")
+
+            # Run analysis only if specifically enabled
+            if config['analysis']['feature_evaluation']['analysis']['enabled']:
+                logger.info("Running feature analysis and recommendations")
+                analyze_and_recommend(
+                    output_dir=Path(config['paths']['feature_evaluation']),
+                    cv_metrics=evaluation_results['cv_metrics'],
+                    feature_effects=evaluation_results['feature_effects'],
+                    feature_sets=config['analysis']['feature_evaluation']['combinations'],
+                    correlation_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['correlation'],
+                    importance_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['importance'],
+                    variability_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['variability']
+                )
 
         # Train model if requested
         if config['model']['train']:

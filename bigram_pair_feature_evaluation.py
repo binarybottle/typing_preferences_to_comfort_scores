@@ -444,7 +444,11 @@ def evaluate_feature_sets(
         feature_sets=feature_sets
     )
     
-    return results
+    return {
+        'cv_metrics': all_cv_metrics,
+        'feature_effects': all_feature_effects,
+        'feature_sets': feature_sets
+    }
 
 def perform_cross_validation(
     feature_matrix: pd.DataFrame,
@@ -1003,7 +1007,7 @@ def analyze_and_recommend(
         
         for set_name, effects in feature_effects.items():
             for feature, effect_data in effects.items():
-                if not feature.endswith('_interaction'):  # Skip interaction terms for now
+                if "_" not in feature:  # Skip interaction terms for now
                     all_features.add(feature)
                     if feature not in feature_performance:
                         feature_performance[feature] = []
@@ -1078,8 +1082,8 @@ def analyze_and_recommend(
             feature_set = next(fs for fs in feature_sets if fs['name'] == set_name)
             interactions = feature_set.get('interactions', [])
             
-            for feat1, feat2 in interactions:
-                interaction_name = f"{feat1}_{feat2}"
+            for interaction in interactions:
+                interaction_name = "_".join(interaction)
                 if interaction_name in effects:
                     if interaction_name not in interaction_performance:
                         interaction_performance[interaction_name] = []
@@ -1092,16 +1096,16 @@ def analyze_and_recommend(
                         'set_name': set_name,
                         'mean_effect': mean_effect,
                         'effect_std': effect_std,
-                        'features': (feat1, feat2)
+                        'features': interaction
                     })
         
         if interaction_performance:
             f.write("\nInteraction Effects:\n")
             for interaction, metrics in interaction_performance.items():
-                feat1, feat2 = metrics[0]['features']
+                features = metrics[0]['features']
                 avg_effect = np.mean([m['mean_effect'] for m in metrics])
                 
-                f.write(f"\n{feat1} × {feat2}:\n")
+                f.write(f"\n{' × '.join(features)}:\n")
                 f.write(f"  Average Effect: {avg_effect:.3f}\n")
                 f.write("  Performance across sets:\n")
                 for metric in metrics:
@@ -1149,19 +1153,18 @@ def analyze_and_recommend(
             for interaction, metrics in interaction_performance.items():
                 avg_effect = np.mean([m['mean_effect'] for m in metrics])
                 if abs(avg_effect) > importance_threshold:
-                    keep_interactions.append((interaction, avg_effect))
+                    keep_interactions.append((metrics[0]['features'], avg_effect))
                 else:
-                    remove_interactions.append((interaction, avg_effect))
+                    remove_interactions.append((metrics[0]['features'], avg_effect))
             
             if keep_interactions:
                 f.write("\n   Keep these interactions:\n")
-                for interaction, effect in sorted(keep_interactions, key=lambda x: abs(x[1]), reverse=True):
-                    f.write(f"   - {interaction} (effect: {effect:.3f})\n")
+                for features, effect in sorted(keep_interactions, key=lambda x: abs(x[1]), reverse=True):
+                    f.write(f"   - {' × '.join(features)} (effect: {effect:.3f})\n")
             
             if remove_interactions:
                 f.write("\n   Remove these interactions:\n")
-                for interaction, effect in remove_interactions:
-                    f.write(f"   - {interaction} (effect: {effect:.3f})\n")
+                for features, effect in remove_interactions:
+                    f.write(f"   - {' × '.join(features)} (effect: {effect:.3f})\n")
         
         logger.info(f"Analysis and recommendations written to {analysis_path}")
-
