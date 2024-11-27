@@ -50,9 +50,9 @@ analysis:
     analysis:
       enabled: true
       thresholds:
-        correlation: 0.7
-        importance: 0.1
-        variability: 0.5
+        correlation: 0.5    # Lower from 0.7
+        importance: 0.05    # Lower from 0.1
+        variability: 1.0    # Increase from 0.5
 
 # Model settings
 model:

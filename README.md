@@ -13,7 +13,7 @@ to design ergonomically optimized keyboard layouts.
 The input data comes from an online bigram comparison typing test 
 (https://github.com/binarybottle/bigram-typing-comfort-experiment) 
 crowdsourced to hundreds of participants.
-Here, the data is split into training (80% participants) and test (20% participants). 
+Here, the data is split into training (80% participants) and test (20% participants). Different participants are in train/test splits and in cross-validation folds to avoid data leakage, as participants may have consistent typing patterns or preferences that could bias the model if split incorrectly.
 - The full dataset (100%) is used for:
   - Feature space analysis (does not influence feature selection or model training)
   - Bigram pair recommendations (what additional data to collect)
@@ -24,6 +24,15 @@ Here, the data is split into training (80% participants) and test (20% participa
 - Test data (20%) is used to:
   - Feature evaluation (to select features to train the model)
   - Final model performance evaluation
+
+The software is used to conduct two stages: 
+1. evaluate features for use in training a Bayesian model
+   - raw_metrics.txt: Basic CV scores and metrics for each fold
+   - feature_details.txt: Detailed analysis of each feature's behavior
+   - feature_metrics.txt: Comprehensive metrics for each feature
+   - redundancy_analysis.txt: Analysis of feature correlations and multicollinearity
+   - recommendations.txt: Final actionable recommendations
+2. train the Bayesian GLMM
 
 ## Directory tree
 engram3/

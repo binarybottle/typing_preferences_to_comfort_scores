@@ -331,7 +331,7 @@ def main():
         if config['analysis']['feature_evaluation']['enabled']:            
             logger.info("Starting feature evaluation on test data")
             evaluation_results = evaluate_feature_sets(
-                feature_matrix=test_data.feature_matrix,
+                feature_matrix=test_data.feature_matrix,  # Make sure this contains all features
                 target_vector=test_data.target_vector,
                 participants=test_data.participants,
                 feature_sets=config['analysis']['feature_evaluation']['combinations'],

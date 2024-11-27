@@ -326,22 +326,6 @@ class DataPreprocessor:
             logger.error(f"Error adding feature interactions: {str(e)}")
             raise
 
-    def scale_features(self) -> None:
-        """Scale features using StandardScaler."""
-        logger.info("Scaling features")
-        try:
-            scaler = StandardScaler()
-            scaled_features = scaler.fit_transform(self.feature_matrix)
-            self.feature_matrix = pd.DataFrame(
-                scaled_features,
-                columns=self.feature_matrix.columns,
-                index=self.feature_matrix.index
-            )
-            logger.info("Features scaled successfully")
-        except Exception as e:
-            logger.error(f"Error scaling features: {str(e)}")
-            raise
-
     def validate_data(self) -> bool:
         """
         Perform validation checks on processed data with detailed null value reporting.
@@ -588,38 +572,3 @@ def manage_data_splits(
     )
     
     return train_data, test_data
-
-def validate_features(
-    config: Dict[str, Any],
-    feature_matrix: pd.DataFrame
-) -> None:
-    """
-    Validate that required features exist and are properly configured.
-
-    Args:
-        config: Configuration dictionary containing feature definitions and groups
-        feature_matrix: DataFrame of features to validate
-
-    Raises:
-        ValueError: If required features are missing or invalid
-    """
-    # Check control features exist
-    for feature in config['model']['features']['groups']['control']:
-        if feature not in feature_matrix.columns:
-            raise ValueError(f"Control feature {feature} missing from data")
-            
-    # Check typing_time specifically
-    if 'typing_time' in config['model']['features']['groups']['control']:
-        if feature_matrix['typing_time'].isnull().any():
-            raise ValueError("Missing timing data")
-            
-    # Check feature definitions match usage
-    eval_features = set()
-    for combo in config['feature_evaluation']['combinations']:
-        eval_features.update(combo)
-
-    model_features = set(config['model']['features']['groups']['design'] +
-                        config['model']['features']['groups']['control'])
-                        
-    if not eval_features.issubset(model_features):
-        raise ValueError("Evaluated features not subset of model features")
