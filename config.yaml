@@ -10,7 +10,7 @@ data:
 
   # Participant splits
   splits:
-    generate: false # One time per file (output_all4studies_406participants/ on 2024-11-25)
+    generate: true  # One time per file (output_all4studies_406participants/ on 2024-11-25)
     train_ratio: 0.8
   
   # Keyboard layout
@@ -19,7 +19,6 @@ data:
 
 # Analysis settings
 analysis:
-
   # Frequency/timing analysis
   frequency_timing:
     enabled: true
@@ -39,20 +38,59 @@ analysis:
     n_samples: 10000
     chains: 8
     target_accept: 0.85
+    
+    # Settings used during evaluation
+    validation:  # Used during evaluation
+      perform_stability_check: true
+      min_training_samples: 1000
+      min_validation_samples: 200
+      outlier_detection: true
+      outlier_threshold: 3.0
+    
+    # Basic reporting during evaluation
+    fold_reporting:
+      save_fold_details: true
+      save_raw_metrics: true
+
     combinations:
       - name: "base9features"
-        features: ['same_finger', 'sum_finger_values', 'adj_finger_diff_row', 
-                   'rows_apart', 'angle_apart', 'outward_roll', 
-                   'middle_column', 'sum_engram_position_values', 'sum_row_position_values']
+        features: 
+          - same_finger
+          - sum_finger_values
+          - adj_finger_diff_row
+          - rows_apart
+          - angle_apart
+          - outward_roll
+          - middle_column
+          - sum_engram_position_values
+          - sum_row_position_values
         interactions: "data/filtered_feature_interactions.txt"
 
-    # Analysis settings
+    # Analysis can be run separately if feature_evaluation:enabled:false
     analysis:
       enabled: true
-      thresholds:
-        correlation: 0.5    # Lower from 0.7
-        importance: 0.05    # Lower from 0.1
-        variability: 1.0    # Increase from 0.5
+
+      # Thresholds for interpreting saved results
+      stability_thresholds:
+        feature_reliability: 0.6
+        min_effect_size: 0.1
+        min_r2: 0.05
+        max_vif: 5.0
+      
+      feature_thresholds:
+        correlation: 0.2  # Minimum correlation coefficient magnitude
+        importance: 0.03  # Minimum feature importance score
+        variability: 0.7  # Maximum allowed variability in cross-validation
+
+    # Reporting settings
+    reporting:
+      detail_level: "full"  # Options: minimal, standard, full
+      plot_correlations: true
+      plot_importance: true
+      output_formats:
+          - text
+          - plots
+          - csv
 
 # Model settings
 model:
@@ -62,9 +100,11 @@ model:
   chains: 8
   target_accept: 0.85
   evaluate_test: true
+  
   scoring:
     enabled: true
     mirror_left_right_scores: true
+  
   visualization:
     enabled: true
 
@@ -80,11 +120,18 @@ model:
     # Feature groups
     groups:
       design:
-        - 'same_finger'
-
+        - same_finger
       control:
-        - 'qwerty_bigram_frequency'
-        - 'typing_time'
+        - qwerty_bigram_frequency
+        - typing_time
+
+    # Advanced settings
+    advanced:
+      standardize_features: true
+      handle_missing: "drop"  # Options: drop, impute_mean, impute_median
+      random_seed: 42
+      parallel_processing: true
+      n_jobs: -1  # Use all available cores
 
 # Logging settings
 logging:

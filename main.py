@@ -27,7 +27,8 @@ from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_ti
 from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
                                         row_position_values, bigrams, bigram_frequencies_array)
 from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences)
-from bigram_pair_feature_evaluation import evaluate_feature_sets, analyze_and_recommend
+from bigram_pair_feature_evaluation import evaluate_features_only, analyze_saved_results
+
 from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
 from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
                                save_model_results, plot_model_diagnostics, evaluate_model_performance, 
@@ -328,33 +329,35 @@ def main():
         train_data, test_data = manage_data_splits(processed_data, config)
 
         # Run feature evaluation if enabled
-        if config['analysis']['feature_evaluation']['enabled']:            
-            logger.info("Starting feature evaluation on test data")
-            evaluation_results = evaluate_feature_sets(
-                feature_matrix=test_data.feature_matrix,  # Make sure this contains all features
-                target_vector=test_data.target_vector,
-                participants=test_data.participants,
-                feature_sets=config['analysis']['feature_evaluation']['combinations'],
-                output_dir=Path(config['paths']['feature_evaluation']),
-                n_splits=config['analysis']['feature_evaluation']['n_splits'],
-                n_samples=config['analysis']['feature_evaluation']['n_samples'],
-                chains=config['analysis']['feature_evaluation']['chains'],
-                target_accept=config['analysis']['feature_evaluation']['target_accept']
-            )
-            logger.info("Feature evaluation completed")
-
-            # Run analysis only if specifically enabled
-            if config['analysis']['feature_evaluation']['analysis']['enabled']:
-                logger.info("Running feature analysis and recommendations")
-                analyze_and_recommend(
-                    output_dir=Path(config['paths']['feature_evaluation']),
-                    cv_metrics=evaluation_results['cv_metrics'],
-                    feature_effects=evaluation_results['feature_effects'],
-                    feature_sets=config['analysis']['feature_evaluation']['combinations'],
-                    correlation_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['correlation'],
-                    importance_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['importance'],
-                    variability_threshold=config['analysis']['feature_evaluation']['analysis']['thresholds']['variability']
+        if config['analysis']['feature_evaluation']['enabled']:
+            logger.info("Starting feature evaluation")
+            try:
+                evaluate_features_only(
+                    feature_matrix=test_data.feature_matrix,
+                    target_vector=test_data.target_vector,
+                    participants=test_data.participants,
+                    config=config['analysis']['feature_evaluation'],
+                    output_dir=Path(config['paths']['feature_evaluation'])
                 )
+                logger.info("Feature evaluation completed and results saved")
+            except Exception as e:
+                logger.error(f"Feature evaluation failed: {str(e)}")
+                return
+        
+        # Run analysis if enabled
+        if config['analysis']['feature_evaluation']['analysis']['enabled']:
+            logger.info("Starting feature analysis")
+            try:
+                analyze_saved_results(
+                    output_dir=Path(config['paths']['feature_evaluation']),
+                    feature_matrix=test_data.feature_matrix,
+                    analysis_config=config['analysis']['feature_evaluation']['analysis']
+                )
+                logger.info("Feature analysis completed")
+            except FileNotFoundError:
+                logger.error("Analysis failed: No evaluation results found. Run evaluation first.")
+            except Exception as e:
+                logger.error(f"Analysis failed: {str(e)}")
 
         # Train model if requested
         if config['model']['train']:

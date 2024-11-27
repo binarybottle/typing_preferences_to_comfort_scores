@@ -26,13 +26,14 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 import pymc as pm
 import arviz as az
 from scipy import stats
-import yaml
-import logging
 from dataclasses import dataclass
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.api as sm
-import matplotlib.pyplot as plt
 import pytensor.tensor as pt 
+import warnings
+import json
+import pickle
+import logging
 
 from bayesian_modeling import (train_bayesian_glmm, evaluate_model_performance)
 
@@ -185,14 +186,181 @@ def fit_hierarchical_model(
         logger.error(f"Model fitting error: {str(e)}")
         raise
 
-def calculate_univariate_r2(x: pd.Series, y: np.ndarray) -> float:
-    """Calculate R² for a single feature."""
-    slope, intercept = np.polyfit(x, y, 1)
-    y_pred = slope * x + intercept
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    return 1 - (ss_res / ss_tot)
+def evaluate_feature_stability(x: pd.Series, y: np.ndarray) -> Dict[str, float]:
+    """
+    Evaluate feature stability across different subsets of data with robust handling of edge cases.
+    
+    Args:
+        x: Input feature values
+        y: Target values
+        
+    Returns:
+        Dictionary containing stability metrics
+    """
+    n_splits = 5
+    r2_scores = []
+    correlation_scores = []
+    
+    # Initial check for constant feature
+    if len(np.unique(x)) == 1:
+        logger.info(f"Feature has constant value {x.iloc[0]} - stability metrics will be zero")
+        return {
+            'r2_mean': 0.0,
+            'r2_std': 0.0,
+            'correlation_mean': 0.0,
+            'correlation_std': 0.0,
+            'stability_score': 0.0,
+            'is_constant': True,
+            'constant_value': x.iloc[0]
+        }
+    
+    # Check for sufficient unique values
+    unique_ratio = len(np.unique(x)) / len(x)
+    if unique_ratio < 0.01:  # Less than 1% unique values
+        logger.info(f"Feature has low variance (unique ratio: {unique_ratio:.3f})")
+        return {
+            'r2_mean': 0.0,
+            'r2_std': 0.0,
+            'correlation_mean': 0.0,
+            'correlation_std': 0.0,
+            'stability_score': 0.0,
+            'is_low_variance': True,
+            'unique_ratio': unique_ratio
+        }
+    
+    # Create random splits while preserving ratio
+    try:
+        indices = np.arange(len(x))
+        np.random.shuffle(indices)
+        split_size = len(indices) // n_splits
+        
+        for i in range(n_splits):
+            # Get subset of data
+            start_idx = i * split_size
+            end_idx = start_idx + split_size if i < n_splits - 1 else len(indices)
+            subset_indices = indices[start_idx:end_idx]
+            
+            # Extract subset data
+            x_subset = x.iloc[subset_indices]
+            y_subset = y[subset_indices]
+            
+            # Skip if subset is constant
+            if len(np.unique(x_subset)) == 1:
+                logger.debug(f"Skipping constant subset in split {i+1}")
+                continue
+            
+            # Calculate R² for subset
+            try:
+                r2 = calculate_univariate_r2(x_subset, y_subset)
+                if not np.isnan(r2):
+                    r2_scores.append(r2)
+            except Exception as e:
+                logger.debug(f"R² calculation failed for split {i+1}: {str(e)}")
+            
+            # Calculate correlation for subset
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    corr, _ = stats.spearmanr(x_subset, y_subset)
+                    if not np.isnan(corr):
+                        correlation_scores.append(corr)
+            except Exception as e:
+                logger.debug(f"Correlation calculation failed for split {i+1}: {str(e)}")
+        
+        # Calculate stability metrics if we have enough valid scores
+        if len(r2_scores) >= 2 and len(correlation_scores) >= 2:
+            r2_mean = np.mean(r2_scores)
+            r2_std = np.std(r2_scores)
+            corr_mean = np.mean(correlation_scores)
+            corr_std = np.std(correlation_scores)
+            
+            # Calculate stability score (inverse of coefficient of variation)
+            stability_score = 1.0 - (r2_std / (r2_mean + 1e-10))
+            stability_score = max(0.0, min(1.0, stability_score))  # Clamp to [0,1]
+            
+            return {
+                'r2_mean': r2_mean,
+                'r2_std': r2_std,
+                'correlation_mean': corr_mean,
+                'correlation_std': corr_std,
+                'stability_score': stability_score,
+                'n_valid_splits': len(r2_scores),
+                'is_constant': False,
+                'is_low_variance': False
+            }
+        else:
+            logger.warning("Insufficient valid splits for stability calculation")
+            return {
+                'r2_mean': 0.0,
+                'r2_std': 0.0,
+                'correlation_mean': 0.0,
+                'correlation_std': 0.0,
+                'stability_score': 0.0,
+                'n_valid_splits': len(r2_scores),
+                'insufficient_data': True
+            }
+            
+    except Exception as e:
+        logger.error(f"Stability evaluation failed: {str(e)}")
+        return {
+            'r2_mean': 0.0,
+            'r2_std': 0.0,
+            'correlation_mean': 0.0,
+            'correlation_std': 0.0,
+            'stability_score': 0.0,
+            'error': str(e)
+        }
 
+def calculate_univariate_r2(x: pd.Series, y: np.ndarray) -> float:
+    """
+    Calculate R² for a single feature with improved handling of edge cases.
+    
+    Args:
+        x: Input feature values
+        y: Target values
+        
+    Returns:
+        R² score, or 0.0 if calculation is not possible
+    """
+    # Handle constant input
+    if len(np.unique(x)) == 1:
+        return 0.0
+    
+    # Handle NaN/inf values
+    mask = ~(np.isnan(x) | np.isnan(y) | np.isinf(x) | np.isinf(y))
+    x_clean = x[mask]
+    y_clean = y[mask]
+    
+    # Check if we have enough data points after cleaning
+    if len(x_clean) < 2:
+        return 0.0
+    
+    try:
+        # Use statsmodels for more robust linear regression
+        X = sm.add_constant(x_clean)
+        model = sm.OLS(y_clean, X)
+        results = model.fit()
+        
+        # Calculate R² manually to ensure validity
+        y_pred = results.predict(X)
+        ss_res = np.sum((y_clean - y_pred) ** 2)
+        ss_tot = np.sum((y_clean - np.mean(y_clean)) ** 2)
+        
+        # Handle division by zero
+        if ss_tot == 0:
+            return 0.0
+            
+        r2 = 1 - (ss_res / ss_tot)
+        
+        # Clamp R² to valid range [0, 1]
+        r2 = max(0.0, min(1.0, r2))
+        
+        return r2
+        
+    except Exception as e:
+        logger.debug(f"R² calculation failed: {str(e)}")
+        return 0.0
+    
 def evaluate_feature_sets(
    feature_matrix: pd.DataFrame,
    target_vector: np.ndarray,
@@ -202,34 +370,58 @@ def evaluate_feature_sets(
    n_splits: int = 5,
    n_samples: int = 10000,
    chains: int = 8,
-   target_accept: float = 0.85
+   target_accept: float = 0.85,
+   stability_threshold: float = 0.6,
+   min_effect_size: float = 0.1
 ) -> Dict[str, List[float]]:
     """
-    Evaluate different feature sets using cross-validation.
+    Enhanced evaluation of different feature sets using cross-validation with stability analysis.
+    
+    Args:
+        feature_matrix: Features to evaluate
+        target_vector: Target values to predict
+        participants: Participant IDs for grouping
+        feature_sets: List of feature set configurations
+        output_dir: Directory for output files
+        n_splits: Number of cross-validation splits
+        n_samples: Number of MCMC samples
+        chains: Number of MCMC chains
+        target_accept: Target acceptance rate for MCMC
+        stability_threshold: Minimum stability score to consider a feature reliable
+        min_effect_size: Minimum absolute effect size to consider a feature significant
+        
+    Returns:
+        Dictionary containing evaluation results
     """
     results = {}
     all_cv_metrics = {}
     all_feature_effects = {}
+    feature_stability_results = {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Updated file paths with more descriptive names
     raw_metrics_path = output_dir / "raw_metrics.txt"
     feature_details_path = output_dir / "feature_details.txt"
+    stability_report_path = output_dir / "stability_report.txt"
     
-    logger.info("Starting feature set evaluation")
+    logger.info("Starting enhanced feature set evaluation")
     logger.info(f"Number of feature sets: {len(feature_sets)}")
     logger.info(f"Target vector shape: {target_vector.shape}")
     logger.info(f"Feature matrix shape: {feature_matrix.shape}")
     
     with open(raw_metrics_path, 'w') as raw_file, \
-         open(feature_details_path, 'w') as details_file:
+         open(feature_details_path, 'w') as details_file, \
+         open(stability_report_path, 'w') as stability_file:
         
         raw_file.write("Raw Cross-Validation Metrics\n")
         raw_file.write("==========================\n\n")
         
         details_file.write("Detailed Feature Analysis\n")
         details_file.write("=======================\n")
+        
+        stability_file.write("Feature Stability Analysis\n")
+        stability_file.write("========================\n")
         
         for feature_set in feature_sets:
             set_name = feature_set['name']
@@ -260,19 +452,50 @@ def evaluate_feature_sets(
                     details_file.write(f"  - {' × '.join(inter)}\n")
             
             # Select features and create interaction terms
-            X = feature_matrix[features].copy()
+            try:
+                X = feature_matrix[features].copy()
+            except KeyError as e:
+                logger.error(f"Missing feature in matrix: {str(e)}")
+                continue
             
             # Add interaction terms
             valid_interactions = []
             for interaction in interactions:
                 if all(feat in features for feat in interaction):
-                    interaction_name = "_".join(interaction)
-                    X[interaction_name] = X[interaction[0]].copy()
-                    for feat in interaction[1:]:
-                        X[interaction_name] *= X[feat]
-                    features.append(interaction_name)
-                    valid_interactions.append(interaction)
-                    logger.info(f"Added interaction: {' × '.join(interaction)}")
+                    try:
+                        interaction_name = "_".join(interaction)
+                        X[interaction_name] = X[interaction[0]].copy()
+                        for feat in interaction[1:]:
+                            X[interaction_name] *= X[feat]
+                        features.append(interaction_name)
+                        valid_interactions.append(interaction)
+                        logger.info(f"Added interaction: {' × '.join(interaction)}")
+                    except Exception as e:
+                        logger.error(f"Failed to create interaction {interaction}: {str(e)}")
+                        continue
+            
+            # Evaluate feature stability before cross-validation
+            stability_file.write(f"\nStability Analysis for {set_name}:\n")
+            stability_file.write("=" * 50 + "\n")
+            
+            feature_stability = {}
+            for feature in features:
+                try:
+                    stability_metrics = evaluate_feature_stability(X[feature], target_vector)
+                    feature_stability[feature] = stability_metrics
+                    
+                    stability_file.write(f"\n{feature}:\n")
+                    stability_file.write(f"  R² stability: {stability_metrics['stability_score']:.3f}\n")
+                    stability_file.write(f"  R² mean: {stability_metrics['r2_mean']:.3f} ± {stability_metrics['r2_std']:.3f}\n")
+                    stability_file.write(f"  Correlation stability: {1.0 - stability_metrics['correlation_std']:.3f}\n")
+                    
+                    if stability_metrics['stability_score'] < stability_threshold:
+                        stability_file.write("  WARNING: Low stability detected\n")
+                except Exception as e:
+                    logger.error(f"Stability evaluation failed for {feature}: {str(e)}")
+                    continue
+            
+            feature_stability_results[set_name] = feature_stability
             
             # Initialize storage for feature effects
             feature_effects_all_folds = {feature: [] for feature in features}
@@ -296,159 +519,124 @@ def evaluate_feature_sets(
                 logger.info(f"\nFold {fold + 1}/{n_splits}")
                 details_file.write(f"\nFold {fold + 1}:\n")
                 
-                # Split data
-                X_train = X.iloc[train_idx]
-                X_val = X.iloc[val_idx]
-                y_train = target_vector[train_idx]
-                y_val = target_vector[val_idx]
-                participants_train = participants[train_idx]
-                participants_val = participants[val_idx]
-                
-                # Calculate raw feature relationships
-                for feature in features:
-                    # Train set relationships
-                    train_corr, train_p = stats.spearmanr(X_train[feature], y_train)
-                    train_r2 = calculate_univariate_r2(X_train[feature], y_train)
-                    
-                    # Validation set relationships
-                    val_corr, val_p = stats.spearmanr(X_val[feature], y_val)
-                    val_r2 = calculate_univariate_r2(X_val[feature], y_val)
-                    
-                    # Write detailed feature metrics
-                    details_file.write(f"\n  {feature}:\n")
-                    details_file.write(f"    Train correlation: {train_corr:.3f} (p={train_p:.3e})\n")
-                    details_file.write(f"    Train R²: {train_r2:.3f}\n")
-                    details_file.write(f"    Val correlation: {val_corr:.3f} (p={val_p:.3e})\n")
-                    details_file.write(f"    Val R²: {val_r2:.3f}\n")
-                    
-                    raw_feature_data = {
-                        'train_correlation': train_corr,
-                        'train_correlation_p': train_p,
-                        'train_r2': train_r2,
-                        'val_correlation': val_corr,
-                        'val_correlation_p': val_p,
-                        'val_r2': val_r2,
-                        'train_values': X_train[feature].values,
-                        'train_target': y_train,
-                        'val_values': X_val[feature].values,
-                        'val_target': y_val
-                    }
-                    feature_effects_all_folds[feature].append(raw_feature_data)
-                
-                # Train model
-                trace, model, _ = train_bayesian_glmm(
-                    feature_matrix=X_train,
-                    target_vector=y_train,
-                    participants=participants_train,
-                    design_features=features,
-                    control_features=[],
-                    inference_method='mcmc',
-                    n_samples=n_samples,
-                    chains=chains,
-                    target_accept=target_accept
-                )
-                
-                # Store model effects
                 try:
-                    feature_effects = az.summary(trace, var_names=features)
+                    # Split data
+                    X_train = X.iloc[train_idx]
+                    X_val = X.iloc[val_idx]
+                    y_train = target_vector[train_idx]
+                    y_val = target_vector[val_idx]
+                    participants_train = participants[train_idx]
+                    participants_val = participants[val_idx]
+                    
+                    # Calculate raw feature relationships with error handling
                     for feature in features:
-                        fold_data = feature_effects_all_folds[feature][-1]
-                        fold_data.update({
-                            'model_effect_mean': float(feature_effects.loc[feature, 'mean']),
-                            'model_effect_sd': float(feature_effects.loc[feature, 'sd']),
-                            'hdi_3%': float(feature_effects.loc[feature, 'hdi_3%']),
-                            'hdi_97%': float(feature_effects.loc[feature, 'hdi_97%'])
-                        })
-                        details_file.write(f"    Model effect: {fold_data['model_effect_mean']:.3f} ± {fold_data['model_effect_sd']:.3f}\n")
+                        try:
+                            # Train set relationships with robust calculation
+                            train_metrics = evaluate_feature_stability(X_train[feature], y_train)
+                            val_metrics = evaluate_feature_stability(X_val[feature], y_val)
+                            
+                            details_file.write(f"\n  {feature}:\n")
+                            details_file.write(f"    Train R²: {train_metrics['r2_mean']:.3f} ± {train_metrics['r2_std']:.3f}\n")
+                            details_file.write(f"    Val R²: {val_metrics['r2_mean']:.3f} ± {val_metrics['r2_std']:.3f}\n")
+                            details_file.write(f"    Stability score: {train_metrics['stability_score']:.3f}\n")
+                            
+                            feature_data = {
+                                'train_metrics': train_metrics,
+                                'val_metrics': val_metrics,
+                                'train_values': X_train[feature].values,
+                                'train_target': y_train,
+                                'val_values': X_val[feature].values,
+                                'val_target': y_val
+                            }
+                            feature_effects_all_folds[feature].append(feature_data)
+                            
+                        except Exception as e:
+                            logger.error(f"Feature analysis failed for {feature} in fold {fold}: {str(e)}")
+                            continue
+                    
+                    # Train model with error handling
+                    try:
+                        trace, model, _ = train_bayesian_glmm(
+                            feature_matrix=X_train,
+                            target_vector=y_train,
+                            participants=participants_train,
+                            design_features=features,
+                            control_features=[],
+                            inference_method='mcmc',
+                            n_samples=n_samples,
+                            chains=chains,
+                            target_accept=target_accept
+                        )
+                        
+                        # Store model effects
+                        try:
+                            feature_effects = az.summary(trace, var_names=features)
+                            for feature in features:
+                                if feature in feature_effects_all_folds:
+                                    fold_data = feature_effects_all_folds[feature][-1]
+                                    effect_mean = float(feature_effects.loc[feature, 'mean'])
+                                    effect_sd = float(feature_effects.loc[feature, 'sd'])
+                                    
+                                    fold_data.update({
+                                        'model_effect_mean': effect_mean,
+                                        'model_effect_sd': effect_sd,
+                                        'effect_significant': abs(effect_mean) > min_effect_size and 
+                                                           abs(effect_mean) > 2 * effect_sd
+                                    })
+                                    
+                                    details_file.write(
+                                        f"    Model effect: {effect_mean:.3f} ± {effect_sd:.3f}"
+                                        f" ({'significant' if fold_data['effect_significant'] else 'not significant'})\n"
+                                    )
+                        except Exception as e:
+                            logger.error(f"Could not compute feature effects for fold {fold}: {str(e)}")
+                            continue
+                        
+                        # Evaluate
+                        metrics = evaluate_model_performance(
+                            trace=trace,
+                            feature_matrix=X_val,
+                            target_vector=y_val,
+                            participants=participants_val,
+                            design_features=features,
+                            control_features=[]
+                        )
+                        
+                        # Record metrics
+                        for metric, value in metrics.items():
+                            cv_metrics[metric].append(value)
+                        
+                        # Write fold results
+                        raw_file.write(f"Feature Set {set_name}, Fold {fold + 1}:\n")
+                        for metric, value in metrics.items():
+                            raw_file.write(f"  {metric}: {value:.3f}\n")
+                        raw_file.write("\n")
+                        
+                    except Exception as e:
+                        logger.error(f"Model training/evaluation failed for fold {fold}: {str(e)}")
+                        continue
+                        
                 except Exception as e:
-                    logger.warning(f"Could not compute feature effects for fold {fold}: {str(e)}")
-                
-                # Evaluate
-                metrics = evaluate_model_performance(
-                    trace=trace,
-                    feature_matrix=X_val,
-                    target_vector=y_val,
-                    participants=participants_val,
-                    design_features=features,
-                    control_features=[]
-                )
-                
-                # Record metrics
-                for metric, value in metrics.items():
-                    cv_metrics[metric].append(value)
-                
-                # Write fold results
-                raw_file.write(f"Feature Set {set_name}, Fold {fold + 1}:\n")
-                for metric, value in metrics.items():
-                    raw_file.write(f"  {metric}: {value:.3f}\n")
-                raw_file.write("\n")
+                    logger.error(f"Fold {fold} processing failed: {str(e)}")
+                    continue
             
-            # Write feature summary statistics
-            details_file.write("\nFeature Summary Statistics:\n")
-            details_file.write("=" * 30 + "\n")
-            
-            for feature in features:
-                effects_data = feature_effects_all_folds[feature]
+            # Calculate and write summary statistics
+            if any(len(scores) > 0 for scores in cv_metrics.values()):
+                avg_metrics = {metric: np.mean(values) for metric, values in cv_metrics.items() if values}
+                std_metrics = {metric: np.std(values) for metric, values in cv_metrics.items() if values}
                 
-                details_file.write(f"\n{feature}:\n")
-                
-                # Model effects
-                model_effects = [d.get('model_effect_mean', np.nan) for d in effects_data]
-                if not all(np.isnan(model_effects)):
-                    details_file.write("Model Effects:\n")
-                    details_file.write(f"  Mean: {np.nanmean(model_effects):.3f} ± {np.nanstd(model_effects):.3f}\n")
-                
-                # Correlations
-                train_corrs = [d['train_correlation'] for d in effects_data]
-                val_corrs = [d['val_correlation'] for d in effects_data]
-                details_file.write("Correlations:\n")
-                details_file.write(f"  Train: {np.mean(train_corrs):.3f} ± {np.std(train_corrs):.3f}\n")
-                details_file.write(f"  Validation: {np.mean(val_corrs):.3f} ± {np.std(val_corrs):.3f}\n")
-                
-                # R² values
-                train_r2s = [d['train_r2'] for d in effects_data]
-                val_r2s = [d['val_r2'] for d in effects_data]
-                details_file.write("R² Values:\n")
-                details_file.write(f"  Train: {np.mean(train_r2s):.3f} ± {np.std(train_r2s):.3f}\n")
-                details_file.write(f"  Validation: {np.mean(val_r2s):.3f} ± {np.std(val_r2s):.3f}\n")
-            
-            # Calculate average metrics
-            avg_metrics = {metric: np.mean(values) for metric, values in cv_metrics.items()}
-            std_metrics = {metric: np.std(values) for metric, values in cv_metrics.items()}
-            
-            # Store results
-            results[set_name] = avg_metrics
-            all_cv_metrics[set_name] = cv_metrics
-            all_feature_effects[set_name] = feature_effects_all_folds
+                results[set_name] = avg_metrics
+                all_cv_metrics[set_name] = cv_metrics
+                all_feature_effects[set_name] = feature_effects_all_folds
+            else:
+                logger.error(f"No valid metrics collected for feature set {set_name}")
     
-    # Debug logging for feature effects
-    logger.info("=== Feature Effects Debug ===")
-    for set_name, effects in all_feature_effects.items():
-        logger.info(f"\nSet: {set_name}")
-        for feature, effect_data in effects.items():
-            mean_effect = np.mean([d.get('model_effect_mean', 0) for d in effect_data])
-            mean_corr = np.mean([d.get('val_correlation', 0) for d in effect_data])
-            mean_r2 = np.mean([d.get('val_r2', 0) for d in effect_data])
-            logger.info(f"Feature {feature}:")
-            logger.info(f"  Effect: {mean_effect:.3f}")
-            logger.info(f"  Correlation: {mean_corr:.3f}")
-            logger.info(f"  R²: {mean_r2:.3f}")
-    
-    logger.info("Feature evaluation complete")
-    
-    # Run analyze_and_recommend with complete data
-    analyze_and_recommend(
-        output_dir=output_dir,
-        cv_metrics=all_cv_metrics,
-        feature_effects=all_feature_effects,
-        feature_sets=feature_sets,
-        feature_matrix=feature_matrix
-    )
-    
+    # Return comprehensive results
     return {
         'cv_metrics': all_cv_metrics,
         'feature_effects': all_feature_effects,
-        'feature_sets': feature_sets
+        'feature_stability': feature_stability_results,
+        'evaluation_success': True
     }
 
 def calculate_waic_loo(
@@ -1222,3 +1410,280 @@ def analyze_and_recommend(
         f.write(f"High VIF features: {len(high_vif_features)}\n")
         
     logger.info("Analysis and recommendations completed")
+
+def save_evaluation_results_to_file(
+    results: Dict,
+    output_dir: Path
+) -> None:
+    """
+    Save feature evaluation results to files for later analysis.
+    
+    Args:
+        results: Dictionary containing evaluation results
+        output_dir: Directory to save results
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_file = output_dir / "evaluation_results.pkl"
+    
+    # Convert any numpy arrays to lists for serialization
+    serializable_results = {}
+    for key, value in results.items():
+        if isinstance(value, dict):
+            serializable_results[key] = {
+                k: v.tolist() if isinstance(v, np.ndarray) else v 
+                for k, v in value.items()
+            }
+        else:
+            serializable_results[key] = (
+                value.tolist() if isinstance(value, np.ndarray) else value
+            )
+    
+    with open(results_file, 'wb') as f:
+        pickle.dump(serializable_results, f)
+    
+    logger.info(f"Saved evaluation results to {results_file}")
+
+def load_evaluation_results(output_dir: Path) -> Dict:
+    """
+    Load previously saved feature evaluation results.
+    
+    Args:
+        output_dir: Directory containing saved results
+        
+    Returns:
+        Dictionary containing evaluation results
+    """
+    results_file = output_dir / "evaluation_results.pkl"
+    
+    if not results_file.exists():
+        raise FileNotFoundError(
+            f"No evaluation results found at {results_file}. "
+            "Please run feature evaluation first."
+        )
+    
+    with open(results_file, 'rb') as f:
+        results = pickle.load(f)
+    
+    logger.info(f"Loaded evaluation results from {results_file}")
+    return results
+
+def evaluate_features_only(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    config: Dict,
+    output_dir: Path
+) -> None:
+    """Run feature evaluation with validation and basic reporting."""
+    # Validate data first
+    if not validate_data_for_evaluation(
+        feature_matrix, 
+        target_vector, 
+        participants,
+        config['validation']
+    ):
+        raise ValueError("Data validation failed")
+
+    # Evaluate features
+    results = evaluate_feature_sets(
+        feature_matrix=feature_matrix,
+        target_vector=target_vector,
+        participants=participants,
+        feature_sets=config['combinations'],
+        output_dir=output_dir,
+        n_splits=config['n_splits'],
+        n_samples=config['n_samples'],
+        chains=config['chains'],
+        target_accept=config['target_accept']
+    )
+    
+    # Save raw fold details if requested
+    if config['fold_reporting']['save_fold_details']:
+        fold_details_file = output_dir / "fold_details.json"
+        with open(fold_details_file, 'w') as f:
+            # Convert numpy arrays to lists for JSON serialization
+            fold_details = {
+                k: v.tolist() if isinstance(v, np.ndarray) else v
+                for k, v in results['fold_details'].items()
+            }
+            json.dump(fold_details, f, indent=2)
+    
+    # Save raw metrics if requested
+    if config['fold_reporting']['save_raw_metrics']:
+        metrics_file = output_dir / "raw_metrics.csv"
+        pd.DataFrame(results['cv_metrics']).to_csv(metrics_file)
+    
+    # Save complete results for later analysis
+    save_evaluation_results(results, output_dir)
+
+def analyze_saved_results(
+    output_dir: Path,
+    feature_matrix: pd.DataFrame,
+) -> None:
+    """Load saved results and run analysis."""
+    results = load_evaluation_results(output_dir)
+    analyze_and_recommend(
+        output_dir=output_dir,
+        cv_metrics=results['cv_metrics'],
+        feature_effects=results['feature_effects'],
+        feature_sets=results['feature_sets'],
+        feature_matrix=feature_matrix
+    )
+
+def validate_data_for_evaluation(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    validation_settings: Dict
+) -> bool:
+    """Validate data before feature evaluation."""
+    n_samples = len(feature_matrix)
+    
+    if n_samples < validation_settings['min_training_samples']:
+        logger.error(f"Insufficient samples: {n_samples} < {validation_settings['min_training_samples']}")
+        return False
+        
+    if validation_settings['outlier_detection']:
+        # Check for outliers in feature distributions
+        for feature in feature_matrix.columns:
+            z_scores = stats.zscore(feature_matrix[feature])
+            outliers = abs(z_scores) > validation_settings['outlier_threshold']
+            if outliers.sum() > 0:
+                logger.warning(f"Found {outliers.sum()} outliers in feature {feature}")
+    
+    return True
+
+def evaluate_features_only(
+    feature_matrix: pd.DataFrame,
+    target_vector: np.ndarray,
+    participants: np.ndarray,
+    config: Dict,
+    output_dir: Path
+) -> None:
+    """Run feature evaluation with validation and basic reporting."""
+    # Validate data first
+    if not validate_data_for_evaluation(
+        feature_matrix, 
+        target_vector, 
+        participants,
+        config['validation']
+    ):
+        raise ValueError("Data validation failed")
+
+    # Evaluate features
+    results = evaluate_feature_sets(
+        feature_matrix=feature_matrix,
+        target_vector=target_vector,
+        participants=participants,
+        feature_sets=config['combinations'],
+        output_dir=output_dir,
+        n_splits=config['n_splits'],
+        n_samples=config['n_samples'],
+        chains=config['chains'],
+        target_accept=config['target_accept']
+    )
+    
+    # Save raw fold details if requested
+    if config['fold_reporting']['save_fold_details']:
+        fold_details_file = output_dir / "fold_details.json"
+        with open(fold_details_file, 'w') as f:
+            json.dump(results['fold_details'], f, indent=2)
+    
+    # Save raw metrics if requested
+    if config['fold_reporting']['save_raw_metrics']:
+        metrics_file = output_dir / "raw_metrics.csv"
+        pd.DataFrame(results['cv_metrics']).to_csv(metrics_file)
+    
+    # Save complete results for later analysis
+    save_evaluation_results(results, output_dir)
+
+def analyze_saved_results(
+    output_dir: Path,
+    feature_matrix: pd.DataFrame,
+    analysis_config: Dict
+) -> None:
+    """Analyze saved evaluation results with detailed reporting."""
+    # Load saved results
+    results = load_evaluation_results(output_dir)
+    
+    # Create analysis output directory
+    analysis_dir = output_dir / "analysis"
+    analysis_dir.mkdir(exist_ok=True)
+    
+    # Analyze feature stability
+    stability_results = analyze_feature_stability(
+        results['feature_effects'],
+        analysis_config['stability_thresholds']
+    )
+    
+    # Analyze feature importance
+    importance_results = analyze_feature_importance(
+        results['cv_metrics'],
+        analysis_config['feature_thresholds']
+    )
+    
+    # Generate detailed reports based on reporting config
+    if analysis_config['reporting']['detail_level'] == 'full':
+        generate_full_report(
+            stability_results,
+            importance_results,
+            results,
+            analysis_dir,
+            analysis_config
+        )
+    
+    # Generate plots if requested
+    if analysis_config['reporting']['plot_correlations']:
+        plot_feature_correlations(
+            feature_matrix,
+            analysis_dir / "correlation_matrix.png"
+        )
+    
+    if analysis_config['reporting']['plot_importance']:
+        plot_feature_importance(
+            importance_results,
+            analysis_dir / "feature_importance.png"
+        )
+
+def generate_full_report(
+    stability_results: Dict,
+    importance_results: Dict,
+    evaluation_results: Dict,
+    output_dir: Path,
+    config: Dict
+) -> None:
+    """Generate comprehensive analysis report."""
+    report_file = output_dir / "full_analysis_report.txt"
+    
+    with open(report_file, 'w') as f:
+        # Write report header
+        f.write("Feature Analysis Report\n")
+        f.write("=====================\n\n")
+        
+        # Stability Analysis
+        f.write("1. Feature Stability Analysis\n")
+        f.write("--------------------------\n")
+        for feature, metrics in stability_results.items():
+            f.write(f"\n{feature}:\n")
+            f.write(f"  Stability Score: {metrics['stability_score']:.3f}")
+            if metrics['stability_score'] < config['stability_thresholds']['feature_reliability']:
+                f.write(" (WARNING: Low stability)")
+            f.write(f"\n  Effect Size: {metrics['effect_size']:.3f}")
+            f.write(f"\n  R² Score: {metrics['r2']:.3f}\n")
+        
+        # Importance Analysis
+        f.write("\n2. Feature Importance Analysis\n")
+        f.write("---------------------------\n")
+        for feature, metrics in importance_results.items():
+            f.write(f"\n{feature}:\n")
+            f.write(f"  Importance Score: {metrics['importance']:.3f}")
+            if metrics['importance'] < config['feature_thresholds']['importance']:
+                f.write(" (WARNING: Low importance)")
+            f.write(f"\n  Correlation: {metrics['correlation']:.3f}\n")
+        
+        # Recommendations
+        f.write("\n3. Recommendations\n")
+        f.write("----------------\n")
+        write_recommendations(f, stability_results, importance_results, config)
+
+
