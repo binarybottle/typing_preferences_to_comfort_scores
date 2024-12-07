@@ -36,7 +36,20 @@ class ProcessedData:
     feature_matrix: pd.DataFrame
     target_vector: np.ndarray
     participants: np.ndarray
-    typing_times: Optional[np.ndarray]
+    typing_times: Optional[np.ndarray] = None
+
+    def head(self, n: int = 5) -> 'ProcessedData':
+            """Return first n rows of processed data."""
+            if n > len(self.target_vector):
+                n = len(self.target_vector)
+            
+            return ProcessedData(
+                bigram_pairs=self.bigram_pairs[:n],  # Changed from self.bigram_pairs.copy()[:n]
+                feature_matrix=self.feature_matrix.iloc[:n],
+                target_vector=self.target_vector[:n],
+                participants=self.participants[:n],
+                typing_times=self.typing_times[:n] if self.typing_times is not None else None
+            )
 
 class DataPreprocessor:
     """Class for handling data preprocessing tasks."""

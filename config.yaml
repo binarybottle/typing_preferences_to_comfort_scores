@@ -19,10 +19,6 @@ data:
 
 # Analysis settings
 analysis:
-  # Frequency/timing analysis
-  frequency_timing:
-    enabled: true
-    n_groups: 4
 
   # Feature space analysis
   feature_space:
@@ -157,12 +153,6 @@ paths:
     pca: "output/feature_space/pca.png"
     bigram_graph: "output/feature_space/bigram_graph.png"
     underrepresented: "output/feature_space/underrepresented.png"
-  
-  frequency_timing:
-    dir: "output/frequency_timing"
-    analysis: "output/frequency_timing/analysis.txt"
-    relationship: "output/frequency_timing/relationship.png"
-    group_directory: "output/frequency_timing"
   
   model:
     dir: "output/model"

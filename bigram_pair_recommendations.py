@@ -14,6 +14,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KernelDensity
 from scipy.spatial import ConvexHull
+from scipy.interpolate import griddata
+from scipy.stats import gaussian_kde
 import logging
 
 logger = logging.getLogger(__name__)
@@ -162,7 +164,6 @@ def analyze_feature_space(
             
             plot_underrepresented_variants(
                 X_pca=X_pca,
-                density=density,
                 positions=positions,
                 pca=pca,
                 scaler=scaler,
@@ -246,7 +247,6 @@ def format_bigram_pair(bigram_pair: Tuple[Tuple[str, str], Tuple[str, str]]) -> 
 
 def plot_underrepresented_variants(
     X_pca: np.ndarray,
-    density: np.ndarray,
     positions: np.ndarray,
     pca: PCA,
     scaler: StandardScaler,  # Added scaler parameter
@@ -254,34 +254,20 @@ def plot_underrepresented_variants(
     recommendations: List[Dict] = None,
     output_base_path: str = None
 ) -> None:
-    # Basic plot (original version)
-    plt.figure(figsize=(12, 8))
-    plt.contourf(positions[:, 0].reshape(100, 100), 
-                positions[:, 1].reshape(100, 100), 
-                density.reshape(100, 100), 
-                levels=20, cmap='viridis')
-    plt.colorbar(label='Density')
     
-    plt.scatter(X_pca[:, 0], X_pca[:, 1], 
-               c='white', alpha=0.7, s=50,
-               edgecolors='black', linewidth=1,
-               label='Existing bigram pairs')
-    
-    plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
-    plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
-    plt.title('Feature Space Density')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_base_path + '.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Plot with recommended bigram pairs
-    if recommendations:
-        plt.figure(figsize=(15, 10))
-        plt.contourf(positions[:, 0].reshape(100, 100), 
-                    positions[:, 1].reshape(100, 100), 
-                    density.reshape(100, 100), 
-                    levels=20, cmap='viridis')
+    # Calculate grid and interpolation once
+    grid_size = int(np.ceil(np.sqrt(len(positions))))
+    x = np.linspace(positions[:, 0].min(), positions[:, 0].max(), grid_size)
+    y = np.linspace(positions[:, 1].min(), positions[:, 1].max(), grid_size)
+    X, Y = np.meshgrid(x, y)
+
+    kernel = gaussian_kde(X_pca.T)
+    values = kernel(X_pca.T)
+    Z = griddata(X_pca, values, (X, Y), method='cubic')
+
+    def make_base_plot(figsize=(12, 8)):
+        plt.figure(figsize=figsize)
+        plt.contourf(X, Y, Z, levels=20, cmap='viridis')
         plt.colorbar(label='Density')
         
         plt.scatter(X_pca[:, 0], X_pca[:, 1], 
@@ -289,6 +275,21 @@ def plot_underrepresented_variants(
                    edgecolors='black', linewidth=1,
                    label='Existing bigram pairs')
         
+        plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+        plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+
+    # Basic plot
+    make_base_plot()
+    plt.title('Feature Space Density')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_base_path + '.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Plot with recommended bigram pairs
+    if recommendations:
+        make_base_plot(figsize=(15, 10))
+
         # Plot recommended bigram pairs in red with labels
         for rec in recommendations:
             point_2d = pca.transform(scaler.transform(
@@ -303,8 +304,6 @@ def plot_underrepresented_variants(
                         xytext=(5, 5), textcoords='offset points',
                         fontsize=8, color='red', alpha=0.7)
         
-        plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
-        plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
         plt.title('Feature Space Density with Recommended Bigram Pairs')
         plt.legend(['Existing pairs', 'Recommended pairs'])
         plt.tight_layout()

@@ -17,7 +17,6 @@ Here, the data is split into training (80% participants) and test (20% participa
 - The full dataset (100%) is used for:
   - Feature space analysis (does not influence feature selection or model training)
   - Bigram pair recommendations (what additional data to collect)
-  - Timing-frequency analysis (timing information is not used to train the model)
 - Training data (80%) is used for:
   - Model training
   - Model output (bigram comfort scores)
@@ -42,7 +41,6 @@ engram3/
 ├── bayesian_modeling.py
 ├── bigram_feature_definitions.py
 ├── bigram_feature_extraction.py 
-├── bigram_frequency_timing.py
 ├── bigram_pair_feature_evaluation.py
 ├── bigram_pair_recommendations.py
 ├── data_processing.py
@@ -77,11 +75,6 @@ engram3/
     │   ├── bigram_graph.png
     │   └── underrepresented.png
     │
-    ├── frequency_timing/
-    │   ├── analysis.txt
-    │   ├── relationship.png
-    │   └── groups/
-    │
     ├── model/
     │   ├── results/
     │   └── diagnostics_{inference_method}.png
@@ -93,7 +86,6 @@ engram3/
 - **`main.py`**: Orchestrates the entire pipeline from data processing to modeling.
 - **`bayesian_modeling.py`**: Implements Bayesian modeling for latent bigram typing comfort estimation.
 - **`bigram_feature_extraction.py`**: Extracts features from bigrams for analysis.
-- **`bigram_frequency_timing.py`**: Analyzes timing and frequency of bigram typing.
 - **`bigram_pair_feature_evaluation.py`**: Evaluates feature effectiveness using test data.
 - **`bigram_pair_recommendations.py`**: Recommends additional bigram pairs for data collection.
 - **`data_processing.py`**: Processes raw data into a format suitable for analysis.

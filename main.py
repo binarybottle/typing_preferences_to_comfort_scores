@@ -22,8 +22,6 @@ import pandas as pd
 import logging
 
 from data_processing import DataPreprocessor, generate_train_test_splits, manage_data_splits
-from bigram_frequency_timing import (plot_frequency_timing_relationship, plot_timing_by_frequency_groups,
-                                     save_timing_analysis)
 from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
                                         row_position_values, bigrams, bigram_frequencies_array)
 from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences)
@@ -135,8 +133,6 @@ def create_output_directories(config: Dict[str, Any]) -> None:
         Path(config['paths']['logs']).parent,
         Path(config['paths']['feature_evaluation']),
         Path(config['paths']['feature_space']['dir']),
-        Path(config['paths']['frequency_timing']['dir']),
-        Path(config['paths']['frequency_timing']['group_directory']),
         Path(config['paths']['model']['dir']),
         Path(config['paths']['model']['results']).parent,
         Path(config['paths']['scores']).parent
@@ -230,54 +226,6 @@ def main():
         processed_data = preprocessor.get_processed_data()
 
         # === FULL DATASET ANALYSES === #
-
-        # Analyze bigram frequency/timing relationship if enabled
-        if config['analysis']['frequency_timing']['enabled']:
-            logger.info("Starting frequency/timing analysis")
-            
-            try:
-                timing_results = plot_frequency_timing_relationship(
-                    bigram_data=processed_data,
-                    bigrams=bigrams,
-                    bigram_frequencies_array=bigram_frequencies_array,
-                    output_path=config['paths']['frequency_timing']['relationship'],
-                    n_groups=config['analysis']['frequency_timing']['n_groups']
-                )
-                
-                if 'error' in timing_results:
-                    logger.error(f"Frequency-timing analysis failed: {timing_results['error']}")
-                else:
-                    # Create group visualizations
-                    if 'group_analysis' in timing_results:
-                        plot_timing_by_frequency_groups(
-                            bigram_data=processed_data,
-                            bigram_frequencies_array=bigram_frequencies_array,
-                            group_results=timing_results['group_analysis'],
-                            output_dir=config['paths']['frequency_timing']['group_directory']
-                        )
-                    
-                    # Save analysis results
-                    save_timing_analysis(
-                        timing_results=timing_results,
-                        group_comparison_results=timing_results.get('group_analysis'),
-                        output_path=config['paths']['frequency_timing']['analysis']
-                    )
-                    
-                    logger.info("Frequency/timing analysis completed")
-                    logger.info(f"Results:")
-                    logger.info(f"  Median correlation: {timing_results['correlation_median']:.3f} "
-                                f"(p = {timing_results['correlation_median_p']:.3e})")
-                    logger.info(f"  Mean correlation: {timing_results['correlation_mean']:.3f} "
-                                f"(p = {timing_results['correlation_mean_p']:.3e})")
-                    logger.info(f"  R-squared: {timing_results['r2']:.3f}")
-                    logger.info(f"  ANOVA F-stat: {timing_results['anova_f_stat']:.3f} "
-                                f"(p = {timing_results['anova_p_value']:.3e})")
-                    logger.info(f"  Number of unique bigrams: {timing_results['n_unique_bigrams']}")
-                    logger.info(f"  Total timing instances: {timing_results['total_occurrences']}")
-
-            except Exception as e:
-                logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
-                raise
 
         # Evaluate feature space
         if config['analysis']['feature_space']['enabled']:
