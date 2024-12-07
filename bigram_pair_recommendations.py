@@ -46,24 +46,26 @@ def analyze_feature_space(
         }
         
         if recommend_bigrams:
+            # Fit KDE for density estimation
             kde = KernelDensity(kernel='gaussian', bandwidth=0.5)
             kde.fit(X_pca)
             
-            x_min, x_max = X_pca[:, 0].min() - 1, X_pca[:, 0].max() + 1
-            y_min, y_max = X_pca[:, 1].min() - 1, X_pca[:, 1].max() + 1
-            xx, yy = np.mgrid[x_min:x_max:100j, y_min:y_max:100j]
-            
-            positions = np.vstack([xx.ravel(), yy.ravel()]).T
-            density = np.exp(kde.score_samples(positions))
-            
-            low_density_mask = density < np.percentile(density, 10)
-            low_density_points = positions[low_density_mask]
+            # Get candidate points using density-based sampling
+            candidate_points = generate_density_based_recommendations(
+                X_pca=X_pca,
+                feature_matrix=feature_matrix,
+                kde=kde,
+                n_samples=1000,
+                n_recommendations=num_recommendations * 3  # Extra candidates for filtering
+            )
             
             recommendations = []
             seen_bigrams = set()
             feature_names = feature_matrix.columns.tolist()
+            existing_pairs = {tuple(sorted([''.join(pair[0]), ''.join(pair[1])]))
+                            for pair in feature_matrix.index}
             
-            for point in low_density_points:
+            for point in candidate_points:
                 if len(recommendations) >= num_recommendations:
                     break
                     
@@ -71,6 +73,7 @@ def analyze_feature_space(
                 feature_point = pca.inverse_transform(point_2d)
                 feature_point = scaler.inverse_transform(feature_point)
                 
+                # Find nearest neighbors for more candidates
                 k = 5
                 distances = np.linalg.norm(X - feature_point, axis=1)
                 nearest_indices = np.argsort(distances)[:k]
@@ -82,7 +85,8 @@ def analyze_feature_space(
                         ''.join(bigram[1])
                     ]))
                     
-                    if sorted_bigram not in seen_bigrams:
+                    # Check both uniqueness and not in existing pairs
+                    if sorted_bigram not in seen_bigrams and sorted_bigram not in existing_pairs:
                         seen_bigrams.add(sorted_bigram)
                         recommendations.append({
                             'bigram': bigram,
@@ -146,6 +150,10 @@ def analyze_feature_space(
                     f.write(f"{i}. {bigram[0][0]}{bigram[0][1]}, {bigram[1][0]}{bigram[1][1]} ")
                     f.write(f"(distance: {rec['distance']:.3f})\n")
             
+            # Create visualizations
+            positions = np.vstack([candidate_points.reshape(-1, 2)])
+            density = np.exp(kde.score_samples(positions))
+            
             plot_bigram_graph_variants(
                 feature_matrix=feature_matrix,
                 recommendations=recommendations,
@@ -157,7 +165,7 @@ def analyze_feature_space(
                 density=density,
                 positions=positions,
                 pca=pca,
-                scaler=scaler,  # Pass scaler instance
+                scaler=scaler,
                 bigram_pairs=feature_matrix.index.tolist(),
                 recommendations=recommendations,
                 output_base_path=output_paths['underrepresented'].replace('.png', '')
@@ -444,7 +452,7 @@ def plot_bigram_graph_variants(
         plt.margins(0.2)
         plt.savefig(output_base_path + '_with_recommendations.png', dpi=300, bbox_inches='tight')
         plt.close()
-        
+
 def save_feature_space_analysis_results(results: Dict, output_path: str) -> None:
     """
     Save feature space analysis results to a file.
@@ -472,3 +480,69 @@ def save_feature_space_analysis_results(results: Dict, output_path: str) -> None
     except Exception as e:
         logger.error(f"Error saving analysis results: {str(e)}")
     
+def analyze_recommendations(
+    feature_matrix: pd.DataFrame,
+    recommendations: List[Dict],
+    X_pca: np.ndarray,
+    pca: PCA,
+    low_density_points: np.ndarray
+) -> Dict:
+    """Analyze recommendation novelty and distribution."""
+    # Check for overlap with existing pairs
+    existing_pairs = {tuple(sorted([''.join(pair[0]), ''.join(pair[1])]))
+                     for pair in feature_matrix.index}
+    
+    recommended_pairs = {tuple(sorted([''.join(rec['bigram'][0]), ''.join(rec['bigram'][1])]))
+                        for rec in recommendations}
+    
+    overlap = recommended_pairs.intersection(existing_pairs)
+    
+    # Analyze point distribution
+    recommended_points = np.array([rec['pca_coords'] for rec in recommendations])
+    
+    return {
+        'total_recommendations': len(recommendations),
+        'overlapping_pairs': len(overlap),
+        'overlap_examples': list(overlap)[:5],
+        'low_density_points_shape': low_density_points.shape,
+        'recommended_points_mean': recommended_points.mean(axis=0),
+        'recommended_points_std': recommended_points.std(axis=0),
+        'pc_variances': pca.explained_variance_ratio_
+    }
+
+def generate_density_based_recommendations(
+    X_pca: np.ndarray,
+    feature_matrix: pd.DataFrame,
+    kde: KernelDensity,
+    n_samples: int = 1000,
+    n_recommendations: int = 30
+) -> List[Dict]:
+    """Generate recommendations using proper density-based sampling."""
+    # Create grid covering full PCA space with margin
+    margin = 0.2
+    x_min, x_max = X_pca[:, 0].min() - margin, X_pca[:, 0].max() + margin
+    y_min, y_max = X_pca[:, 1].min() - margin, X_pca[:, 1].max() + margin
+    
+    # Generate random samples across space
+    candidates = np.random.uniform(
+        low=[x_min, y_min],
+        high=[x_max, y_max],
+        size=(n_samples, 2)
+    )
+    
+    # Get density scores for all points
+    density_scores = np.exp(kde.score_samples(candidates))
+    
+    # Inverse probability sampling - prefer low density regions
+    sampling_weights = 1 / (density_scores + 1e-6)
+    sampling_weights /= sampling_weights.sum()
+    
+    # Sample points inversely proportional to density
+    selected_indices = np.random.choice(
+        n_samples,
+        size=n_recommendations,
+        replace=False,
+        p=sampling_weights
+    )
+    
+    return candidates[selected_indices]

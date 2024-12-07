@@ -3,10 +3,10 @@
 #===========#
 # Data settings
 data:
-  file: "data/input/output_all4studies_406participants/tables/filtered_bigram_data.csv"
-  # file: "data/input/output_all4studies_406participants/tables/filtered_consistent_choices.csv"
-  # file: "data/input/output_all4studies_303of406participants_0improbable/tables/filtered_bigram_data.csv"
-  # file: "data/input/output_all4studies_303of406participants_0improbable/tables/filtered_consistent_choices.csv"
+  #file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
+  #file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
+  #file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
+  file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
 
   # Participant splits
   splits:
@@ -53,8 +53,9 @@ analysis:
       save_raw_metrics: true
 
     combinations:
-      - name: "base9features"
+      - name: "base9_plus_speed"
         features: 
+          - typing_time
           - same_finger
           - sum_finger_values
           - adj_finger_diff_row

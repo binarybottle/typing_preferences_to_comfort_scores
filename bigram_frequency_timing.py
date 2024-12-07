@@ -26,7 +26,7 @@ from data_processing import ProcessedData
 logger = logging.getLogger(__name__)
 
 def plot_frequency_timing_relationship(
-    bigram_data: 'ProcessedData',
+    bigram_data: pd.DataFrame,
     bigrams: list,
     bigram_frequencies_array: np.ndarray,
     output_path: str,
@@ -34,31 +34,61 @@ def plot_frequency_timing_relationship(
 ) -> Dict[str, Any]:
     """
     Analyze and plot relationship between bigram frequency and typing time distributions.
-    Creates two plots:
+    Creates three plots:
     1. Distribution plot showing median times with error bars and sample sizes
-    2. Minimum time plot showing fastest typing time for each bigram with labels
+    2. Median bigram typing times
+    3. Minimum (fastest) bigram typing times
     """
     try:
+
+        print("Input types:")
+        print("bigram_data type:", type(bigram_data))
+        print("bigrams type:", type(bigrams))
+        print("bigram_frequencies_array type:", type(bigram_frequencies_array))
+        print("\nFirst few values:")
+        print("bigram_data head:\n", bigram_data.head())
+        print("bigrams[:5]:", bigrams[:5])
+        print("bigram_frequencies_array[:5]:", bigram_frequencies_array[:5])
+        print("Shape of input data:", bigram_data.shape)
+        print("Sample of bigrams:", bigrams[:5])
+        print("Sample of frequencies:", bigram_frequencies_array[:5])
+        
         # Create dictionary mapping bigrams to their frequencies
         bigram_frequencies = {
             b: freq for b, freq in zip(bigrams, bigram_frequencies_array)
         }
+        print("Created bigram frequencies dictionary")
         
-        # Collect all timing instances for each bigram
-        timing_data = []
-        for i, bigram_tuple in enumerate(bigram_data.bigram_pairs):
-            chosen_bigram = ''.join(bigram_tuple[0])
-            unchosen_bigram = ''.join(bigram_tuple[1])
-            timing = bigram_data.typing_times[i]
-            
-            # Add both bigrams with their timing
-            timing_data.append({'bigram': chosen_bigram, 'timing': timing})
-            timing_data.append({'bigram': unchosen_bigram, 'timing': timing})
+        # Create DataFrames for chosen and unchosen bigrams
+        chosen_df = bigram_data[['chosen_bigram', 'chosen_bigram_time']].copy()
+        unchosen_df = bigram_data[['unchosen_bigram', 'unchosen_bigram_time']].copy()
+        
+        print("Created separate dataframes")
+        print("Chosen shape:", chosen_df.shape)
+        print("Unchosen shape:", unchosen_df.shape)
+        
+        # Rename columns to match
+        chosen_df.columns = ['bigram', 'timing']
+        unchosen_df.columns = ['bigram', 'timing']
+        
+        # Combine data
+        df = pd.concat([chosen_df, unchosen_df], axis=0)
+        print("Combined data shape:", df.shape)
 
-        df = pd.DataFrame(timing_data)
+        # Create long format dataframe directly
+        timing_data = pd.concat([
+            pd.DataFrame({
+                'bigram': bigram_data['chosen_bigram'],
+                'timing': bigram_data['chosen_bigram_time']
+            }),
+            pd.DataFrame({
+                'bigram': bigram_data['unchosen_bigram'], 
+                'timing': bigram_data['unchosen_bigram_time']
+            })
+        ])
 
         # Calculate timing statistics for each unique bigram
-        aggregated_timings = df.groupby('bigram').agg({
+        aggregated_timings = timing_data.groupby('bigram').agg({
             'timing': ['median', 'mean', 'std', 'count', 'min']
         }).reset_index()
 
@@ -78,12 +108,12 @@ def plot_frequency_timing_relationship(
         # Calculate correlations
         correlations = {
             'median': stats.spearmanr(aggregated_timings['frequency'], 
-                                    aggregated_timings['median_timing']),
+                                      aggregated_timings['median_timing']),
             'mean': stats.spearmanr(aggregated_timings['frequency'], 
-                                  aggregated_timings['mean_timing']),
+                                    aggregated_timings['mean_timing']),
             'min': stats.spearmanr(aggregated_timings['frequency'],
-                                 aggregated_timings['min_timing'])
-        }
+                                   aggregated_timings['min_timing'])
+        }  
 
         #--------------------------
         # Plot 1: Distribution plot
@@ -141,9 +171,9 @@ def plot_frequency_timing_relationship(
         plt.savefig(dist_plot_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-        #---------------------
+        #----------------------
         # Plot 2: Minimum times
-        #---------------------
+        #----------------------
         plt.figure(figsize=(10, 6))
         plt.semilogx()  # Use log scale for frequency axis
         
@@ -265,7 +295,7 @@ def plot_frequency_timing_relationship(
         # Perform ANOVA
         #--------------
         groups = [group_data['median_timing'].values 
-                 for _, group_data in aggregated_timings.groupby('freq_group', observed=True)]
+                 for _, group_data in aggregated_timings.groupby('freq_group')]
         f_stat, anova_p = stats.f_oneway(*groups)
 
         # Post-hoc analysis if ANOVA is significant
@@ -282,13 +312,7 @@ def plot_frequency_timing_relationship(
                     columns=post_hoc._results_table.data[0]
                 )
             except Exception as e:
-                logger.warning(f"Could not perform post-hoc analysis: {str(e)}")
-
-        # Generate group visualizations showing distributions
-        plot_timing_by_frequency_groups(
-            aggregated_data=aggregated_timings,
-            output_dir=os.path.dirname(output_path)
-        )
+                print(f"Could not perform post-hoc analysis: {str(e)}")
 
         #----------------
         # Prepare results
@@ -308,7 +332,7 @@ def plot_frequency_timing_relationship(
             'anova_p_value': float(anova_p),
             'post_hoc': post_hoc_results,
             'group_stats': {
-                group: {
+                str(group): {
                     'freq_range': (
                         float(group_data['frequency'].min()),
                         float(group_data['frequency'].max())
@@ -320,17 +344,16 @@ def plot_frequency_timing_relationship(
                     'n_bigrams': len(group_data),
                     'total_occurrences': int(group_data['n_occurrences'].sum())
                 }
-                for group in aggregated_timings['freq_group'].unique()
-                for group_data in [aggregated_timings[aggregated_timings['freq_group'] == group]]
+                for group, group_data in aggregated_timings.groupby('freq_group')
             }
         }
 
         return results
 
     except Exception as e:
-        logger.error(f"Error in frequency timing analysis: {str(e)}")
+        print(f"Error in frequency timing analysis: {str(e)}")
         return {'error': str(e)}
-  
+         
 def plot_timing_by_frequency_groups(
     aggregated_data: pd.DataFrame,
     output_dir: str
@@ -497,3 +520,5 @@ def save_timing_analysis(
                 
     except Exception as e:
         logger.error(f"Error saving timing analysis: {str(e)}")
+
+
