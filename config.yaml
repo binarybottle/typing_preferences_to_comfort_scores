@@ -14,6 +14,7 @@ analysis:
   analyze_features: true
   find_sparse_regions: true
   feature_importance: true
+  train_model: true
 
 # Logging settings
 logging:

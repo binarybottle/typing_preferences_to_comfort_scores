@@ -16,7 +16,7 @@ class Preference:
     """Single preference instance with all needed data."""
     bigram1: str
     bigram2: str
-    participant_id: str  # Using string IDs from data
+    participant_id: str
     preferred: bool
     features1: Dict[str, float]
     features2: Dict[str, float]
@@ -24,13 +24,16 @@ class Preference:
     typing_time1: Optional[float] = None
     typing_time2: Optional[float] = None
 
-    def get_feature_difference(self) -> Dict[str, float]:
-        """Get feature differences for modeling."""
-        return {
-            name: self.features1[name] - self.features2[name]
-            for name in self.features1
-        }
+    def __str__(self) -> str:
+        """Return human-readable preference."""
+        preferred_bigram = self.bigram1 if self.preferred else self.bigram2
+        other_bigram = self.bigram2 if self.preferred else self.bigram1
+        return f"'{preferred_bigram}' preferred over '{other_bigram}'"
 
+    def __repr__(self) -> str:
+        """Return detailed string representation."""
+        return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
+    
 class PreferenceDataset:
     """Handles loading and analyzing preference data."""
     
