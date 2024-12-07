@@ -836,185 +836,27 @@ def check_multicollinearity_vif(
 #===================#
 # Results Handling  #
 #===================#
-def save_evaluation_results(
-    cv_scores: Dict[str, List[float]],
-    waic_scores: Dict[str, float],
-    loo_scores: Dict[str, float],
-    feature_importance: Dict[str, float],
-    feature_correlations: pd.DataFrame,
-    feature_combinations: List[Dict[str, Any]], 
-    output_dir: Path,
-    multicollinearity_results: Optional[Dict] = None
-) -> None:
-    """
-    Save comprehensive evaluation results to files.
-    
-    Saves the following files in output_dir:
-    1. evaluation_metrics.csv - Summary metrics for each feature set
-    2. cv_scores_detailed.csv - Detailed cross-validation scores
-    3. feature_importance.txt/.csv - Feature importance rankings
-    4. feature_correlations.txt/.csv - Correlation analysis
-    5. multicollinearity.txt - VIF and correlation warnings
-    6. evaluation_summary.txt - Overall analysis summary
-    
-    Args:
-        cv_scores: Cross-validation scores per feature set
-        waic_scores: WAIC scores per feature set
-        loo_scores: LOO-CV scores per feature set
-        feature_importance: Feature importance scores
-        feature_correlations: Feature correlation matrix
-        feature_combinations: List of evaluated feature combinations
-        output_dir: Directory for output files
-        multicollinearity_results: Optional VIF analysis results
-    """
+def save_evaluation_results(results: Dict, output_dir: Path) -> None:
+    """Save feature evaluation results to files for later analysis."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Saving evaluation results to {output_dir}")
+    results_file = output_dir / "evaluation_results.pkl"
     
-    try:
-        # 1. Create and save main results DataFrame
-        results_df = pd.DataFrame({
-            'feature_set': list(cv_scores.keys()),
-            'mean_cv_score': [np.nanmean(scores) if scores and any(~np.isnan(scores)) else np.nan 
-                             for scores in cv_scores.values()],
-            'std_cv_score': [np.nanstd(scores) if scores and any(~np.isnan(scores)) else np.nan 
-                            for scores in cv_scores.values()],
-            'waic_score': [waic_scores.get(fs, np.nan) for fs in cv_scores.keys()],
-            'loo_score': [loo_scores.get(fs, np.nan) for fs in cv_scores.keys()]
-        })
-        results_df = results_df.sort_values('mean_cv_score', ascending=False, na_position='last')
-        results_df.to_csv(output_dir / 'evaluation_metrics.csv', index=False)
-        
-        # 2. Save detailed CV scores
-        cv_details_df = pd.DataFrame(cv_scores)
-        cv_details_df.index.name = 'fold'
-        cv_details_df.to_csv(output_dir / 'cv_scores_detailed.csv')
-        
-        # 3. Save feature importance analysis
-        importance_df = pd.DataFrame(
-            list(feature_importance.items()),
-            columns=['feature', 'importance']
-        ).sort_values('importance', ascending=False)
-        importance_df.to_csv(output_dir / 'feature_importance.csv', index=False)
-        
-        with open(output_dir / 'feature_importance.txt', 'w') as f:
-            f.write("=== Feature Importance Analysis ===\n\n")
-            for _, row in importance_df.iterrows():
-                f.write(f"{row['feature']:<20} {row['importance']:.4f}\n")
-        
-        # 4. Save correlation analysis
-        feature_correlations.to_csv(output_dir / 'feature_correlations.csv')
-        
-        with open(output_dir / 'feature_correlations.txt', 'w') as f:
-            f.write("=== Feature Correlation Analysis ===\n\n")
-            high_correlations = []
-            for i in range(len(feature_correlations.columns)):
-                for j in range(i+1, len(feature_correlations.columns)):
-                    corr = abs(feature_correlations.iloc[i, j])
-                    if corr >= 0.7:
-                        high_correlations.append({
-                            'feature1': feature_correlations.columns[i],
-                            'feature2': feature_correlations.columns[j],
-                            'correlation': corr
-                        })
-            
-            if high_correlations:
-                f.write("High Correlations (|r| >= 0.7):\n")
-                for corr in sorted(high_correlations, key=lambda x: x['correlation'], reverse=True):
-                    f.write(f"{corr['feature1']} - {corr['feature2']}: {corr['correlation']:.3f}\n")
-            else:
-                f.write("No high correlations found (|r| >= 0.7)\n")
-        
-        # 5. Save multicollinearity results if available
-        if multicollinearity_results:
-            with open(output_dir / 'multicollinearity.txt', 'w') as f:
-                f.write("=== Multicollinearity Analysis ===\n\n")
-                
-                # VIF results
-                f.write("Variance Inflation Factors:\n")
-                vif_data = sorted(multicollinearity_results['vif'], 
-                                key=lambda x: x['VIF'], 
-                                reverse=True)
-                
-                for vif in vif_data:
-                    f.write(f"{vif['Feature']:<20} VIF: {vif['VIF']:>8.3f} ({vif['Status']})\n")
-                
-                if multicollinearity_results['high_correlations']:
-                    f.write("\nHigh Correlations (r > 0.7):\n")
-                    for corr in sorted(multicollinearity_results['high_correlations'],
-                                     key=lambda x: x['Correlation'],
-                                     reverse=True):
-                        f.write(f"{corr['Feature1']} - {corr['Feature2']}: {corr['Correlation']:.3f}\n")
-        
-        # 6. Create comprehensive summary report
-        with open(output_dir / 'evaluation_summary.txt', 'w') as f:
-            f.write("=== Feature Evaluation Summary ===\n\n")
-            
-            f.write("Feature Set Performance Overview:\n")
-            f.write("-" * 50 + "\n")
-            f.write(f"Total feature sets evaluated: {len(cv_scores)}\n")
-            f.write(f"Cross-validation folds: {len(next(iter(cv_scores.values())))}\n\n")
-            
-            # Best performing combinations
-            f.write("Top Performing Feature Sets:\n")
-            f.write("-" * 50 + "\n")
-            for i, row in results_df.head(3).iterrows():
-                f.write(f"\n{i+1}. {row['feature_set']}\n")
-                f.write(f"   Mean CV Score: {row['mean_cv_score']:.4f} ± {row['std_cv_score']:.4f}\n")
-                f.write(f"   WAIC: {row['waic_score']:.2f}\n")
-                f.write(f"   LOO: {row['loo_score']:.2f}\n")
-            
-            # Feature importance summary
-            f.write("\nMost Important Features:\n")
-            f.write("-" * 50 + "\n")
-            for _, row in importance_df.head(5).iterrows():
-                f.write(f"{row['feature']:<20} {row['importance']:.4f}\n")
-            
-            # Correlation and multicollinearity summary
-            f.write("\nFeature Correlation Summary:\n")
-            f.write("-" * 50 + "\n")
-            if high_correlations:
-                f.write(f"Found {len(high_correlations)} highly correlated feature pairs\n")
-                f.write("Top 3 highest correlations:\n")
-                for corr in sorted(high_correlations, 
-                                 key=lambda x: x['correlation'], 
-                                 reverse=True)[:3]:
-                    f.write(f"- {corr['feature1']} - {corr['feature2']}: {corr['correlation']:.3f}\n")
-            else:
-                f.write("No concerning feature correlations found\n")
-            
-            # Multicollinearity concerns
-            if multicollinearity_results:
-                f.write("\nMulticollinearity Analysis:\n")
-                f.write("-" * 50 + "\n")
-                high_vif = [x for x in multicollinearity_results['vif'] if x['VIF'] > 5]
-                if high_vif:
-                    f.write("Features with high VIF (>5):\n")
-                    for vif in sorted(high_vif, key=lambda x: x['VIF'], reverse=True):
-                        f.write(f"- {vif['Feature']}: {vif['VIF']:.2f}\n")
-                else:
-                    f.write("No concerning VIF values found\n")
-            
-            # Final recommendations
-            f.write("\nRecommendations:\n")
-            f.write("-" * 50 + "\n")
-            best_set = results_df.iloc[0]
-            f.write(f"1. Best feature set: {best_set['feature_set']}\n")
-            f.write(f"   Performance: {best_set['mean_cv_score']:.4f} ± {best_set['std_cv_score']:.4f}\n")
-            
-            if high_vif:
-                f.write("\n2. Consider removing features with high multicollinearity:\n")
-                for vif in sorted(high_vif, key=lambda x: x['VIF'], reverse=True)[:3]:
-                    f.write(f"   - {vif['Feature']} (VIF: {vif['VIF']:.2f})\n")
-            
-            f.write("\n3. Most influential features to retain:\n")
-            for _, row in importance_df.head(3).iterrows():
-                f.write(f"   - {row['feature']} (importance: {row['importance']:.4f})\n")
-        
-        logger.info("Successfully saved all evaluation results")
-        
-    except Exception as e:
-        logger.error(f"Error saving evaluation results: {str(e)}")
-        raise
+    # Convert any numpy arrays to lists for serialization
+    serializable_results = {}
+    for key, value in results.items():
+        if isinstance(value, dict):
+            serializable_results[key] = {
+                k: v.tolist() if isinstance(v, np.ndarray) else v 
+                for k, v in value.items()
+            }
+        else:
+            # This line had the bug - using v instead of value
+            serializable_results[key] = value.tolist() if isinstance(value, np.ndarray) else value
+    
+    with open(results_file, 'wb') as f:
+        pickle.dump(serializable_results, f)
+    
+    logger.info(f"Saved evaluation results to {results_file}")
 
 def analyze_and_recommend(
     output_dir: Path,
@@ -1553,6 +1395,8 @@ def validate_data_for_evaluation(
     
     return True
 
+# In bigram_pair_feature_evaluation.py
+
 def evaluate_features_only(
     feature_matrix: pd.DataFrame,
     target_vector: np.ndarray,
@@ -1583,16 +1427,11 @@ def evaluate_features_only(
         target_accept=config['target_accept']
     )
     
-    # Save raw fold details if requested
-    if config['fold_reporting']['save_fold_details']:
-        fold_details_file = output_dir / "fold_details.json"
-        with open(fold_details_file, 'w') as f:
-            json.dump(results['fold_details'], f, indent=2)
-    
-    # Save raw metrics if requested
+    # Save raw metrics if requested - CHANGED THIS SECTION
     if config['fold_reporting']['save_raw_metrics']:
         metrics_file = output_dir / "raw_metrics.csv"
-        pd.DataFrame(results['cv_metrics']).to_csv(metrics_file)
+        cv_metrics_df = pd.DataFrame(results['cv_metrics'])
+        cv_metrics_df.to_csv(metrics_file)
     
     # Save complete results for later analysis
     save_evaluation_results(results, output_dir)
