@@ -1,6 +1,6 @@
 from math import atan2, degrees, sqrt
 
-from bigram_frequencies import * 
+from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 
 #=====================================#
 # Keyboard layout and finger mappings #

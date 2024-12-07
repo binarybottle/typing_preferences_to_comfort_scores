@@ -15,9 +15,10 @@ import pandas as pd
 from typing import List, Tuple, Dict, Any
 import logging
 
-from bigram_feature_definitions import (
-    column_map, row_map, finger_map, engram_position_values,
-    row_position_values, bigrams, bigram_frequencies_array,
+from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from engram3.features.definitions import (
+    column_map, row_map, finger_map, 
+    engram_position_values, row_position_values,
     function_map
 )
 

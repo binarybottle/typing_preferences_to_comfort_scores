@@ -1,374 +1,93 @@
-"""
-Main script for keyboard layout analysis pipeline.
-
-This script orchestrates the entire keyboard layout analysis process:
-1. Data preprocessing
-2. Feature extraction
-3. Full dataset analyses:
-   - Timing and frequency analysis
-   - Feature space analysis
-4. Train/test splitting
-5. Split dataset analyses:
-   - Feature evaluation (using test_data)
-   - Bayesian model training (using train_data)
-   - Bayesian model testing (using test_data)
-"""
-import os
 import argparse
+import logging
 from pathlib import Path
 import yaml
-from typing import Dict, List, Any
-import pandas as pd
-import logging
+import numpy as np
+from typing import Dict, Any
 
-from data_processing import DataPreprocessor, generate_train_test_splits, manage_data_splits
-from bigram_feature_definitions import (column_map, row_map, finger_map, engram_position_values,
-                                        row_position_values, bigrams, bigram_frequencies_array)
-from bigram_feature_extraction import (precompute_all_bigram_features, precompute_bigram_feature_differences)
-from bigram_pair_feature_evaluation import evaluate_features_only, analyze_saved_results
-
-from bigram_pair_recommendations import (analyze_feature_space, save_feature_space_analysis_results)
-from bayesian_modeling import (train_bayesian_glmm, calculate_bigram_comfort_scores, 
-                               save_model_results, plot_model_diagnostics, evaluate_model_performance, 
-                               validate_comfort_scores)
-
-logger = logging.getLogger(__name__)
-
-def validate_config(config: Dict[str, Any]) -> None:
-    """
-    Validate configuration structure and required fields.
-    
-    Args:
-        config: Configuration dictionary to validate
-        
-    Raises:
-        ValueError: If required configuration is missing or invalid
-    """
-    required_sections = [
-        'data',           # Data settings including file, splits, layout
-        'paths',          # All file/directory paths
-        'analysis',       # Analysis settings
-        'model',          # Model settings
-        'logging'         # Logging settings
-    ]
-    
-    for section in required_sections:
-        if section not in config:
-            raise ValueError(f"Missing required config section: {section}")
-    
-    # Validate data section
-    required_data_settings = ['file', 'splits', 'layout']
-    for setting in required_data_settings:
-        if setting not in config['data']:
-            raise ValueError(f"Missing required data setting: {setting}")
-            
-    # Validate splits settings
-    if not all(key in config['data']['splits'] for key in ['generate', 'train_ratio']):
-        raise ValueError("Missing required splits settings")
-    
-    # Validate layout settings
-    if 'left_chars' not in config['data']['layout']:
-        raise ValueError("Missing left_chars in layout settings")
-    
-    # Validate features are under model section
-    if 'features' not in config['model']:
-        raise ValueError("Missing required 'features' section under 'model'")
-        
-    # Validate model settings if training enabled
-    if config['model'].get('train', False):
-        required_model_settings = ['inference_method', 'n_samples', 'chains']
-        for setting in required_model_settings:
-            if setting not in config['model']:
-                raise ValueError(f"Missing required model setting: {setting}")
-
-def setup_logging(config: Dict[str, Any]) -> None:
-    """Setup logging configuration with proper stream and file handlers."""
-    # Get log level from config
-    log_level = getattr(logging, config['logging']['level'].upper())
-    
-    # Create formatters
-    file_formatter = logging.Formatter(config['logging']['format'])
-    stream_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Setup root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    
-    # Clear any existing handlers
-    root_logger.handlers = []
-    
-    # Create file handler
-    file_handler = logging.FileHandler(config['paths']['logs'])
-    file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(log_level)
-    root_logger.addHandler(file_handler)
-    
-    # Create console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(stream_formatter)
-    console_handler.setLevel(log_level)
-    root_logger.addHandler(console_handler)
-    
-    logger = logging.getLogger(__name__)
-    logger.info("Logging setup completed")
-    logger.info(f"Log file: {config['paths']['logs']}")
-    logger.info(f"Log level: {config['logging']['level']}")
+from engram3.data import PreferenceDataset
+from engram3.analysis import analyze_feature_importance, find_sparse_regions
+from engram3.utils import setup_logging
+from engram3.models.simple import MockPreferenceModel
 
 def load_config(config_path: str) -> Dict[str, Any]:
-    """Load and validate configuration from YAML file."""
+    """Load configuration from YAML file."""
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    validate_config(config)
     return config
 
 def create_output_directories(config: Dict[str, Any]) -> None:
-    """
-    Create all necessary output directories.
-    
-    Args:
-        config: Configuration dictionary containing output paths
-    """
+    """Create necessary output directories."""
     dirs_to_create = [
         Path(config['paths']['base']),
-        Path(config['paths']['logs']).parent,
-        Path(config['paths']['feature_evaluation']),
-        Path(config['paths']['feature_space']['dir']),
-        Path(config['paths']['model']['dir']),
-        Path(config['paths']['model']['results']).parent,
-        Path(config['paths']['scores']).parent
+        Path(config['paths']['analysis']),
+        Path(config['logging']['file']).parent
     ]
 
     for directory in dirs_to_create:
-        if not directory.exists():
-            logger.info(f"Creating directory: {directory}")
-            directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
 
 def main():
-    # Initialize basic logging before config load
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
-
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Keyboard Layout Analysis Pipeline')
+    parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     args = parser.parse_args()
 
     try:
-        # Load and validate configuration
+        # Load configuration
         config = load_config(args.config)
         
-        # Create logs directory and setup proper logging
-        Path(config['paths']['logs']).parent.mkdir(parents=True, exist_ok=True)
-        setup_logging(config)
-
-        logger.info("Starting keyboard layout analysis pipeline")
-
-        # Create all output directories
+        # Create output directories
         create_output_directories(config)
+        
+        # Setup logging
+        setup_logging(Path(config['logging']['file']))
+        logger = logging.getLogger(__name__)
+        logger.info("Starting preference learning pipeline")
 
-        # Initialize preprocessor and load data
-        logger.info("Loading and preprocessing data")
-        preprocessor = DataPreprocessor(config['data']['file'])
-        preprocessor.load_data()
+        # Set random seed
+        np.random.seed(config['data']['splits']['random_seed'])
 
-        # Prepare features with conditional computation
-        logger.info("Computing bigram features")
-        should_compute_interactions = (
-            config['model']['train'] and 
-            config['model'].get('features', {}).get('interactions', {}).get('enabled', False)
+        # Load dataset
+        logger.info(f"Loading data from {config['data']['file']}")
+        dataset = PreferenceDataset(config['data']['file'])
+        logger.info(f"Loaded {len(dataset.preferences)} preferences from "
+                   f"{len(dataset.participants)} participants")
+
+        # Perform analyses if configured
+        if config['analysis']['check_transitivity']:
+            logger.info("Checking transitivity...")
+            transitivity_results = dataset.check_transitivity()
+            logger.info(f"Transitivity results: {transitivity_results}")
+
+        if config['analysis']['analyze_features']:
+            logger.info("Analyzing feature importance...")
+            importance = analyze_feature_importance(dataset)
+            logger.info("Feature importance scores:")
+            # Sort by absolute correlation values
+            for feature, score in sorted(importance['correlations'].items(), 
+                                        key=lambda x: abs(x[1]), 
+                                        reverse=True):
+                logger.info(f"  {feature}: {score:.3f}")
+
+        if config['analysis']['find_sparse_regions']:
+            logger.info("Finding sparse regions...")
+            sparse_points = find_sparse_regions(dataset)
+            logger.info(f"Found {len(sparse_points)} points in sparse regions")
+
+        # Create train/test split
+        logger.info("Creating train/test split...")
+        train_data, test_data = dataset.split_by_participants(
+            test_fraction=config['data']['splits']['test_ratio']
         )
-        
-        if should_compute_interactions:
-            logger.info("Computing full feature set including interactions")
-        else:
-            logger.info("Computing base features only - skipping interactions")
-        
-        all_bigrams, all_bigram_features, feature_names, samekey_bigrams, \
-            samekey_bigram_features, samekey_feature_names = precompute_all_bigram_features(
-                layout_chars=config['data']['layout']['left_chars'],
-                column_map=column_map, 
-                row_map=row_map, 
-                finger_map=finger_map,
-                engram_position_values=engram_position_values,
-                row_position_values=row_position_values,
-                bigrams=bigrams,
-                bigram_frequencies_array=bigram_frequencies_array,
-                config=config
-            )
+        logger.info(f"Split dataset into {len(train_data.preferences)} train and "
+                   f"{len(test_data.preferences)} test preferences")
 
-        # Compute feature differences conditionally
-        if should_compute_interactions:
-            all_feature_differences = precompute_bigram_feature_differences(all_bigram_features)
-        else:
-            # Filter out interaction features from the values (not the keys)
-            filtered_features = {}
-            for bigram, features in all_bigram_features.items():
-                filtered_features[bigram] = {
-                    k: v for k, v in features.items() 
-                    if not k.startswith('interaction_')
-                }
-            all_feature_differences = precompute_bigram_feature_differences(filtered_features)
-
-        # Process data
-        logger.info("Processing data")
-        preprocessor.prepare_bigram_pairs()
-        preprocessor.extract_target_vector()
-        preprocessor.process_participants()
-        preprocessor.extract_typing_times()
-        preprocessor.create_feature_matrix(
-            all_feature_differences=all_feature_differences,
-            feature_names=feature_names,
-            config=config
-        )
-
-        # Get processed data BEFORE splitting
-        processed_data = preprocessor.get_processed_data()
-
-        # === FULL DATASET ANALYSES === #
-
-        # Evaluate feature space
-        if config['analysis']['feature_space']['enabled']:
-            logger.info("Analyzing feature space")
-            try:
-                base_dir = Path(config['paths']['feature_space']['dir'])
-                output_paths = {
-                    'pca': str(base_dir / 'pca.png'),
-                    'underrepresented': str(base_dir / 'underrepresented.png'),
-                    'bigram_graph': str(base_dir / 'bigram_graph.png'),
-                    'recommendations': str(base_dir / 'recommended_bigram_pairs_scores.txt'),
-                    'analysis': str(base_dir / 'analysis.txt')
-                }
-                
-                feature_space_results = analyze_feature_space(
-                    feature_matrix=processed_data.feature_matrix,
-                    output_paths=output_paths,
-                    all_feature_differences=all_feature_differences,
-                    config=config,
-                    recommend_bigrams=config['analysis']['feature_space']['recommend_bigrams'],
-                    num_recommendations=config['analysis']['feature_space']['num_recommendations']
-                )
-                
-                if feature_space_results is None:
-                    logger.error("Feature space analysis returned no results")
-                else:
-                    save_feature_space_analysis_results(
-                        feature_space_results, 
-                        output_paths['analysis']
-                    )
-
-                    logger.info(f"Feature space analysis completed:")
-                    if 'feature_space_metrics' in feature_space_results:
-                        metrics = feature_space_results['feature_space_metrics']
-                        logger.info(f"  Hull area: {metrics['hull_area']:.3f}")
-                        logger.info(f"  Point density: {metrics['point_density']:.3f}")
-                    if 'recommendations' in feature_space_results:
-                        logger.info(f"  Generated {len(feature_space_results['recommendations'])} recommendations")
-                        
-            except Exception as e:
-                logger.error(f"Error in feature space analysis: {str(e)}")
-                if config['model']['train']:
-                    logger.warning("Continuing with model training despite feature space analysis failure")
-
-        # === SPLIT DATASET ANALYSES === #
-        
-        # Create train/test splits
-        generate_train_test_splits(processed_data, config)
-        train_data, test_data = manage_data_splits(processed_data, config)
-
-        # Run feature evaluation if enabled
-        if config['analysis']['feature_evaluation']['enabled']:
-            logger.info("Starting feature evaluation")
-            try:
-                evaluate_features_only(
-                    feature_matrix=test_data.feature_matrix,
-                    target_vector=test_data.target_vector,
-                    participants=test_data.participants,
-                    config=config['analysis']['feature_evaluation'],
-                    output_dir=Path(config['paths']['feature_evaluation'])
-                )
-                logger.info("Feature evaluation completed and results saved")
-            except Exception as e:
-                logger.error(f"Feature evaluation failed: {str(e)}")
-                return
-        
-        # Run analysis if enabled
-        if config['analysis']['feature_evaluation']['analysis']['enabled']:
-            logger.info("Starting feature analysis")
-            try:
-                analyze_saved_results(
-                    output_dir=Path(config['paths']['feature_evaluation']),
-                    feature_matrix=test_data.feature_matrix,
-                    analysis_config=config['analysis']['feature_evaluation']['analysis']
-                )
-                logger.info("Feature analysis completed")
-            except FileNotFoundError:
-                logger.error("Analysis failed: No evaluation results found. Run evaluation first.")
-            except Exception as e:
-                logger.error(f"Analysis failed: {str(e)}")
-
-        # Train model if requested
-        if config['model']['train']:
-            logger.info("Training Bayesian GLMM on training data")
-            
-            # Train model
-            trace, model, priors = train_bayesian_glmm(
-                feature_matrix=train_data.feature_matrix,
-                target_vector=train_data.target_vector,
-                participants=train_data.participants,
-                design_features=config['model']['features']['groups']['design'],
-                control_features=config['model']['features']['groups']['control'],
-                inference_method=config['model']['inference_method'],
-                n_samples=config['model']['n_samples'],
-                chains=config['model']['chains'],
-                target_accept=config['model']['target_accept']
-            )
-
-            # Save model results
-            model_prefix = f"{config['paths']['model']['results']}_{config['model']['inference_method']}"
-            save_model_results(trace, model, model_prefix)
-
-            # Plot diagnostics
-            if config['model'].get('visualization', {}).get('enabled', False):
-                logger.info("Generating model diagnostics")
-                plot_model_diagnostics(
-                    trace=trace,
-                    output_base_path=config['paths']['model']['diagnostics'],
-                    inference_method=config['model']['inference_method']
-                )
-
-            # Calculate comfort scores using the trained model
-            if config['model'].get('scoring', {}).get('enabled', False):
-                logger.info("Calculating comfort scores")
-                comfort_scores = calculate_bigram_comfort_scores(
-                    trace,
-                    train_data.feature_matrix,
-                    features_for_design=config['model']['features']['groups']['design'],
-                    mirror_left_right_scores=config['model']['scoring'].get('mirror_left_right_scores', True)
-                )
-
-                # Validate scores against test data
-                validate_comfort_scores(comfort_scores, test_data)
-
-                # Save comfort scores
-                output_path = Path(config['paths']['scores'])
-                pd.DataFrame.from_dict(comfort_scores, orient='index',
-                                     columns=['comfort_score']).to_csv(output_path)
-
-            # Evaluate model on test data
-            if config['model'].get('evaluate_test', True):
-                logger.info("Evaluating model on test data")
-                test_score = evaluate_model_performance(
-                    trace=trace,
-                    feature_matrix=test_data.feature_matrix,
-                    target_vector=test_data.target_vector,
-                    participants=test_data.participants,
-                    design_features=config['model']['features']['groups']['design'],
-                    control_features=config['model']['features']['groups']['control']
-                )
-                logger.info(f"Test set performance metrics:")
-                for metric, value in test_score.items():
-                    logger.info(f"  {metric}: {value:.3f}")
+        if config['analysis']['train_model']:
+            logger.info("Training preference model...")
+            model = MockPreferenceModel()
+            model.fit(train_data)
+            logger.info("Model training completed")
 
         logger.info("Pipeline completed successfully")
 

@@ -1,166 +1,27 @@
-#===========#
-# SETTINGS  #
-#===========#
 # Data settings
 data:
   #file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
   file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
-
-  # Participant splits
   splits:
-    generate: true  # One time per file (output_all4studies_406participants/ on 2024-11-25)
-    train_ratio: 0.8
-  
-  # Keyboard layout
-  layout:
-    left_chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
+    test_ratio: 0.2
+    random_seed: 42
 
 # Analysis settings
 analysis:
-
-  # Feature space analysis
-  feature_space:
-    enabled: true
-    check_multicollinearity: true
-    recommend_bigrams: true
-    num_recommendations: 30
-
-  # Feature evaluation
-  feature_evaluation:
-    enabled: true
-    n_splits: 5
-    n_samples: 10000
-    chains: 8
-    target_accept: 0.85
-    
-    # Settings used during evaluation
-    validation:  # Used during evaluation
-      perform_stability_check: true
-      min_training_samples: 1000
-      min_validation_samples: 200
-      outlier_detection: true
-      outlier_threshold: 3.0
-    
-    # Basic reporting during evaluation
-    fold_reporting:
-      save_fold_details: true
-      save_raw_metrics: true
-
-    combinations:
-      - name: "base9_plus_speed"
-        features: 
-          - typing_time
-          - same_finger
-          - sum_finger_values
-          - adj_finger_diff_row
-          - rows_apart
-          - angle_apart
-          - outward_roll
-          - middle_column
-          - sum_engram_position_values
-          - sum_row_position_values
-        interactions: "data/filtered_feature_interactions.txt"
-
-    # Analysis can be run separately if feature_evaluation:enabled:false
-    analysis:
-      enabled: true
-
-      # Thresholds for interpreting saved results
-      stability_thresholds:
-        feature_reliability: 0.6
-        min_effect_size: 0.1
-        min_r2: 0.05
-        max_vif: 5.0
-      
-      feature_thresholds:
-        correlation: 0.2  # Minimum correlation coefficient magnitude
-        importance: 0.03  # Minimum feature importance score
-        variability: 0.7  # Maximum allowed variability in cross-validation
-
-    # Reporting settings
-    reporting:
-      detail_level: "full"  # Options: minimal, standard, full
-      plot_correlations: true
-      plot_importance: true
-      output_formats:
-          - text
-          - plots
-          - csv
-
-# Model settings
-model:
-  train: false
-  inference_method: 'mcmc'
-  n_samples: 10000
-  chains: 8
-  target_accept: 0.85
-  evaluate_test: true
-  
-  scoring:
-    enabled: true
-    mirror_left_right_scores: true
-  
-  visualization:
-    enabled: true
-
-  # Feature definitions
-  features:
-    interactions:
-      enabled: true
-      interactions:
-        - ['same_finger', 'sum_finger_values']
-        - ['same_finger', 'sum_finger_values', 'rows_apart']
-        - ['same_finger', 'sum_finger_values', 'rows_apart', 'sum_row_position_values']
-
-    # Feature groups
-    groups:
-      design:
-        - same_finger
-      control:
-        - qwerty_bigram_frequency
-        - typing_time
-
-    # Advanced settings
-    advanced:
-      standardize_features: true
-      handle_missing: "drop"  # Options: drop, impute_mean, impute_median
-      random_seed: 42
-      parallel_processing: true
-      n_jobs: -1  # Use all available cores
+  check_transitivity: true
+  analyze_features: true
+  find_sparse_regions: true
+  feature_importance: true
 
 # Logging settings
 logging:
-  level: "INFO"
+  level: "DEBUG"  # Changed from INFO to DEBUG
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "output/logs/pipeline.log"
 
-#========#
-# PATHS  #
-#========#
+# Output paths
 paths:
-  # Base directories
   base: "output"
-  logs: "output/logs/pipeline.log"
-  splits: "data/splits/train_test_indices.npz"
-
-  # Analysis outputs
-  feature_evaluation: "output/feature_evaluation"
-  
-  feature_space:
-    dir: "output/feature_space"
-    analysis: "output/feature_space/analysis.txt"
-    pca: "output/feature_space/pca.png"
-    bigram_graph: "output/feature_space/bigram_graph.png"
-    underrepresented: "output/feature_space/underrepresented.png"
-  
-  model:
-    dir: "output/model"
-    results: "output/model/results"
-    diagnostics: "output/model/diagnostics_{inference_method}.png"
-    forest: "output/model/forest_{inference_method}.png"
-    posterior: "output/model/posterior_{inference_method}.png"
-    participant_effects: "output/model/participant_effects_{inference_method}.png"
-    sensitivity: "output/model/sensitivity_{inference_method}.png"
-  
-  scores: "output/scores/bigram_comfort_scores.csv"
+  analysis: "output/analysis"
