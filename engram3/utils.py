@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 def setup_logging(log_file: Optional[Path] = None) -> None:
     """Setup basic logging configuration.
@@ -25,3 +25,16 @@ def setup_logging(log_file: Optional[Path] = None) -> None:
     
     # Apply configuration
     logging.basicConfig(**config)
+
+def load_interactions(filepath: str) -> List[List[str]]:
+    """Load feature interactions from file."""
+    import yaml
+    
+    with open(filepath, 'r') as f:
+        data = yaml.safe_load(f)
+        
+    if not data or 'interactions' not in data:
+        return []
+        
+    return data['interactions']
+

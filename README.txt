@@ -1,28 +1,32 @@
-# First run feature selection
-python main.py --mode select_features --n_repetitions 10
+# First, run feature selection
+python main.py --config config.yaml --mode select_features --n_repetitions 10
 
-# Then train the model using selected features
-python main.py --mode train_model
+# Second, generate recommendations
+python main.py --config config.yaml --generate_recommendations
 
-engram3/                    # Root project directory
+# Third, train the model using selected features
+python main.py --config config.yaml --mode train_model
+
+engram3/                        # Root project directory
 ├── pyproject.toml
 ├── config.yaml
 ├── main.py
-└── engram3/               # Package directory
+└── engram3/                    # Package directory
     ├── __init__.py
-    ├── data.py
-    ├── analysis.py
+    ├── data.py                 # Dataset handling
+    ├── analysis.py             # General analysis functions
     ├── utils.py
-    ├── features/         # Feature-related code
+    ├── features/               # Feature-related code
     │   ├── __init__.py
     │   ├── definitions.py
-    │   └── extraction.py
-    ├── models/          # Model-related code
+    │   ├── extraction.py
+    │   └── recommendations.py  # Recommend bigram pairs
+    ├── models/                 # Model-related code
     │   ├── __init__.py
     │   ├── base.py
-    │   ├── simple.py    # Add this for our mock model
+    │   ├── simple.py           # Mock model
     │   ├── bayesian.py
     │   └── utils.py
-    └── tests/          # Tests directory should be inside package
+    └── tests/                  # Tests
         ├── __init__.py
         └── test_models.py
