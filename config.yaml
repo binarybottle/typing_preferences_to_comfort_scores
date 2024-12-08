@@ -28,7 +28,7 @@ feature_evaluation:
 
 # Logging settings
 logging:
-  level: "DEBUG"  # Changed from INFO to DEBUG
+  level: "INFO"  # DEBUG
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "output/logs/pipeline.log"
 

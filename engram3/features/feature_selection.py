@@ -54,33 +54,14 @@ class FeatureEvaluator:
             - Dictionary of diagnostics
         """
         logger = logging.getLogger(__name__)
-        logger.info("\nDEBUG: Entering run_feature_selection")
         
-        feature_names = dataset.get_feature_names()        
-        logger = logging.getLogger(__name__)
-        logger.info("\n" + "="*50)
-        logger.info("RUNNING UPDATED FEATURE SELECTION CODE")
-        logger.info("="*50 + "\n")
-
-        logger = logging.getLogger(__name__)
-    
         # Log initial dataset info
         feature_names = dataset.get_feature_names()
-        logger.info(f"\nStarting feature selection with:")
+        logger.info(f"\nStarting feature selection:")
         logger.info(f"- {len(dataset.preferences)} preferences")
-        logger.info(f"- {len(feature_names)} features: {feature_names}")
+        logger.info(f"- {len(feature_names)} features")
         logger.info(f"- {n_repetitions} repetitions")
-        
-        # Sample some preferences to check feature values
-        logger.info("\nSampling feature values from first few preferences:")
-        for idx, pref in enumerate(dataset.preferences[:3]):  # Look at first 3
-            logger.info(f"\nPreference {idx + 1}: '{pref.bigram1}' vs '{pref.bigram2}' (preferred: {pref.preferred})")
-            for fname in feature_names:
-                val1 = pref.features1[fname]
-                val2 = pref.features2[fname]
-                diff = val1 - val2
-                logger.info(f"  {fname:25} | {val1:8.3f} vs {val2:8.3f} | diff: {diff:8.3f}")
-    
+
         # Collect results and diagnostics across repetitions
         feature_results = defaultdict(list)
         all_diagnostics = {
@@ -97,20 +78,21 @@ class FeatureEvaluator:
             X1, X2, y = self._prepare_feature_matrices(dataset)
             feature_names = dataset.get_feature_names()
             
-            # Calculate initial correlations for this iteration
+            # Calculate correlations once
             correlations, correlation_diagnostics = self._calculate_feature_correlations(
                 X1, X2, feature_names)
             
-            # Run cross-validation and evaluation
+            # Run cross-validation
             model = BayesianPreferenceModel()
-            cv_results = model.cross_validate(dataset)
+            cv_results = model.cross_validate(dataset)  # Store the results
             
-            # Evaluate features
+            # Evaluate features using pre-calculated correlations
             eval_results = self.evaluate_features(
                 dataset, 
-                cv_results,
+                cv_results,  # Pass the stored results
                 output_dir=output_dir,
-                feature_matrices=(X1, X2, y)
+                feature_matrices=(X1, X2, y),
+                correlation_results=(correlations, correlation_diagnostics)
             )
             
             # Store basic results
@@ -163,10 +145,18 @@ class FeatureEvaluator:
         dataset: PreferenceDataset,
         model_results: Dict[str, Dict],
         output_dir: Optional[Path] = None,
-        feature_matrices: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+        feature_matrices: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+        correlation_results: Optional[Tuple[pd.DataFrame, Dict]] = None
     ) -> Dict[str, Dict]:
         """
         Comprehensive feature evaluation.
+    
+        Args:
+            dataset: PreferenceDataset containing all preferences
+            model_results: Results from model cross-validation
+            output_dir: Optional directory to save detailed reports
+            feature_matrices: Optional tuple of (X1, X2, y) matrices
+            correlation_results: Optional tuple of (correlations, diagnostics)
         """
         feature_names = dataset.get_feature_names()
         
@@ -179,10 +169,13 @@ class FeatureEvaluator:
         # Calculate feature importance
         importance = self._calculate_feature_importance(
             X1, X2, y, feature_names, model_results)
-            
-        # Calculate feature correlations
-        correlations, corr_diagnostics = self._calculate_feature_correlations(
-            X1, X2, feature_names)
+        
+        # Use provided correlation results or calculate new ones
+        if correlation_results is not None:
+            correlations, corr_diagnostics = correlation_results
+        else:
+            correlations, corr_diagnostics = self._calculate_feature_correlations(
+                X1, X2, feature_names)
             
         # Get stability metrics from model results
         stability = model_results['stability']
@@ -878,43 +871,47 @@ class FeatureEvaluator:
             f.write("Feature Selection Results Report\n")
             f.write("============================\n\n")
             
-            # 1. Selected Features
-            f.write("1. Selected Features\n")
-            f.write("-----------------\n")
-            selected = results.get('selected_features', [])
-            if selected:
-                for feature in selected:
-                    f.write(f"\n{feature}:\n")
-                    if 'importance' in results:
-                        imp = results['importance'].get(feature, {})
-                        f.write(f"  Importance: {imp.get('combined_score', 0):.3f}\n")
-                        f.write(f"  Model effect: {imp.get('model_effect_mean', 0):.3f}\n")
-                    if 'stability' in results:
-                        stab = results['stability'].get(feature, {})
-                        f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
-            else:
-                f.write("\nNo features were selected.\n")
+            # 1. Feature Summary
+            f.write("1. Feature Analysis Summary\n")
+            f.write("-----------------------\n")
             
-            # 2. Rejected Features
-            f.write("\n2. Rejected Features\n")
-            f.write("-----------------\n")
-            rejected = results.get('rejected_features', [])
-            if rejected:
-                for feature in rejected:
-                    f.write(f"\n{feature}:\n")
-                    if 'importance' in results:
-                        imp = results['importance'].get(feature, {})
-                        f.write(f"  Importance: {imp.get('combined_score', 0):.3f}\n")
-                    if 'stability' in results:
-                        stab = results['stability'].get(feature, {})
-                        f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
-            else:
-                f.write("\nNo features were rejected.\n")
+            # Group features by characteristics
+            features_by_variance = {
+                'High variance': [],
+                'Moderate variance': [],
+                'Low variance': []
+            }
             
-            # 3. Summary Statistics
-            f.write("\n3. Summary Statistics\n")
-            f.write("-----------------\n")
+            for feature in results.get('all_features', []):
+                if feature in results.get('selected_features', []):
+                    status = "SELECTED"
+                else:
+                    status = "REJECTED"
+                    
+                imp = results['importance'].get(feature, {})
+                stab = results['stability'].get(feature, {})
+                
+                f.write(f"\n{feature} ({status}):\n")
+                f.write(f"  Importance score: {imp.get('combined_score', 0):.3f}\n")
+                f.write(f"  Model effect: {imp.get('model_effect_mean', 0):.3f} ± {imp.get('model_effect_std', 0):.3f}\n")
+                f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
+                f.write(f"  Correlation: {imp.get('correlation', 0):.3f}\n")
+                f.write(f"  Mutual information: {imp.get('mutual_info', 0):.3f}\n")
+            
+            # 2. Selection Results
+            f.write("\n2. Selection Results\n")
+            f.write("------------------\n")
             f.write(f"Total features evaluated: {len(results.get('all_features', []))}\n")
-            f.write(f"Features selected: {len(selected)}\n")
-            f.write(f"Features rejected: {len(rejected)}\n")
-                                        
+            f.write(f"Features selected: {len(results.get('selected_features', []))}\n")
+            f.write(f"Features rejected: {len(results.get('rejected_features', []))}\n")
+            
+            # 3. Recommendations
+            f.write("\n3. Recommendations\n")
+            f.write("----------------\n")
+            if not results.get('selected_features'):
+                f.write("\nNo features met the selection criteria. Consider:\n")
+                f.write("1. Lowering the importance threshold\n")
+                f.write("2. Lowering the stability threshold\n")
+                f.write("3. Creating composite features\n")
+                f.write("4. Collecting more data\n")
+                

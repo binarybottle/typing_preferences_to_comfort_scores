@@ -1,10 +1,3 @@
-import logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    force=True
-)
-
 import argparse
 import logging
 from pathlib import Path
@@ -47,12 +40,31 @@ def main():
     args = parser.parse_args()
 
     try:
-        # Load configuration and setup
+        # Load configuration
         config = load_config(args.config)
         create_output_directories(config)
-        setup_logging(Path(config['logging']['file']))
-        logger = logging.getLogger(__name__)
+
+        # Setup logging with both file and console handlers
+        log_file = Path(config['logging']['file'])
+        console_handler = logging.StreamHandler()
+        file_handler = logging.FileHandler(log_file)
         
+        # Console handler - show only INFO and above
+        console_handler.setLevel(logging.INFO)
+        console_format = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_format)
+        
+        # File handler - show all DEBUG and above
+        file_handler.setLevel(logging.DEBUG)
+        file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_format)
+        
+        # Configure root logger
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
         # Set random seed
         np.random.seed(config['data']['splits']['random_seed'])
 
