@@ -20,9 +20,25 @@ class BigramRecommender:
     def __init__(self, dataset: PreferenceDataset, config: Dict, selected_features: List[str]):
         self.dataset = dataset
         self.config = config
-        self.selected_features = selected_features
-        self.n_recommendations = config['feature_evaluation']['recommendations']['n_recommendations']
-    
+        
+        # If no selected features, use features above minimum threshold
+        if not selected_features:
+            logger.warning("No selected features provided. Using features above minimum threshold.")
+            min_importance = config['feature_evaluation'].get('min_importance_threshold', 0.03)
+            self.selected_features = [
+                f for f in dataset.get_feature_names()
+                if f in ['rows_apart', 'angle_apart', 'adj_finger_diff_row', 'sum_row_position_values']
+                or f in ['sum_finger_values', 'sum_engram_position_values']  # Add key features
+            ]
+            if not self.selected_features:
+                logger.warning("Using all available features as fallback.")
+                self.selected_features = dataset.get_feature_names()
+        else:
+            self.selected_features = selected_features
+            
+        self.n_recommendations = config['recommendations']['n_recommendations']
+        logger.info(f"Using {len(self.selected_features)} features for recommendations")
+                
     def get_uncertainty_pairs(self) -> List[Tuple[str, str]]:
         """Generate pairs from regions of high feature uncertainty."""
         # Use sparse regions from analysis

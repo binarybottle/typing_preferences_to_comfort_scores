@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union, Any
 import logging
 import pandas as pd
 import numpy as np
@@ -36,9 +36,9 @@ class Preference:
         """Return detailed string representation."""
         return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
     
+# data.py
 class PreferenceDataset:
-    """Handles loading and analyzing preference data."""
-    
+
     REQUIRED_COLUMNS = {
         'bigram1': str,
         'bigram2': str,
@@ -51,22 +51,25 @@ class PreferenceDataset:
         'abs_sliderValue': float
     }
 
-    def __init__(self, file_path: Union[str, Path]):
-        """Initialize dataset from CSV file."""
+    def __init__(self, 
+                 file_path: Union[str, Path],
+                 precomputed_features: Dict[str, Any]):
+        """Initialize dataset from CSV file with precomputed features."""
         self.file_path = Path(file_path)
         self.preferences: List[Preference] = []
         self.participants: Set[str] = set()
         
-        # Initialize feature maps
-        self.column_map = column_map
-        self.row_map = row_map
-        self.finger_map = finger_map
-        self.engram_position_values = engram_position_values
-        self.row_position_values = row_position_values
+        # Store precomputed features
+        self.all_bigrams = precomputed_features['all_bigrams']
+        self.all_bigram_features = precomputed_features['all_bigram_features']
+        self.feature_names = precomputed_features['feature_names']
+        self.samekey_bigrams = precomputed_features['samekey_bigrams']
+        self.samekey_bigram_features = precomputed_features['samekey_bigram_features']
+        self.samekey_feature_names = precomputed_features['samekey_feature_names']
         
         # Load and process data
         print(f"Loading data from {self.file_path}")
-        self._load_csv()
+        self._load_csv()    
 
     def _load_csv(self):
         """Load and validate preference data from CSV."""
@@ -123,27 +126,19 @@ class PreferenceDataset:
 
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
-        # Extract bigram features
-        features1 = extract_bigram_features(
-            row['bigram1'][0], row['bigram1'][1],
-            self.column_map, self.row_map, self.finger_map,
-            self.engram_position_values, self.row_position_values
-        )
-        features1.update({
-            'typing_time': float(row['bigram1_time']),
-            'correct': float(row['chosen_bigram_correct'] if row['chosen_bigram'] == row['bigram1'] 
-                           else row['unchosen_bigram_correct'])
-        })
+        # Use precomputed features instead of computing them
+        bigram1 = (row['bigram1'][0], row['bigram1'][1])
+        bigram2 = (row['bigram2'][0], row['bigram2'][1])
         
-        features2 = extract_bigram_features(
-            row['bigram2'][0], row['bigram2'][1],
-            self.column_map, self.row_map, self.finger_map,
-            self.engram_position_values, self.row_position_values
-        )
+        features1 = self.all_bigram_features.get(bigram1, {})
+        features2 = self.all_bigram_features.get(bigram2, {})
+        
+        # Add timing and any other non-precomputed features
+        features1.update({
+            'typing_time': float(row['bigram1_time'])
+        })
         features2.update({
-            'typing_time': float(row['bigram2_time']),
-            'correct': float(row['chosen_bigram_correct'] if row['chosen_bigram'] == row['bigram2']
-                           else row['unchosen_bigram_correct'])
+            'typing_time': float(row['bigram2_time'])
         })
 
         return Preference(

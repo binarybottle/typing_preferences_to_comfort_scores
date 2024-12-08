@@ -7,26 +7,38 @@ data:
   splits:
     test_ratio: 0.2
     random_seed: 42
-
-# Analysis settings
-analysis:
-  check_transitivity: true
-  analyze_features: true
-  find_sparse_regions: true
-  evaluate_features: true  # Add this
   
+  # Keyboard layout
+  layout:
+    chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
+
+# Feature settings
+features:
+  base_features:
+    - typing_time
+    - same_finger
+    - sum_finger_values
+    - adj_finger_diff_row
+    - rows_apart
+    - angle_apart
+    - outward_roll
+    - middle_column
+    - sum_engram_position_values
+    - sum_row_position_values
+  interactions_file: "data/filtered_feature_interactions.txt"
+
 # Feature evaluation settings
 feature_evaluation:
   enabled: true
-  random_seed: 42
-  n_splits: 5
-  n_samples: 10000
-  chains: 8
-  target_accept: 0.85
   thresholds:
-    importance: 0.1
+    importance: 0.05
     stability: 0.7
     correlation: 0.7
+  analysis:
+    check_transitivity: true
+    analyze_features: true
+    find_sparse_regions: true
+    evaluate_features: true
   validation:
     perform_stability_check: true
     min_training_samples: 1000
@@ -34,32 +46,28 @@ feature_evaluation:
     outlier_detection: true
     outlier_threshold: 3.0
   reporting:
-    save_fold_details: true
     save_raw_metrics: true
-  feature_sets:
-    - name: "base_features"
-      features:
-        - typing_time
-        - same_finger
-        - sum_finger_values
-        - adj_finger_diff_row
-        - rows_apart
-        - angle_apart
-        - outward_roll
-        - middle_column
-        - sum_engram_position_values
-        - sum_row_position_values
-      interactions: "data/filtered_feature_interactions.txt"
-  recommendations:
-    n_recommendations: 20
-    uncertainty_threshold: 0.8  # For high uncertainty regions
-    interaction_strength_threshold: 0.3  # For feature interactions
-    transitivity_chain_length: 3  # For transitivity testing
   output_dir: "output/feature_evaluation"
+
+recommendations:
+  n_recommendations: 20
+  uncertainty_threshold: 0.8  # For high uncertainty regions
+  interaction_strength_threshold: 0.3  # For feature interactions
+  transitivity_chain_length: 3  # For transitivity testing
+
+model:
+  train: false
+  chains: 8
+  target_accept: 0.85
+  n_samples: 10000
+  cross_validation:
+    n_splits: 5
+    n_repetitions: 1
+    random_seed: 42
 
 # Logging settings
 logging:
-  level: "INFO"  # DEBUG
+  # set level to "DEBUG" or "INFO" at the top of main.py
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "output/logs/pipeline.log"
 

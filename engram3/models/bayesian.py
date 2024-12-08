@@ -17,9 +17,9 @@ class BayesianPreferenceModel(PreferenceModel):
     def __init__(self, config: Optional[Dict] = None):
         self.feature_weights = None
         self.config = config or {}
-        self.n_samples = self.config.get('feature_evaluation', {}).get('n_samples', 10000)
-        self.n_chains = self.config.get('feature_evaluation', {}).get('chains', 8)
-        self.target_accept = self.config.get('feature_evaluation', {}).get('target_accept', 0.85)
+        self.n_samples = self.config.get('model', {}).get('n_samples', 10000)
+        self.n_chains = self.config.get('model', {}).get('chains', 8)
+        self.target_accept = self.config.get('model', {}).get('target_accept', 0.85)
         
     def fit(self, dataset: PreferenceDataset) -> None:
         """
@@ -127,10 +127,9 @@ class BayesianPreferenceModel(PreferenceModel):
             - fold_details: Optional detailed fold information
             - raw_metrics: Optional raw prediction data
         """
-        # Use config n_splits if not specified
         if n_splits is None:
-            n_splits = self.config.get('feature_evaluation', {}).get('n_splits', 5)
-        
+            n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
+
         # Get validation settings from config
         validation_config = self.config.get('feature_evaluation', {}).get('validation', {})
         reporting_config = self.config.get('feature_evaluation', {}).get('reporting', {})
@@ -373,20 +372,41 @@ class BayesianPreferenceModel(PreferenceModel):
                 }
                 continue
             
+            # Convert to numpy array and remove any NaN values
             effects = np.array(effects)
+            effects = effects[~np.isnan(effects)]  # Remove NaN values
+            
+            if len(effects) == 0:  # Skip if no valid effects
+                stability[feature] = {
+                    'effect_mean': 0.0,
+                    'effect_std': 0.0,
+                    'effect_cv': float('inf'),
+                    'sign_consistency': 0.0,
+                    'relative_range': float('inf'),
+                    'is_stable': False,
+                    'n_outliers': 0,
+                    'n_samples': 0
+                }
+                continue
             
             # Outlier detection if enabled
-            if outlier_detection:
-                z_scores = np.abs((effects - np.mean(effects)) / np.std(effects))
-                outliers = z_scores > outlier_threshold
-                n_outliers = np.sum(outliers)
-                
-                if n_outliers > 0:
-                    logger.warning(f"Feature '{feature}' has {n_outliers} outlier effects")
-                    # Optionally remove outliers for stability calculations
-                    effects = effects[~outliers]
+            if outlier_detection and len(effects) > 1:  # Need at least 2 points
+                effects_std = np.std(effects)
+                if effects_std > 0:  # Only calculate z-scores if std > 0
+                    z_scores = np.abs((effects - np.mean(effects)) / effects_std)
+                    outliers = z_scores > outlier_threshold
+                    n_outliers = np.sum(outliers)
+                    
+                    if n_outliers > 0:
+                        logger.warning(f"Feature '{feature}' has {n_outliers} outlier effects")
+                        effects = effects[~outliers]
+                else:
+                    n_outliers = 0
             else:
                 n_outliers = 0
+            
+            if len(effects) == 0:  # Check again after outlier removal
+                continue
             
             # Calculate basic statistics
             mean_effect = np.mean(effects)
