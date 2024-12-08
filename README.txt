@@ -2,7 +2,7 @@
 python main.py --config config.yaml --mode select_features --n_repetitions 10
 
 # Second, generate recommendations
-python main.py --config config.yaml --generate_recommendations
+python main.py --config config.yaml --mode recommend_bigram_pairs
 
 # Third, train the model using selected features
 python main.py --config config.yaml --mode train_model

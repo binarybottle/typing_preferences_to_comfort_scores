@@ -21,7 +21,7 @@ class BigramRecommender:
         self.dataset = dataset
         self.config = config
         self.selected_features = selected_features
-        self.n_recommendations = config['recommendations']['n_recommendations']
+        self.n_recommendations = config['feature_evaluation']['recommendations']['n_recommendations']
     
     def get_uncertainty_pairs(self) -> List[Tuple[str, str]]:
         """Generate pairs from regions of high feature uncertainty."""
@@ -70,7 +70,7 @@ class BigramRecommender:
 
     def get_transitivity_pairs(self) -> List[Tuple[str, str]]:
         """Generate pairs that would help validate transitivity."""
-        # Use existing transitivity checking logic
+        # Build preference graph
         pref_graph = self._build_preference_graph()
         
         # Find potential transitivity chains
@@ -82,7 +82,8 @@ class BigramRecommender:
                     if c not in pref_graph.get(a, set()) and a not in pref_graph.get(c, set()):
                         score = self._calculate_transitivity_score(a, b, c, pref_graph)
                         scored_pairs.append(((a, c), score))
-                        
+        
+        # Sort by score and return top N
         scored_pairs.sort(key=lambda x: x[1], reverse=True)
         return [pair for pair, score in scored_pairs[:self.n_recommendations]]
 
@@ -115,10 +116,22 @@ class BigramRecommender:
         # Implementation details for scoring transitivity testing
         pass
 
-    def _build_preference_graph(self) -> Dict:
+    def _build_preference_graph(self) -> Dict[str, Set[str]]:
         """Build graph of existing preferences."""
-        # Similar to check_transitivity implementation
-        pass
+        pref_graph = {}
+        
+        # Build graph from dataset preferences
+        for pref in self.dataset.preferences:
+            if pref.preferred:
+                better, worse = pref.bigram1, pref.bigram2
+            else:
+                better, worse = pref.bigram2, pref.bigram1
+                
+            if better not in pref_graph:
+                pref_graph[better] = set()
+            pref_graph[better].add(worse)
+        
+        return pref_graph
 
     def _generate_all_possible_bigrams(self) -> List[str]:
         """Generate all valid bigram combinations."""

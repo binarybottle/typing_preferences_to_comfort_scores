@@ -44,12 +44,10 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
-    parser.add_argument('--mode', choices=['select_features', 'train_model'], required=True,
-                        help='Pipeline mode: feature selection or model training')
+    parser.add_argument('--mode', choices=['select_features', 'recommend_bigram_pairs','train_model'], required=True,
+                        help='Pipeline mode: feature selection, bigram pair recommendation, or model training')
     parser.add_argument('--n_repetitions', type=int, default=10,
                         help='Number of feature selection repetitions')
-    parser.add_argument('--generate_recommendations', action='store_true',
-                        help='Generate recommended bigram pairs')
     args = parser.parse_args()
 
     try:
@@ -136,7 +134,7 @@ def main():
         #-------------------------------------------------------------------
         # BIGRAM PAIR DATA COLLECTION RECOMMENDATIONS
         #-------------------------------------------------------------------
-        elif args.mode == "generate_recommendations":
+        elif args.mode == "recommend_bigram_pairs":
 
             logger.info("Generating bigram pair recommendations...")
             
@@ -160,7 +158,7 @@ def main():
             transitivity_pairs = recommender.get_transitivity_pairs()
             
             # Create output directory
-            output_dir = Path(config['recommendations']['output_dir'])
+            output_dir = Path(config['feature_evaluation']['output_dir'])
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Save recommendations to CSV
