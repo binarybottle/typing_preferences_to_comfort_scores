@@ -1,3 +1,9 @@
+# First run feature selection
+python main.py --mode select_features --n_repetitions 10
+
+# Then train the model using selected features
+python main.py --mode train_model
+
 engram3/                    # Root project directory
 ├── pyproject.toml
 ├── config.yaml

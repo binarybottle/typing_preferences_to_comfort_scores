@@ -13,8 +13,18 @@ analysis:
   check_transitivity: true
   analyze_features: true
   find_sparse_regions: true
-  feature_importance: true
-  train_model: true
+  evaluate_features: true  # Add this
+  
+# Feature evaluation settings
+feature_evaluation:
+  cross_validation:
+    n_splits: 5
+    random_seed: 42
+  thresholds:
+    importance: 0.1
+    stability: 0.7
+    correlation: 0.7
+  output_dir: "output/feature_evaluation"
 
 # Logging settings
 logging:
