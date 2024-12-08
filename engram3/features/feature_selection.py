@@ -2,16 +2,19 @@
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
-from scipy import stats
+import scipy.stats
 from sklearn.metrics import mutual_info_score
 import logging
 from pathlib import Path
 from collections import defaultdict
 import json
 import warnings
+
 from engram3.data import PreferenceDataset
 from engram3.models.bayesian import BayesianPreferenceModel
+
 logger = logging.getLogger(__name__)
+
 class FeatureEvaluator:
     """Comprehensive feature evaluation for preference learning."""
     
@@ -52,15 +55,10 @@ class FeatureEvaluator:
             Tuple of:
             - List of recommended features
             - Dictionary of diagnostics
-        """
-        logger = logging.getLogger(__name__)
-        
+        """        
         # Log initial dataset info
         feature_names = dataset.get_feature_names()
         logger.info(f"\nStarting feature selection:")
-        logger.info(f"- {len(dataset.preferences)} preferences")
-        logger.info(f"- {len(feature_names)} features")
-        logger.info(f"- {n_repetitions} repetitions")
 
         # Collect results and diagnostics across repetitions
         feature_results = defaultdict(list)
@@ -72,7 +70,7 @@ class FeatureEvaluator:
         }
                     
         for iter_idx in range(n_repetitions):
-            logger.info(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")
+            logger.debug(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")
             
             # Prepare feature matrices
             X1, X2, y = self._prepare_feature_matrices(dataset)
@@ -138,6 +136,15 @@ class FeatureEvaluator:
                 'stability': eval_results.get('stability', {})
             }, output_dir)
         
+        # Final summary only
+        logger.info("\nFeature Selection Results:")
+        logger.info(f"- Selected {len(final_recommendations['selected_features'])} features")
+        if final_recommendations['selected_features']:
+            logger.info("Selected features:")
+            for feature in final_recommendations['selected_features']:
+                logger.info(f"  - {feature}")
+        logger.info(f"Results saved to {output_dir}")
+
         return (final_recommendations['selected_features'], all_diagnostics)
     
     def evaluate_features(
@@ -400,30 +407,29 @@ class FeatureEvaluator:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Prepare feature matrices with detailed validation."""
         feature_names = dataset.get_feature_names()
-        logger = logging.getLogger(__name__)
-        logger.debug("\nDEBUG: Starting feature matrix preparation")
+        logger.debug("\nDEBUG: Starting feature matrix preparation")   
         
         X1 = []  # First bigram features
         X2 = []  # Second bigram features
         y = []   # Preferences
         
-        logger.info("Preparing feature matrices...")
-        logger.info(f"Number of features: {len(feature_names)}")
-        logger.info(f"Features: {feature_names}")
+        logger.debug("Preparing feature matrices...")   
+        logger.debug(f"Number of features: {len(feature_names)}")   
+        logger.debug(f"Features: {feature_names}")   
         
         for pref in dataset.preferences:
             # Log first few preferences for debugging
             if len(X1) < 5:
-                logger.debug(f"\nPreference {len(X1)+1}:")
-                logger.debug(f"Bigram1: {pref.bigram1}")
-                logger.debug(f"Bigram2: {pref.bigram2}")
-                logger.debug(f"Preferred: {pref.preferred}")
-                logger.debug("Features1:")
+                logger.debug(f"\nPreference {len(X1)+1}:")   
+                logger.debug(f"Bigram1: {pref.bigram1}")   
+                logger.debug(f"Bigram2: {pref.bigram2}")   
+                logger.debug(f"Preferred: {pref.preferred}")   
+                logger.debug("Features 1:")   
                 for fname, fval in pref.features1.items():
-                    logger.debug(f"  {fname}: {fval}")
-                logger.debug("Features2:")
+                    logger.debug(f"  {fname}: {fval}")   
+                logger.debug("Features 2:")   
                 for fname, fval in pref.features2.items():
-                    logger.debug(f"  {fname}: {fval}")
+                    logger.debug(f"  {fname}: {fval}")   
             
             try:
                 # Extract features in consistent order
@@ -435,9 +441,9 @@ class FeatureEvaluator:
                 y.append(float(pref.preferred))
                 
             except KeyError as e:
-                logger.error(f"Missing feature in preference: {str(e)}")
-                logger.error(f"Available features1: {list(pref.features1.keys())}")
-                logger.error(f"Available features2: {list(pref.features2.keys())}")
+                logger.error(f"Missing feature in preference: {str(e)}")  # Keep as error
+                logger.error(f"Available features1: {list(pref.features1.keys())}")  # Keep as error
+                logger.error(f"Available features2: {list(pref.features2.keys())}")  # Keep as error
                 raise
             
         X1 = np.array(X1)
@@ -445,10 +451,10 @@ class FeatureEvaluator:
         y = np.array(y)
         
         # Validate matrices
-        logger.info("\nFeature matrix validation:")
-        logger.info(f"X1 shape: {X1.shape}")
-        logger.info(f"X2 shape: {X2.shape}")
-        logger.info(f"y shape: {y.shape}")
+        logger.debug("\nFeature matrix validation:")   
+        logger.debug(f"X1 shape: {X1.shape}")   
+        logger.debug(f"X2 shape: {X2.shape}")   
+        logger.debug(f"y shape: {y.shape}")   
         
         # Check for invalid values in each feature
         for i, feature in enumerate(feature_names):
@@ -459,12 +465,13 @@ class FeatureEvaluator:
             n_unique1 = len(np.unique(X1[:, i]))
             n_unique2 = len(np.unique(X2[:, i]))
             
-            logger.info(f"\nFeature '{feature}':")
-            logger.info(f"  X1: {n_unique1} unique values, {n_nan1} NaN, {n_inf1} Inf")
-            logger.info(f"  X2: {n_unique2} unique values, {n_nan2} NaN, {n_inf2} Inf")
-            logger.info(f"  Range X1: [{np.min(X1[:, i])}, {np.max(X1[:, i])}]")
-            logger.info(f"  Range X2: [{np.min(X2[:, i])}, {np.max(X2[:, i])}]")
+            logger.debug(f"\nFeature '{feature}':")   
+            logger.debug(f"  X1: {n_unique1} unique values, {n_nan1} NaN, {n_inf1} Inf")   
+            logger.debug(f"  X2: {n_unique2} unique values, {n_nan2} NaN, {n_inf2} Inf")   
+            logger.debug(f"  Range X1: [{np.min(X1[:, i])}, {np.max(X1[:, i])}]")   
+            logger.debug(f"  Range X2: [{np.min(X2[:, i])}, {np.max(X2[:, i])}]")   
             
+            # Keep these as warnings
             if n_unique1 == 1 or n_unique2 == 1:
                 logger.warning(f"  WARNING: Feature '{feature}' has constant values")
             if n_nan1 > 0 or n_nan2 > 0:
@@ -473,7 +480,7 @@ class FeatureEvaluator:
                 logger.warning(f"  WARNING: Feature '{feature}' has Inf values")
         
         return X1, X2, y
-        
+     
     def _calculate_feature_importance(
         self,
         X1: np.ndarray,
@@ -493,7 +500,7 @@ class FeatureEvaluator:
             model_results: Results from model cross-validation
         """
         importance = {}
-        logger = logging.getLogger(__name__)
+
         logger.info("Starting feature importance calculation...")
         
         for i, feature in enumerate(feature_names):
@@ -627,24 +634,9 @@ class FeatureEvaluator:
         feature_names: List[str]
     ) -> Tuple[pd.DataFrame, Dict[str, Dict[str, Any]]]:
         """Calculate feature correlations with detailed diagnostics."""
-        print("\nDEBUG: Entering _calculate_feature_correlations")
-        print(f"Input shapes: X1: {X1.shape}, X2: {X2.shape}")
-        print(f"Features: {feature_names}")
+        logger.debug("Starting feature correlation analysis")
+        logger.debug(f"Analyzing {len(feature_names)} features")
         
-        # Add detailed feature analysis
-        print("\nDEBUG: Feature value analysis:")
-        for i, feature in enumerate(feature_names):
-            diff = X1[:, i] - X2[:, i]
-            unique_vals = np.unique(diff[~np.isnan(diff)])
-            print(f"\nFeature '{feature}':")
-            print(f"  Number of unique differences: {len(unique_vals)}")
-            print(f"  Unique values: {unique_vals[:5]}{'...' if len(unique_vals) > 5 else ''}")
-            print(f"  NaN count: {np.sum(np.isnan(diff))}")
-            print(f"  Zero count: {np.sum(diff == 0)}")
-            
-            if len(unique_vals) <= 1:
-                print(f"  WARNING: Constant or near-constant differences for {feature}")
-
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             n_features = len(feature_names)
@@ -655,16 +647,13 @@ class FeatureEvaluator:
                 'highly_correlated_pairs': []
             }
             
-            logger = logging.getLogger(__name__)
-            logger.info("\nStarting feature correlation analysis...")
-            logger.info(f"Input shapes: X1: {X1.shape}, X2: {X2.shape}")
-            
-            # First analyze individual features
-            logger.info("\nFeature difference analysis:")
+            # Analyze individual features
             for i, feature in enumerate(feature_names):
-                diff = X1[:, i] - X2[:, i]
-                
+                if len(np.unique(X1[:, i] - X2[:, i])) <= 1:
+                    logger.debug(f"Feature '{feature}' has constant differences")   
+                                
                 # Detailed analysis of the difference vector
+                diff = X1[:, i] - X2[:, i]
                 valid_mask = ~(np.isnan(diff) | np.isinf(diff))
                 valid_diffs = diff[valid_mask]
                 
@@ -683,28 +672,29 @@ class FeatureEvaluator:
                 
                 diagnostics['feature_stats'][feature] = stats
                 
-                # Log detailed feature statistics
-                logger.info(f"\nFeature '{feature}':")
-                logger.info(f"  Total values: {stats['n_total']}")
-                logger.info(f"  Valid values: {stats['n_valid']}")
-                logger.info(f"  Unique values: {stats['n_unique']}")
+                # Log detailed feature statistics at DEBUG level
+                logger.debug(f"\nFeature '{feature}':")
+                logger.debug(f"  Total values: {stats['n_total']}")
+                logger.debug(f"  Valid values: {stats['n_valid']}")
+                logger.debug(f"  Unique values: {stats['n_unique']}")
                 if stats['n_unique'] < 5:
                     unique_vals = np.unique(valid_diffs)
-                    logger.info(f"  Unique values found: {unique_vals}")
-                logger.info(f"  Range: [{stats['min']:.3f}, {stats['max']:.3f}]")
-                logger.info(f"  Mean ± std: {stats['mean']:.3f} ± {stats['std']:.3f}")
+                    logger.debug(f"  Unique values found: {unique_vals}")
+                logger.debug(f"  Range: [{stats['min']:.3f}, {stats['max']:.3f}]")
+                logger.debug(f"  Mean ± std: {stats['mean']:.3f} ± {stats['std']:.3f}")
                 
+                # Keep warnings at WARNING level
                 if stats['n_unique'] == 1:
-                    logger.warning(f"  WARNING: Feature has constant differences")
+                    logger.warning(f"  WARNING: Feature '{feature}' has constant differences")
                 if stats['n_nan'] > 0:
-                    logger.warning(f"  WARNING: {stats['n_nan']} NaN differences")
+                    logger.warning(f"  WARNING: Feature '{feature}' has {stats['n_nan']} NaN differences")
                 if stats['n_inf'] > 0:
-                    logger.warning(f"  WARNING: {stats['n_inf']} infinite differences")
+                    logger.warning(f"  WARNING: Feature '{feature}' has {stats['n_inf']} infinite differences")
                 if stats['n_zero'] == stats['n_valid']:
-                    logger.warning(f"  WARNING: All valid differences are zero")
+                    logger.warning(f"  WARNING: Feature '{feature}' has all zero differences")
             
-            # Then calculate correlations with detailed logging
-            logger.info("\nCalculating feature correlations:")
+            # Calculate correlations
+            logger.debug("\nCalculating feature correlations:")
             for i in range(n_features):
                 for j in range(n_features):
                     diff_i = X1[:, i] - X2[:, i]
@@ -737,7 +727,8 @@ class FeatureEvaluator:
                         try:
                             with warnings.catch_warnings():
                                 warnings.simplefilter("ignore")
-                                corr, _ = stats.spearmanr(diff_i, diff_j)
+                                correlation_result = scipy.stats.spearmanr(diff_i, diff_j)
+                                corr = correlation_result.correlation if not np.isnan(correlation_result.correlation) else 0.0
                                 if np.isnan(corr):
                                     corr = 0.0
                                     diagnostics['correlation_issues'].append({

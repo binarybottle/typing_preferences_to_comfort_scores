@@ -54,9 +54,7 @@ class BayesianPreferenceModel(PreferenceModel):
         y = np.array(all_preferences)
         
         group_kfold = GroupKFold(n_splits=n_splits)
-        
-        logger.info(f"Starting {n_splits}-fold cross-validation")
-        
+                
         for fold, (train_idx, val_idx) in enumerate(
             group_kfold.split(X1, y, participants)
         ):

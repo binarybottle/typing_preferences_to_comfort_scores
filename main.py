@@ -1,3 +1,11 @@
+import logging
+
+# Configure logging at the start
+logging.basicConfig(
+    level=logging.INFO,  # Set console output to INFO level
+    format='%(message)s'  # Simple format for console
+)
+
 import argparse
 import logging
 from pathlib import Path
@@ -11,6 +19,8 @@ from engram3.analysis import analyze_feature_importance, find_sparse_regions
 from engram3.utils import setup_logging
 from engram3.models.bayesian import BayesianPreferenceModel
 from engram3.features.feature_selection import FeatureEvaluator
+
+logger = logging.getLogger(__name__)
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -44,54 +54,18 @@ def main():
         config = load_config(args.config)
         create_output_directories(config)
 
-        # Setup logging with both file and console handlers
-        log_file = Path(config['logging']['file'])
-        console_handler = logging.StreamHandler()
-        file_handler = logging.FileHandler(log_file)
-        
-        # Console handler - show only INFO and above
-        console_handler.setLevel(logging.INFO)
-        console_format = logging.Formatter('%(message)s')
-        console_handler.setFormatter(console_format)
-        
-        # File handler - show all DEBUG and above
-        file_handler.setLevel(logging.DEBUG)
-        file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(file_format)
-        
-        # Configure root logger
-        logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
-
         # Set random seed
         np.random.seed(config['data']['splits']['random_seed'])
 
         # Load dataset
-        logger.info(f"Loading data from {config['data']['file']}")
         dataset = PreferenceDataset(config['data']['file'])
-        logger.info(f"Loaded {len(dataset.preferences)} preferences from "
-                   f"{len(dataset.participants)} participants")
 
         if args.mode == 'select_features':
-            # Set up detailed logging first
-            logging.basicConfig(
-                level=logging.DEBUG,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            # Force debug level for all loggers
-            logging.getLogger().setLevel(logging.DEBUG)
-            for handler in logging.getLogger().handlers:
-                handler.setLevel(logging.DEBUG)
-                
             logger.info("Starting feature selection phase...")
             
             # Basic analyses
             if config['analysis']['check_transitivity']:
-                logger.info("Checking transitivity...")
                 transitivity_results = dataset.check_transitivity()
-                logger.info(f"Transitivity results: {transitivity_results}")
 
             if config['analysis']['analyze_features']:
                 logger.info("Analyzing feature importance...")
@@ -111,12 +85,6 @@ def main():
             if config['analysis']['evaluate_features']:
                 logger.info("Starting comprehensive feature evaluation...")
                 
-                # Add debug logging setup here
-                logging.getLogger().setLevel(logging.DEBUG)
-                print("\n" + "="*50)
-                print("DEBUG: SETTING UP FEATURE EVALUATION")
-                print("="*50)
-                
                 # Initialize model and evaluator
                 model = BayesianPreferenceModel()
                 evaluator = FeatureEvaluator(
@@ -124,8 +92,6 @@ def main():
                     stability_threshold=config['feature_evaluation']['thresholds']['stability'],
                     correlation_threshold=config['feature_evaluation']['thresholds']['correlation']
                 )
-                print("DEBUG: Created evaluator")       
-                logger.debug("DEBUG: Created FeatureEvaluator")
                 
                 # Run feature selection
                 selected_features, diagnostics = evaluator.run_feature_selection(
@@ -172,6 +138,4 @@ def main():
         raise
 
 if __name__ == "__main__":
-    # Set logging to DEBUG level for detailed output
-    logging.getLogger().setLevel(logging.DEBUG)
     main()

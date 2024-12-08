@@ -9,7 +9,9 @@ from engram3.features.definitions import (
     column_map, row_map, finger_map, 
     engram_position_values, row_position_values
 )
-from .features.extraction import extract_bigram_features
+from engram3.features.extraction import extract_bigram_features
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Preference:
@@ -73,7 +75,7 @@ class PreferenceDataset:
             
         try:
             data = pd.read_csv(self.file_path)
-            print(f"\nLoaded CSV with {len(data)} rows")
+            logger.info(f"\nLoaded CSV with {len(data)} rows")
 
             # Validate required columns
             missing = set(self.REQUIRED_COLUMNS) - set(data.columns)
@@ -106,7 +108,7 @@ class PreferenceDataset:
             if not self.preferences:
                 raise ValueError("No valid preferences found in data")
 
-            print(f"Loaded {len(self.preferences)} preferences from "
+            logger.info(f"Loaded {len(self.preferences)} preferences from "
                   f"{len(self.participants)} participants")
 
         except Exception as e:
@@ -117,10 +119,7 @@ class PreferenceDataset:
         """Get list of all feature names."""
         if not self.preferences:
             return []
-        feature_names = list(self.preferences[0].features1.keys())
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Available features: {feature_names}")
-        return feature_names
+        return list(self.preferences[0].features1.keys())
 
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
