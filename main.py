@@ -1,3 +1,10 @@
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    force=True
+)
+
 import argparse
 import logging
 from pathlib import Path
@@ -56,6 +63,16 @@ def main():
                    f"{len(dataset.participants)} participants")
 
         if args.mode == 'select_features':
+            # Set up detailed logging first
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            # Force debug level for all loggers
+            logging.getLogger().setLevel(logging.DEBUG)
+            for handler in logging.getLogger().handlers:
+                handler.setLevel(logging.DEBUG)
+                
             logger.info("Starting feature selection phase...")
             
             # Basic analyses
@@ -82,15 +99,21 @@ def main():
             if config['analysis']['evaluate_features']:
                 logger.info("Starting comprehensive feature evaluation...")
                 
-                # Add this line here to enable detailed logging for feature selection
-                logging.getLogger('engram3.features.feature_selection').setLevel(logging.DEBUG)
+                # Add debug logging setup here
+                logging.getLogger().setLevel(logging.DEBUG)
+                print("\n" + "="*50)
+                print("DEBUG: SETTING UP FEATURE EVALUATION")
+                print("="*50)
                 
-                # Initialize evaluator
+                # Initialize model and evaluator
+                model = BayesianPreferenceModel()
                 evaluator = FeatureEvaluator(
                     importance_threshold=config['feature_evaluation']['thresholds']['importance'],
                     stability_threshold=config['feature_evaluation']['thresholds']['stability'],
                     correlation_threshold=config['feature_evaluation']['thresholds']['correlation']
                 )
+                print("DEBUG: Created evaluator")       
+                logger.debug("DEBUG: Created FeatureEvaluator")
                 
                 # Run feature selection
                 selected_features, diagnostics = evaluator.run_feature_selection(

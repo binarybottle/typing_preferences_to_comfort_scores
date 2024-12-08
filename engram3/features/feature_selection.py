@@ -54,6 +54,15 @@ class FeatureEvaluator:
             - Dictionary of diagnostics
         """
         logger = logging.getLogger(__name__)
+        logger.info("\nDEBUG: Entering run_feature_selection")
+        
+        feature_names = dataset.get_feature_names()        
+        logger = logging.getLogger(__name__)
+        logger.info("\n" + "="*50)
+        logger.info("RUNNING UPDATED FEATURE SELECTION CODE")
+        logger.info("="*50 + "\n")
+
+        logger = logging.getLogger(__name__)
     
         # Log initial dataset info
         feature_names = dataset.get_feature_names()
@@ -80,73 +89,29 @@ class FeatureEvaluator:
             'problematic_features': set(),
             'iteration_metrics': []
         }
-                
+                    
         for iter_idx in range(n_repetitions):
-            logger.info(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")            
-            # Prepare feature matrices for diagnostics
+            logger.info(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")
+            
+            # Prepare feature matrices
             X1, X2, y = self._prepare_feature_matrices(dataset)
             feature_names = dataset.get_feature_names()
-
-            # Combined matrix and feature validation
-            logger.info("\nFeature matrix inspection:")
-            logger.info(f"Matrix shapes - X1: {X1.shape}, X2: {X2.shape}, y: {y.shape}")
-
-            # Check overall invalid values
-            n_nan_X1, n_nan_X2 = np.isnan(X1).sum(), np.isnan(X2).sum()
-            n_inf_X1, n_inf_X2 = np.isinf(X1).sum(), np.isinf(X2).sum()
-            logger.info(f"\nOverall invalid values:")
-            logger.info(f"NaN values - X1: {n_nan_X1}, X2: {n_nan_X2}")
-            logger.info(f"Inf values - X1: {n_inf_X1}, X2: {n_inf_X2}")
-
-            # Detailed feature-by-feature analysis
-            logger.info("\nFeature-by-feature analysis:")
-            for feat_idx, feature in enumerate(feature_names):
-                # Get values and differences
-                feat1 = X1[:, feat_idx]
-                feat2 = X2[:, feat_idx]
-                diff = feat1 - feat2
-                
-                # Calculate statistics
-                unique_vals_1 = len(np.unique(feat1[~np.isnan(feat1)]))
-                unique_vals_2 = len(np.unique(feat2[~np.isnan(feat2)]))
-                unique_diffs = len(np.unique(diff[~np.isnan(diff)]))
-                
-                logger.info(f"\nFeature '{feature}':")
-                logger.info("First bigram values:")
-                logger.info(f"  min={np.min(feat1):.3f}, max={np.max(feat1):.3f}, "
-                            f"mean={np.mean(feat1):.3f}, unique={unique_vals_1}")
-                logger.info("Second bigram values:")
-                logger.info(f"  min={np.min(feat2):.3f}, max={np.max(feat2):.3f}, "
-                            f"mean={np.mean(feat2):.3f}, unique={unique_vals_2}")
-                logger.info("Differences:")
-                logger.info(f"  min={np.min(diff):.3f}, max={np.max(diff):.3f}, "
-                            f"mean={np.mean(diff):.3f}, unique={unique_diffs}")
-                
-                # Log potential issues
-                if unique_vals_1 == 1:
-                    logger.warning(f"  WARNING: First bigram has constant values ({feat1[0]:.3f})")
-                if unique_vals_2 == 1:
-                    logger.warning(f"  WARNING: Second bigram has constant values ({feat2[0]:.3f})")
-                if unique_diffs <= 1:
-                    logger.warning(f"  WARNING: Feature has constant differences ({diff[0]:.3f})")
-                
-                # Show actual values if small number of unique values
-                if unique_diffs < 5:
-                    unique_diff_values = np.unique(diff[~np.isnan(diff)])
-                    logger.info(f"  Unique difference values: {unique_diff_values}")
-                    value_counts = {val: np.sum(diff == val) for val in unique_diff_values}
-                    logger.info(f"  Value counts: {value_counts}")
-                       
-            # Calculate correlations with diagnostics
-            corr_matrix, corr_diagnostics = self._calculate_feature_correlations(
+            
+            # Calculate initial correlations for this iteration
+            correlations, correlation_diagnostics = self._calculate_feature_correlations(
                 X1, X2, feature_names)
             
             # Run cross-validation and evaluation
             model = BayesianPreferenceModel()
             cv_results = model.cross_validate(dataset)
             
-            # Evaluate features with diagnostics
-            eval_results = self.evaluate_features(dataset, cv_results)
+            # Evaluate features
+            eval_results = self.evaluate_features(
+                dataset, 
+                cv_results,
+                output_dir=output_dir,
+                feature_matrices=(X1, X2, y)
+            )
             
             # Store basic results
             for feature in feature_names:
@@ -158,7 +123,7 @@ class FeatureEvaluator:
             # Store diagnostics
             all_diagnostics['importance_diagnostics'].append(
                 eval_results.get('diagnostics', {}))
-            all_diagnostics['correlation_diagnostics'].append(corr_diagnostics)
+            all_diagnostics['correlation_diagnostics'].append(correlation_diagnostics)
             
             # Track problematic features
             for feature, diag in eval_results.get('diagnostics', {}).items():
@@ -172,8 +137,8 @@ class FeatureEvaluator:
                 'iteration': iter_idx + 1,
                 'n_features': len(feature_names),
                 'n_problematic': len(all_diagnostics['problematic_features']),
-                'correlation_issues': len(corr_diagnostics.get('correlation_issues', [])),
-                'highly_correlated_pairs': len(corr_diagnostics.get('highly_correlated_pairs', []))
+                'correlation_issues': len(correlation_diagnostics.get('correlation_issues', [])),
+                'highly_correlated_pairs': len(correlation_diagnostics.get('highly_correlated_pairs', []))
             })
         
         # Aggregate results and make final recommendations
@@ -182,10 +147,7 @@ class FeatureEvaluator:
         
         # Save results and diagnostics if output directory provided
         if output_dir:
-            # Save iteration-by-iteration diagnostics
             self._save_diagnostic_report(all_diagnostics, output_dir)
-            
-            # Save final results
             self._save_detailed_report({
                 'selected_features': final_recommendations['selected_features'],
                 'rejected_features': final_recommendations.get('rejected_features', []),
@@ -193,43 +155,26 @@ class FeatureEvaluator:
                 'importance': eval_results.get('importance', {}),
                 'stability': eval_results.get('stability', {})
             }, output_dir)
-            
         
-        # Log summary
-        logger.info(f"Feature selection completed:")
-        logger.info(f"- Selected {len(final_recommendations['selected_features'])} features")
-        logger.info(f"- Found {len(all_diagnostics['problematic_features'])} problematic features")
-        logger.info(f"- Average correlation issues per iteration: "
-                f"{np.mean([m['correlation_issues'] for m in all_diagnostics['iteration_metrics']]):.1f}")
-        
-        return (final_recommendations['selected_features'], 
-                all_diagnostics)
+        return (final_recommendations['selected_features'], all_diagnostics)
     
     def evaluate_features(
         self,
         dataset: PreferenceDataset,
         model_results: Dict[str, Dict],
-        output_dir: Optional[Path] = None
+        output_dir: Optional[Path] = None,
+        feature_matrices: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
     ) -> Dict[str, Dict]:
         """
         Comprehensive feature evaluation.
-        
-        Args:
-            dataset: PreferenceDataset containing all preferences
-            model_results: Results from model cross-validation
-            output_dir: Optional directory to save detailed reports
-            
-        Returns:
-            Dictionary containing:
-            - importance: Feature importance scores
-            - stability: Feature stability metrics
-            - correlations: Feature correlation matrix
-            - recommendations: Feature recommendations
         """
         feature_names = dataset.get_feature_names()
         
-        # Get feature matrices for analysis
-        X1, X2, y = self._prepare_feature_matrices(dataset)
+        # Use provided matrices if available, otherwise calculate them
+        if feature_matrices is not None:
+            X1, X2, y = feature_matrices
+        else:
+            X1, X2, y = self._prepare_feature_matrices(dataset)
         
         # Calculate feature importance
         importance = self._calculate_feature_importance(
@@ -246,12 +191,16 @@ class FeatureEvaluator:
         recommendations = self._generate_recommendations(
             importance, stability, correlations, corr_diagnostics)
             
+        # Organize results
         results = {
             'importance': importance,
             'stability': stability,
             'correlations': correlations,
             'correlation_diagnostics': corr_diagnostics,
-            'recommendations': recommendations
+            'recommendations': recommendations,
+            'selected_features': recommendations['strong_features'],  # Add this line
+            'rejected_features': recommendations.get('weak_features', []),  # And this line
+            'all_features': feature_names
         }
         
         # Save detailed report if output_dir provided
@@ -459,6 +408,7 @@ class FeatureEvaluator:
         """Prepare feature matrices with detailed validation."""
         feature_names = dataset.get_feature_names()
         logger = logging.getLogger(__name__)
+        logger.debug("\nDEBUG: Starting feature matrix preparation")
         
         X1 = []  # First bigram features
         X2 = []  # Second bigram features
@@ -684,6 +634,24 @@ class FeatureEvaluator:
         feature_names: List[str]
     ) -> Tuple[pd.DataFrame, Dict[str, Dict[str, Any]]]:
         """Calculate feature correlations with detailed diagnostics."""
+        print("\nDEBUG: Entering _calculate_feature_correlations")
+        print(f"Input shapes: X1: {X1.shape}, X2: {X2.shape}")
+        print(f"Features: {feature_names}")
+        
+        # Add detailed feature analysis
+        print("\nDEBUG: Feature value analysis:")
+        for i, feature in enumerate(feature_names):
+            diff = X1[:, i] - X2[:, i]
+            unique_vals = np.unique(diff[~np.isnan(diff)])
+            print(f"\nFeature '{feature}':")
+            print(f"  Number of unique differences: {len(unique_vals)}")
+            print(f"  Unique values: {unique_vals[:5]}{'...' if len(unique_vals) > 5 else ''}")
+            print(f"  NaN count: {np.sum(np.isnan(diff))}")
+            print(f"  Zero count: {np.sum(diff == 0)}")
+            
+            if len(unique_vals) <= 1:
+                print(f"  WARNING: Constant or near-constant differences for {feature}")
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             n_features = len(feature_names)
@@ -753,17 +721,15 @@ class FeatureEvaluator:
                     has_issues = False
                     reasons = []
                     
-                    if len(np.unique(diff_i[~np.isnan(diff_i)])) == 1:
+                    # Only mark as constant if truly constant
+                    unique_i = len(np.unique(diff_i[~np.isnan(diff_i)]))
+                    unique_j = len(np.unique(diff_j[~np.isnan(diff_j)]))
+                    
+                    if unique_i == 1:
                         reasons.append(f"{feature_names[i]} has constant differences")
                         has_issues = True
-                    if len(np.unique(diff_j[~np.isnan(diff_j)])) == 1:
+                    if unique_j == 1:
                         reasons.append(f"{feature_names[j]} has constant differences")
-                        has_issues = True
-                    if np.any(np.isnan(diff_i)) or np.any(np.isnan(diff_j)):
-                        reasons.append("NaN values present")
-                        has_issues = True
-                    if np.any(np.isinf(diff_i)) or np.any(np.isinf(diff_j)):
-                        reasons.append("Infinite values present")
                         has_issues = True
                     
                     if has_issues:
@@ -904,11 +870,7 @@ class FeatureEvaluator:
                     if k != 'iteration':
                         f.write(f"  {k}: {v}\n")
     
-    def _save_detailed_report(
-        self,
-        results: Dict[str, Any],
-        output_dir: Path
-    ) -> None:
+    def _save_detailed_report(self, results: Dict[str, Any], output_dir: Path) -> None:
         """Save detailed report of final feature selection results."""
         report_file = output_dir / "feature_selection_results.txt"
         
@@ -919,28 +881,40 @@ class FeatureEvaluator:
             # 1. Selected Features
             f.write("1. Selected Features\n")
             f.write("-----------------\n")
-            for feature in results['selected_features']:
-                f.write(f"\n{feature}:\n")
-                if 'importance' in results:
-                    imp = results['importance'].get(feature, {})
-                    f.write(f"  Importance: {imp.get('combined_score', 0):.3f}\n")
-                    f.write(f"  Model effect: {imp.get('model_effect_mean', 0):.3f}\n")
-                if 'stability' in results:
-                    stab = results['stability'].get(feature, {})
-                    f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
+            selected = results.get('selected_features', [])
+            if selected:
+                for feature in selected:
+                    f.write(f"\n{feature}:\n")
+                    if 'importance' in results:
+                        imp = results['importance'].get(feature, {})
+                        f.write(f"  Importance: {imp.get('combined_score', 0):.3f}\n")
+                        f.write(f"  Model effect: {imp.get('model_effect_mean', 0):.3f}\n")
+                    if 'stability' in results:
+                        stab = results['stability'].get(feature, {})
+                        f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
+            else:
+                f.write("\nNo features were selected.\n")
             
             # 2. Rejected Features
-            if 'rejected_features' in results:
-                f.write("\n2. Rejected Features\n")
-                f.write("-----------------\n")
-                for feature, reason in results['rejected_features']:
-                    f.write(f"  - {feature}: {reason}\n")
+            f.write("\n2. Rejected Features\n")
+            f.write("-----------------\n")
+            rejected = results.get('rejected_features', [])
+            if rejected:
+                for feature in rejected:
+                    f.write(f"\n{feature}:\n")
+                    if 'importance' in results:
+                        imp = results['importance'].get(feature, {})
+                        f.write(f"  Importance: {imp.get('combined_score', 0):.3f}\n")
+                    if 'stability' in results:
+                        stab = results['stability'].get(feature, {})
+                        f.write(f"  Stability: {stab.get('sign_consistency', 0):.3f}\n")
+            else:
+                f.write("\nNo features were rejected.\n")
             
             # 3. Summary Statistics
             f.write("\n3. Summary Statistics\n")
             f.write("-----------------\n")
             f.write(f"Total features evaluated: {len(results.get('all_features', []))}\n")
-            f.write(f"Features selected: {len(results['selected_features'])}\n")
-            if 'rejected_features' in results:
-                f.write(f"Features rejected: {len(results['rejected_features'])}\n")
-                            
+            f.write(f"Features selected: {len(selected)}\n")
+            f.write(f"Features rejected: {len(rejected)}\n")
+                                        
