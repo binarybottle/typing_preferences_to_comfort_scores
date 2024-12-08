@@ -1,7 +1,12 @@
 from typing import Dict, List, Any
 import numpy as np
+from scipy import stats
+import logging
+import warnings
 
 from engram3.data import PreferenceDataset
+
+logger = logging.getLogger(__name__)
 
 def analyze_feature_importance(dataset: PreferenceDataset) -> Dict[str, Any]:
     """
@@ -34,15 +39,17 @@ def analyze_feature_importance(dataset: PreferenceDataset) -> Dict[str, Any]:
         if len(diffs) == 0:
             continue
             
-        # Compute correlation with handling for constant features
-        if np.std(diffs) == 0 or np.std(prefs) == 0:
-            # If either variable is constant, correlation is undefined
+        try:
+            # Calculate correlation with proper error handling
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                correlation = stats.spearmanr(diffs, prefs)
+                results['correlations'][feature] = (
+                    correlation.correlation if not np.isnan(correlation.correlation) else 0.0
+                )
+        except Exception as e:
+            logger.warning(f"Correlation calculation failed for {feature}: {str(e)}")
             results['correlations'][feature] = 0.0
-        else:
-            # Suppress warnings and compute correlation
-            with np.errstate(divide='ignore', invalid='ignore'):
-                corr = np.corrcoef(diffs, prefs)[0, 1]
-                results['correlations'][feature] = 0.0 if np.isnan(corr) else corr
         
         # Compute basic statistics
         results['statistics'][feature] = {
