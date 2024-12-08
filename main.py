@@ -60,37 +60,52 @@ def main():
             
             # Basic analyses
             if config['analysis']['check_transitivity']:
+                logger.info("Checking transitivity...")
                 transitivity_results = dataset.check_transitivity()
                 logger.info(f"Transitivity results: {transitivity_results}")
 
             if config['analysis']['analyze_features']:
+                logger.info("Analyzing feature importance...")
                 importance = analyze_feature_importance(dataset)
-                logger.info("Initial feature importance scores:")
+                logger.info("Feature importance scores:")
                 for feature, score in sorted(importance['correlations'].items(), 
-                                           key=lambda x: abs(x[1]), 
-                                           reverse=True):
+                                        key=lambda x: abs(x[1]), 
+                                        reverse=True):
                     logger.info(f"  {feature}: {score:.3f}")
 
-            # Comprehensive feature evaluation
-            evaluator = FeatureEvaluator(
-                importance_threshold=config['feature_evaluation']['thresholds']['importance'],
-                stability_threshold=config['feature_evaluation']['thresholds']['stability'],
-                correlation_threshold=config['feature_evaluation']['thresholds']['correlation']
-            )
+            if config['analysis']['find_sparse_regions']:
+                logger.info("Finding sparse regions...")
+                sparse_points = find_sparse_regions(dataset)
+                logger.info(f"Found {len(sparse_points)} points in sparse regions")
 
-            selected_features, diagnostics = evaluator.run_feature_selection(
-                dataset,
-                n_repetitions=args.n_repetitions,
-                output_dir=Path(config['feature_evaluation']['output_dir'])
-            )
-            
-            # Save selected features
-            features_file = Path(config['feature_evaluation']['output_dir']) / 'selected_features.json'
-            with open(features_file, 'w') as f:
-                json.dump(selected_features, f, indent=2)
-            
-            logger.info(f"Feature selection completed. Selected {len(selected_features)} features.")
-            
+            # Comprehensive feature evaluation
+            if config['analysis']['evaluate_features']:
+                logger.info("Starting comprehensive feature evaluation...")
+                
+                # Add this line here to enable detailed logging for feature selection
+                logging.getLogger('engram3.features.feature_selection').setLevel(logging.DEBUG)
+                
+                # Initialize evaluator
+                evaluator = FeatureEvaluator(
+                    importance_threshold=config['feature_evaluation']['thresholds']['importance'],
+                    stability_threshold=config['feature_evaluation']['thresholds']['stability'],
+                    correlation_threshold=config['feature_evaluation']['thresholds']['correlation']
+                )
+                
+                # Run feature selection
+                selected_features, diagnostics = evaluator.run_feature_selection(
+                    dataset,
+                    n_repetitions=args.n_repetitions,
+                    output_dir=Path(config['feature_evaluation']['output_dir'])
+                )
+                
+                # Save selected features
+                features_file = Path(config['feature_evaluation']['output_dir']) / 'selected_features.json'
+                with open(features_file, 'w') as f:
+                    json.dump(selected_features, f, indent=2)
+                
+                logger.info(f"Feature selection completed. Selected {len(selected_features)} features.")
+                                    
         elif args.mode == 'train_model':
             logger.info("Starting model training phase...")
             
@@ -122,4 +137,6 @@ def main():
         raise
 
 if __name__ == "__main__":
+    # Set logging to DEBUG level for detailed output
+    logging.getLogger().setLevel(logging.DEBUG)
     main()

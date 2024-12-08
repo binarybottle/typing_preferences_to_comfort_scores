@@ -1,5 +1,4 @@
 # engram3/features/feature_selection.py
-
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
@@ -10,12 +9,9 @@ from pathlib import Path
 from collections import defaultdict
 import json
 import warnings
-
 from engram3.data import PreferenceDataset
 from engram3.models.bayesian import BayesianPreferenceModel
-
 logger = logging.getLogger(__name__)
-
 class FeatureEvaluator:
     """Comprehensive feature evaluation for preference learning."""
     
@@ -37,7 +33,7 @@ class FeatureEvaluator:
         
         # Configure warnings
         warnings.filterwarnings('ignore', category=RuntimeWarning)
-
+    
     def run_feature_selection(
             self,
             dataset: PreferenceDataset,
@@ -57,6 +53,25 @@ class FeatureEvaluator:
             - List of recommended features
             - Dictionary of diagnostics
         """
+        logger = logging.getLogger(__name__)
+    
+        # Log initial dataset info
+        feature_names = dataset.get_feature_names()
+        logger.info(f"\nStarting feature selection with:")
+        logger.info(f"- {len(dataset.preferences)} preferences")
+        logger.info(f"- {len(feature_names)} features: {feature_names}")
+        logger.info(f"- {n_repetitions} repetitions")
+        
+        # Sample some preferences to check feature values
+        logger.info("\nSampling feature values from first few preferences:")
+        for idx, pref in enumerate(dataset.preferences[:3]):  # Look at first 3
+            logger.info(f"\nPreference {idx + 1}: '{pref.bigram1}' vs '{pref.bigram2}' (preferred: {pref.preferred})")
+            for fname in feature_names:
+                val1 = pref.features1[fname]
+                val2 = pref.features2[fname]
+                diff = val1 - val2
+                logger.info(f"  {fname:25} | {val1:8.3f} vs {val2:8.3f} | diff: {diff:8.3f}")
+    
         # Collect results and diagnostics across repetitions
         feature_results = defaultdict(list)
         all_diagnostics = {
@@ -65,16 +80,63 @@ class FeatureEvaluator:
             'problematic_features': set(),
             'iteration_metrics': []
         }
-        
-        logger.info(f"Starting feature selection with {n_repetitions} repetitions")
-        
-        for i in range(n_repetitions):
-            logger.info(f"Feature selection iteration {i+1}/{n_repetitions}")
-            
+                
+        for iter_idx in range(n_repetitions):
+            logger.info(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")            
             # Prepare feature matrices for diagnostics
             X1, X2, y = self._prepare_feature_matrices(dataset)
             feature_names = dataset.get_feature_names()
-            
+
+            # Combined matrix and feature validation
+            logger.info("\nFeature matrix inspection:")
+            logger.info(f"Matrix shapes - X1: {X1.shape}, X2: {X2.shape}, y: {y.shape}")
+
+            # Check overall invalid values
+            n_nan_X1, n_nan_X2 = np.isnan(X1).sum(), np.isnan(X2).sum()
+            n_inf_X1, n_inf_X2 = np.isinf(X1).sum(), np.isinf(X2).sum()
+            logger.info(f"\nOverall invalid values:")
+            logger.info(f"NaN values - X1: {n_nan_X1}, X2: {n_nan_X2}")
+            logger.info(f"Inf values - X1: {n_inf_X1}, X2: {n_inf_X2}")
+
+            # Detailed feature-by-feature analysis
+            logger.info("\nFeature-by-feature analysis:")
+            for feat_idx, feature in enumerate(feature_names):
+                # Get values and differences
+                feat1 = X1[:, feat_idx]
+                feat2 = X2[:, feat_idx]
+                diff = feat1 - feat2
+                
+                # Calculate statistics
+                unique_vals_1 = len(np.unique(feat1[~np.isnan(feat1)]))
+                unique_vals_2 = len(np.unique(feat2[~np.isnan(feat2)]))
+                unique_diffs = len(np.unique(diff[~np.isnan(diff)]))
+                
+                logger.info(f"\nFeature '{feature}':")
+                logger.info("First bigram values:")
+                logger.info(f"  min={np.min(feat1):.3f}, max={np.max(feat1):.3f}, "
+                            f"mean={np.mean(feat1):.3f}, unique={unique_vals_1}")
+                logger.info("Second bigram values:")
+                logger.info(f"  min={np.min(feat2):.3f}, max={np.max(feat2):.3f}, "
+                            f"mean={np.mean(feat2):.3f}, unique={unique_vals_2}")
+                logger.info("Differences:")
+                logger.info(f"  min={np.min(diff):.3f}, max={np.max(diff):.3f}, "
+                            f"mean={np.mean(diff):.3f}, unique={unique_diffs}")
+                
+                # Log potential issues
+                if unique_vals_1 == 1:
+                    logger.warning(f"  WARNING: First bigram has constant values ({feat1[0]:.3f})")
+                if unique_vals_2 == 1:
+                    logger.warning(f"  WARNING: Second bigram has constant values ({feat2[0]:.3f})")
+                if unique_diffs <= 1:
+                    logger.warning(f"  WARNING: Feature has constant differences ({diff[0]:.3f})")
+                
+                # Show actual values if small number of unique values
+                if unique_diffs < 5:
+                    unique_diff_values = np.unique(diff[~np.isnan(diff)])
+                    logger.info(f"  Unique difference values: {unique_diff_values}")
+                    value_counts = {val: np.sum(diff == val) for val in unique_diff_values}
+                    logger.info(f"  Value counts: {value_counts}")
+                       
             # Calculate correlations with diagnostics
             corr_matrix, corr_diagnostics = self._calculate_feature_correlations(
                 X1, X2, feature_names)
@@ -107,7 +169,7 @@ class FeatureEvaluator:
             
             # Store iteration metrics
             all_diagnostics['iteration_metrics'].append({
-                'iteration': i + 1,
+                'iteration': iter_idx + 1,
                 'n_features': len(feature_names),
                 'n_problematic': len(all_diagnostics['problematic_features']),
                 'correlation_issues': len(corr_diagnostics.get('correlation_issues', [])),
@@ -142,7 +204,7 @@ class FeatureEvaluator:
         
         return (final_recommendations['selected_features'], 
                 all_diagnostics)
-
+    
     def evaluate_features(
         self,
         dataset: PreferenceDataset,
@@ -197,7 +259,7 @@ class FeatureEvaluator:
             self._save_detailed_report(results, output_dir)
             
         return results
-
+    
     def _analyze_selection_results(
         self,
         feature_results: Dict[str, List[Dict]],
@@ -337,62 +399,137 @@ class FeatureEvaluator:
             'aggregated_metrics': aggregated_results,
             'selection_diagnostics': selection_diagnostics
         }
-
+    
     def _save_selection_results(
         self,
-        results: Dict,
+        results: Dict[str, Any],
         output_dir: Path
     ) -> None:
-        """Save feature selection results."""
-        output_dir.mkdir(parents=True, exist_ok=True)
+        """
+        Save feature selection results in both human-readable and JSON formats.
         
-        # Save full results
-        with open(output_dir / 'feature_selection_results.json', 'w') as f:
-            json.dump(results, f, indent=2)
-            
-        # Save detailed report
-        with open(output_dir / 'feature_selection_report.txt', 'w') as f:
+        Args:
+            results: Dictionary containing selection results
+            output_dir: Output directory
+        """
+        # Save human-readable report
+        report_file = output_dir / "feature_selection_report.txt"
+        with open(report_file, 'w') as f:
             f.write("Feature Selection Report\n")
             f.write("=====================\n\n")
             
+            # Selected Features
+            selected = results.get('selected_features', [])
             f.write("Selected Features:\n")
             f.write("-----------------\n")
-            for feature in results['selected_features']:
-                metrics = results['aggregated_metrics'][feature]
-                f.write(f"\n{feature}:\n")
-                f.write(f"  Mean importance: {metrics['mean_importance']:.3f} ± {metrics['std_importance']:.3f}\n")
-                f.write(f"  Mean stability: {metrics['mean_stability']:.3f} ± {metrics['std_stability']:.3f}\n")
-                f.write(f"  Selection frequency: {metrics['selection_frequency']:.1%}\n")
+            if selected:
+                for feature in selected:
+                    metrics = results['aggregated_metrics'][feature]
+                    f.write(f"\n{feature}:\n")
+                    f.write(f"Mean importance: {metrics['mean_importance']:.3f} ± {metrics['std_importance']:.3f}\n")
+                    f.write(f"Mean stability: {metrics['mean_stability']:.3f} ± {metrics['std_stability']:.3f}\n")
+                    f.write(f"Selection frequency: {metrics['selection_frequency']:.1%}\n")
             
+            # Rejected Features
             f.write("\nRejected Features:\n")
             f.write("----------------\n")
-            rejected = set(results['aggregated_metrics'].keys()) - set(results['selected_features'])
-            for feature in rejected:
-                metrics = results['aggregated_metrics'][feature]
-                f.write(f"\n{feature}:\n")
-                f.write(f"  Mean importance: {metrics['mean_importance']:.3f} ± {metrics['std_importance']:.3f}\n")
-                f.write(f"  Mean stability: {metrics['mean_stability']:.3f} ± {metrics['std_stability']:.3f}\n")
-                f.write(f"  Selection frequency: {metrics['selection_frequency']:.1%}\n")
-        
+            for feature, metrics in results['aggregated_metrics'].items():
+                if feature not in selected:
+                    f.write(f"\n{feature}:\n")
+                    f.write(f"Mean importance: {metrics['mean_importance']:.3f} ± {metrics['std_importance']:.3f}\n")
+                    f.write(f"Mean stability: {metrics['mean_stability']:.3f} ± {metrics['std_stability']:.3f}\n")
+                    f.write(f"Selection frequency: {metrics['selection_frequency']:.1%}\n")
+            
+            # Summary Statistics
+            f.write("\nSummary Statistics:\n")
+            f.write("-----------------\n")
+            f.write(f"Total features evaluated: {len(results['aggregated_metrics'])}\n")
+            f.write(f"Features selected: {len(selected)}\n")
+            f.write(f"Features rejected: {len(results['aggregated_metrics']) - len(selected)}\n")
+        # Save JSON for programmatic use
+        json_file = output_dir / "feature_selection_results.json"
+        with open(json_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        logger.info(f"Results saved to {report_file} and {json_file}")
+                
     def _prepare_feature_matrices(
         self,
         dataset: PreferenceDataset
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Prepare feature matrices for analysis."""
+        """Prepare feature matrices with detailed validation."""
         feature_names = dataset.get_feature_names()
+        logger = logging.getLogger(__name__)
         
         X1 = []  # First bigram features
         X2 = []  # Second bigram features
         y = []   # Preferences
         
+        logger.info("Preparing feature matrices...")
+        logger.info(f"Number of features: {len(feature_names)}")
+        logger.info(f"Features: {feature_names}")
+        
         for pref in dataset.preferences:
-            feat1 = [pref.features1[f] for f in feature_names]
-            feat2 = [pref.features2[f] for f in feature_names]
-            X1.append(feat1)
-            X2.append(feat2)
-            y.append(float(pref.preferred))
+            # Log first few preferences for debugging
+            if len(X1) < 5:
+                logger.debug(f"\nPreference {len(X1)+1}:")
+                logger.debug(f"Bigram1: {pref.bigram1}")
+                logger.debug(f"Bigram2: {pref.bigram2}")
+                logger.debug(f"Preferred: {pref.preferred}")
+                logger.debug("Features1:")
+                for fname, fval in pref.features1.items():
+                    logger.debug(f"  {fname}: {fval}")
+                logger.debug("Features2:")
+                for fname, fval in pref.features2.items():
+                    logger.debug(f"  {fname}: {fval}")
             
-        return np.array(X1), np.array(X2), np.array(y)
+            try:
+                # Extract features in consistent order
+                feat1 = [pref.features1[f] for f in feature_names]
+                feat2 = [pref.features2[f] for f in feature_names]
+                
+                X1.append(feat1)
+                X2.append(feat2)
+                y.append(float(pref.preferred))
+                
+            except KeyError as e:
+                logger.error(f"Missing feature in preference: {str(e)}")
+                logger.error(f"Available features1: {list(pref.features1.keys())}")
+                logger.error(f"Available features2: {list(pref.features2.keys())}")
+                raise
+            
+        X1 = np.array(X1)
+        X2 = np.array(X2)
+        y = np.array(y)
+        
+        # Validate matrices
+        logger.info("\nFeature matrix validation:")
+        logger.info(f"X1 shape: {X1.shape}")
+        logger.info(f"X2 shape: {X2.shape}")
+        logger.info(f"y shape: {y.shape}")
+        
+        # Check for invalid values in each feature
+        for i, feature in enumerate(feature_names):
+            n_nan1 = np.sum(np.isnan(X1[:, i]))
+            n_nan2 = np.sum(np.isnan(X2[:, i]))
+            n_inf1 = np.sum(np.isinf(X1[:, i]))
+            n_inf2 = np.sum(np.isinf(X2[:, i]))
+            n_unique1 = len(np.unique(X1[:, i]))
+            n_unique2 = len(np.unique(X2[:, i]))
+            
+            logger.info(f"\nFeature '{feature}':")
+            logger.info(f"  X1: {n_unique1} unique values, {n_nan1} NaN, {n_inf1} Inf")
+            logger.info(f"  X2: {n_unique2} unique values, {n_nan2} NaN, {n_inf2} Inf")
+            logger.info(f"  Range X1: [{np.min(X1[:, i])}, {np.max(X1[:, i])}]")
+            logger.info(f"  Range X2: [{np.min(X2[:, i])}, {np.max(X2[:, i])}]")
+            
+            if n_unique1 == 1 or n_unique2 == 1:
+                logger.warning(f"  WARNING: Feature '{feature}' has constant values")
+            if n_nan1 > 0 or n_nan2 > 0:
+                logger.warning(f"  WARNING: Feature '{feature}' has NaN values")
+            if n_inf1 > 0 or n_inf2 > 0:
+                logger.warning(f"  WARNING: Feature '{feature}' has Inf values")
+        
+        return X1, X2, y
         
     def _calculate_feature_importance(
         self,
@@ -403,7 +540,7 @@ class FeatureEvaluator:
         model_results: Dict[str, Dict]
     ) -> Dict[str, Dict[str, float]]:
         """
-        Calculate feature importance using multiple metrics with detailed diagnostics.
+        Calculate feature importance with robust handling of edge cases.
         
         Args:
             X1: Feature matrix for first bigram in each pair
@@ -411,126 +548,134 @@ class FeatureEvaluator:
             y: Binary preference indicators
             feature_names: List of feature names
             model_results: Results from model cross-validation
-            
-        Returns:
-            Dictionary mapping features to their importance metrics
         """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-
-            importance = {}
-            logger = logging.getLogger(__name__)
-            logger.info("Starting feature importance calculation...")
+        importance = {}
+        logger = logging.getLogger(__name__)
+        logger.info("Starting feature importance calculation...")
+        
+        for i, feature in enumerate(feature_names):
+            logger.debug(f"\nAnalyzing feature: {feature}")
             
-            for i, feature in enumerate(feature_names):
-                logger.debug(f"Processing feature: {feature}")
-                
-                # Calculate feature differences
-                feat_diff = X1[:, i] - X2[:, i]
-                
-                # Diagnostic checks
-                n_unique = len(np.unique(feat_diff))
-                n_nan = np.sum(np.isnan(feat_diff))
-                n_inf = np.sum(np.isinf(feat_diff))
-                n_zero = np.sum(feat_diff == 0)
-                
-                if n_unique == 1:
-                    logger.warning(f"Feature '{feature}' has constant differences (value: {feat_diff[0]})")
-                    corr = 0.0
-                    mi_score = 0.0
-                elif n_nan > 0:
-                    logger.warning(f"Feature '{feature}' has {n_nan} NaN differences")
-                    corr = 0.0
-                    mi_score = 0.0
-                elif n_inf > 0:
-                    logger.warning(f"Feature '{feature}' has {n_inf} infinite differences")
-                    corr = 0.0
-                    mi_score = 0.0
-                elif n_zero == len(feat_diff):
-                    logger.warning(f"Feature '{feature}' has all zero differences")
-                    corr = 0.0
-                    mi_score = 0.0
-                else:
-                    # Calculate correlation with proper error handling
-                    try:
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore")
-                            corr, _ = stats.spearmanr(feat_diff, y)
-                            if np.isnan(corr):
-                                logger.warning(f"Feature '{feature}' produced NaN correlation")
-                                corr = 0.0
-                    except Exception as e:
-                        logger.error(f"Error calculating correlation for feature '{feature}': {str(e)}")
-                        corr = 0.0
-                    
-                    # Calculate mutual information with proper error handling
-                    try:
-                        # Binarize feature differences for MI calculation
-                        feat_diff_bin = feat_diff > np.median(feat_diff[~np.isnan(feat_diff)])
-                        mi_score = mutual_info_score(feat_diff_bin, y)
-                        if np.isnan(mi_score):
-                            logger.warning(f"Feature '{feature}' produced NaN mutual information")
-                            mi_score = 0.0
-                    except Exception as e:
-                        logger.error(f"Error calculating mutual information for feature '{feature}': {str(e)}")
-                        mi_score = 0.0
-                
-                # Get model-based importance
-                model_effect = model_results['feature_effects'].get(feature, {})
-                effect_mean = model_effect.get('mean', 0.0)
-                effect_std = model_effect.get('std', 0.0)
-                
-                # Store results with diagnostics
-                importance[feature] = {
-                    'mutual_info': float(mi_score),
-                    'correlation': float(corr),
-                    'model_effect_mean': float(effect_mean),
-                    'model_effect_std': float(effect_std),
-                    'diagnostics': {
-                        'n_unique_differences': int(n_unique),
-                        'n_nan': int(n_nan),
-                        'n_inf': int(n_inf),
-                        'n_zero': int(n_zero),
-                        'total_samples': len(feat_diff)
-                    }
+            # Calculate feature differences
+            feat_diff = X1[:, i] - X2[:, i]
+            
+            # Diagnostic checks
+            n_total = len(feat_diff)
+            n_unique = len(np.unique(feat_diff[~np.isnan(feat_diff)]))
+            n_nan = np.sum(np.isnan(feat_diff))
+            n_inf = np.sum(np.isinf(feat_diff))
+            n_zero = np.sum(feat_diff == 0)
+            
+            logger.debug(f"Feature '{feature}' diagnostics:")
+            logger.debug(f"- Total values: {n_total}")
+            logger.debug(f"- Unique values: {n_unique}")
+            logger.debug(f"- NaN values: {n_nan}")
+            logger.debug(f"- Inf values: {n_inf}")
+            logger.debug(f"- Zero values: {n_zero}")
+            
+            # Initialize metrics
+            importance[feature] = {
+                'mutual_info': 0.0,
+                'correlation': 0.0,
+                'model_effect_mean': 0.0,
+                'model_effect_std': 0.0,
+                'combined_score': 0.0,
+                'diagnostics': {
+                    'n_total': n_total,
+                    'n_unique': n_unique,
+                    'n_nan': n_nan,
+                    'n_inf': n_inf,
+                    'n_zero': n_zero,
+                    'is_valid': True,
+                    'issues': []
                 }
+            }
+            
+            # Check for validity
+            if n_nan == n_total or n_inf == n_total:
+                importance[feature]['diagnostics']['is_valid'] = False
+                importance[feature]['diagnostics']['issues'].append(
+                    'all values invalid')
+                continue
                 
-                # Calculate combined score only if feature has valid metrics
-                if n_unique > 1 and n_nan == 0 and n_inf == 0:
-                    importance[feature]['combined_score'] = float(
-                        0.4 * abs(effect_mean) +
-                        0.3 * abs(corr) +
-                        0.3 * mi_score
-                    )
-                else:
-                    importance[feature]['combined_score'] = 0.0
-                    
-                # Log detailed results for each feature
-                logger.debug(f"""
-        Feature: {feature}
-        - Correlation: {corr:.3f}
-        - Mutual Information: {mi_score:.3f}
-        - Model Effect: {effect_mean:.3f} ± {effect_std:.3f}
-        - Combined Score: {importance[feature]['combined_score']:.3f}
-        - Diagnostics:
-            * Unique differences: {n_unique}
-            * NaN values: {n_nan}
-            * Inf values: {n_inf}
-            * Zero values: {n_zero}
-            * Total samples: {len(feat_diff)}
-        """)
+            if n_unique <= 1:
+                importance[feature]['diagnostics']['is_valid'] = False
+                importance[feature]['diagnostics']['issues'].append(
+                    'constant values')
+                continue
             
-            logger.info("Feature importance calculation completed")
+            # Get valid data for calculations
+            valid_mask = ~(np.isnan(feat_diff) | np.isinf(feat_diff))
+            if not np.any(valid_mask):
+                importance[feature]['diagnostics']['is_valid'] = False
+                importance[feature]['diagnostics']['issues'].append(
+                    'no valid values')
+                continue
+                
+            valid_diff = feat_diff[valid_mask]
+            valid_y = y[valid_mask]
             
-            # Log summary of problematic features
-            problematic = [f for f, imp in importance.items() 
-                        if imp['diagnostics']['n_unique_differences'] == 1 
-                        or imp['diagnostics']['n_nan'] > 0 
-                        or imp['diagnostics']['n_inf'] > 0]
-            if problematic:
-                logger.warning(f"Problematic features detected: {', '.join(problematic)}")
+            # Calculate correlation with proper error handling
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    corr, _ = stats.spearmanr(valid_diff, valid_y)
+                    if np.isnan(corr):
+                        corr = 0.0
+                        importance[feature]['diagnostics']['issues'].append(
+                            'correlation calculation failed')
+            except Exception as e:
+                logger.warning(f"Correlation calculation failed for {feature}: {str(e)}")
+                corr = 0.0
+                importance[feature]['diagnostics']['issues'].append(
+                    'correlation error')
             
-            return importance   
+            # Calculate mutual information
+            try:
+                # Binarize feature differences for MI calculation
+                median_diff = np.median(valid_diff)
+                feat_diff_bin = valid_diff > median_diff
+                mi_score = mutual_info_score(feat_diff_bin, valid_y)
+                if np.isnan(mi_score):
+                    mi_score = 0.0
+                    importance[feature]['diagnostics']['issues'].append(
+                        'MI calculation failed')
+            except Exception as e:
+                logger.warning(f"MI calculation failed for {feature}: {str(e)}")
+                mi_score = 0.0
+                importance[feature]['diagnostics']['issues'].append(
+                    'MI error')
+            
+            # Get model-based importance
+            model_effect = model_results.get('feature_effects', {}).get(feature, {})
+            effect_mean = model_effect.get('mean', 0.0)
+            effect_std = model_effect.get('std', 0.0)
+            
+            # Store results
+            importance[feature].update({
+                'mutual_info': float(mi_score),
+                'correlation': float(corr),
+                'model_effect_mean': float(effect_mean),
+                'model_effect_std': float(effect_std),
+                'combined_score': float(
+                    0.4 * abs(effect_mean) +
+                    0.3 * abs(corr) +
+                    0.3 * mi_score
+                )
+            })
+            
+            # Log results
+            logger.debug(f"""
+    Feature: {feature}
+    Correlation: {corr:.3f}
+    Mutual Information: {mi_score:.3f}
+    Model Effect: {effect_mean:.3f} ± {effect_std:.3f}
+    Combined Score: {importance[feature]['combined_score']:.3f}
+    Issues: {', '.join(importance[feature]['diagnostics']['issues']) if 
+            importance[feature]['diagnostics']['issues'] else 'none'}
+    """)
+        
+        return importance
     
     def _calculate_feature_correlations(
         self,
@@ -538,22 +683,9 @@ class FeatureEvaluator:
         X2: np.ndarray,
         feature_names: List[str]
     ) -> Tuple[pd.DataFrame, Dict[str, Dict[str, Any]]]:
-        """
-        Calculate feature correlations with diagnostics.
-        
-        Args:
-            X1: Feature matrix for first bigram in each pair
-            X2: Feature matrix for second bigram in each pair
-            feature_names: List of feature names
-            
-        Returns:
-            Tuple of:
-            - DataFrame containing correlation matrix
-            - Dictionary of correlation diagnostics
-        """
+        """Calculate feature correlations with detailed diagnostics."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-
             n_features = len(feature_names)
             corr_matrix = np.zeros((n_features, n_features))
             diagnostics = {
@@ -563,42 +695,84 @@ class FeatureEvaluator:
             }
             
             logger = logging.getLogger(__name__)
-            logger.info("Starting feature correlation analysis...")
+            logger.info("\nStarting feature correlation analysis...")
+            logger.info(f"Input shapes: X1: {X1.shape}, X2: {X2.shape}")
             
             # First analyze individual features
+            logger.info("\nFeature difference analysis:")
             for i, feature in enumerate(feature_names):
                 diff = X1[:, i] - X2[:, i]
+                
+                # Detailed analysis of the difference vector
+                valid_mask = ~(np.isnan(diff) | np.isinf(diff))
+                valid_diffs = diff[valid_mask]
+                
                 stats = {
-                    'n_unique': len(np.unique(diff)),
+                    'n_total': len(diff),
+                    'n_valid': len(valid_diffs),
+                    'n_unique': len(np.unique(valid_diffs)) if len(valid_diffs) > 0 else 0,
                     'n_nan': np.sum(np.isnan(diff)),
                     'n_inf': np.sum(np.isinf(diff)),
                     'n_zero': np.sum(diff == 0),
-                    'mean': np.mean(diff[~np.isnan(diff)]) if not np.all(np.isnan(diff)) else np.nan,
-                    'std': np.std(diff[~np.isnan(diff)]) if not np.all(np.isnan(diff)) else np.nan
+                    'mean': np.mean(valid_diffs) if len(valid_diffs) > 0 else np.nan,
+                    'std': np.std(valid_diffs) if len(valid_diffs) > 0 else np.nan,
+                    'min': np.min(valid_diffs) if len(valid_diffs) > 0 else np.nan,
+                    'max': np.max(valid_diffs) if len(valid_diffs) > 0 else np.nan
                 }
+                
                 diagnostics['feature_stats'][feature] = stats
                 
+                # Log detailed feature statistics
+                logger.info(f"\nFeature '{feature}':")
+                logger.info(f"  Total values: {stats['n_total']}")
+                logger.info(f"  Valid values: {stats['n_valid']}")
+                logger.info(f"  Unique values: {stats['n_unique']}")
+                if stats['n_unique'] < 5:
+                    unique_vals = np.unique(valid_diffs)
+                    logger.info(f"  Unique values found: {unique_vals}")
+                logger.info(f"  Range: [{stats['min']:.3f}, {stats['max']:.3f}]")
+                logger.info(f"  Mean ± std: {stats['mean']:.3f} ± {stats['std']:.3f}")
+                
                 if stats['n_unique'] == 1:
-                    logger.warning(f"Feature '{feature}' has constant differences")
+                    logger.warning(f"  WARNING: Feature has constant differences")
                 if stats['n_nan'] > 0:
-                    logger.warning(f"Feature '{feature}' has {stats['n_nan']} NaN differences")
+                    logger.warning(f"  WARNING: {stats['n_nan']} NaN differences")
+                if stats['n_inf'] > 0:
+                    logger.warning(f"  WARNING: {stats['n_inf']} infinite differences")
+                if stats['n_zero'] == stats['n_valid']:
+                    logger.warning(f"  WARNING: All valid differences are zero")
             
-            # Then calculate correlations
+            # Then calculate correlations with detailed logging
+            logger.info("\nCalculating feature correlations:")
             for i in range(n_features):
                 for j in range(n_features):
                     diff_i = X1[:, i] - X2[:, i]
                     diff_j = X1[:, j] - X2[:, j]
                     
                     # Skip if either feature has issues
-                    if (len(np.unique(diff_i)) == 1 or len(np.unique(diff_j)) == 1 or
-                        np.any(np.isnan(diff_i)) or np.any(np.isnan(diff_j)) or
-                        np.any(np.isinf(diff_i)) or np.any(np.isinf(diff_j))):
+                    has_issues = False
+                    reasons = []
+                    
+                    if len(np.unique(diff_i[~np.isnan(diff_i)])) == 1:
+                        reasons.append(f"{feature_names[i]} has constant differences")
+                        has_issues = True
+                    if len(np.unique(diff_j[~np.isnan(diff_j)])) == 1:
+                        reasons.append(f"{feature_names[j]} has constant differences")
+                        has_issues = True
+                    if np.any(np.isnan(diff_i)) or np.any(np.isnan(diff_j)):
+                        reasons.append("NaN values present")
+                        has_issues = True
+                    if np.any(np.isinf(diff_i)) or np.any(np.isinf(diff_j)):
+                        reasons.append("Infinite values present")
+                        has_issues = True
+                    
+                    if has_issues:
                         corr = 0.0
                         if i != j:  # Don't report self-correlations
                             diagnostics['correlation_issues'].append({
                                 'feature1': feature_names[i],
                                 'feature2': feature_names[j],
-                                'reason': 'constant or invalid values'
+                                'reason': '; '.join(reasons)
                             })
                     else:
                         try:
@@ -613,7 +787,8 @@ class FeatureEvaluator:
                                         'reason': 'correlation calculation failed'
                                     })
                         except Exception as e:
-                            logger.error(f"Error calculating correlation between '{feature_names[i]}' and '{feature_names[j]}': {str(e)}")
+                            logger.error(f"Error calculating correlation between "
+                                    f"'{feature_names[i]}' and '{feature_names[j]}': {str(e)}")
                             corr = 0.0
                     
                     corr_matrix[i, j] = corr
@@ -626,21 +801,11 @@ class FeatureEvaluator:
                             'correlation': float(corr)
                         })
             
-            # Log summary statistics
-            logger.info(f"Found {len(diagnostics['correlation_issues'])} correlation calculation issues")
-            logger.info(f"Found {len(diagnostics['highly_correlated_pairs'])} highly correlated feature pairs")
-            
-            if diagnostics['highly_correlated_pairs']:
-                logger.info("Highly correlated feature pairs:")
-                for pair in sorted(diagnostics['highly_correlated_pairs'], 
-                                key=lambda x: abs(x['correlation']), reverse=True):
-                    logger.info(f"  {pair['feature1']} ↔ {pair['feature2']}: {pair['correlation']:.3f}")
-            
             return (pd.DataFrame(corr_matrix, 
-                                index=feature_names,
-                                columns=feature_names),
+                            index=feature_names,
+                            columns=feature_names),
                     diagnostics)
- 
+     
     def _generate_recommendations(
         self,
         importance: Dict[str, Dict[str, float]],
@@ -697,7 +862,7 @@ class FeatureEvaluator:
             'weak_features': weak_features,
             'correlated_groups': correlated_groups
         }
-
+    
     def _save_diagnostic_report(
         self,
         diagnostics: Dict[str, Any],
@@ -738,7 +903,7 @@ class FeatureEvaluator:
                 for k, v in metrics.items():
                     if k != 'iteration':
                         f.write(f"  {k}: {v}\n")
-
+    
     def _save_detailed_report(
         self,
         results: Dict[str, Any],

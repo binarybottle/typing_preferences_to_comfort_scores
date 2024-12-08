@@ -117,7 +117,10 @@ class PreferenceDataset:
         """Get list of all feature names."""
         if not self.preferences:
             return []
-        return list(self.preferences[0].features1.keys())
+        feature_names = list(self.preferences[0].features1.keys())
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Available features: {feature_names}")
+        return feature_names
 
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
