@@ -1,6 +1,8 @@
 # engram3/models/bayesian.py
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
+import warnings 
+from scipy import stats 
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import roc_auc_score, accuracy_score
 import logging
@@ -11,7 +13,96 @@ from engram3.models.base import PreferenceModel
 logger = logging.getLogger(__name__)
 
 class BayesianPreferenceModel(PreferenceModel):
-    def cross_validate(self, dataset: PreferenceDataset, n_splits: int = 5) -> Dict[str, List[float]]:
+    def __init__(self):
+        self.feature_weights = None
+        
+    def fit(self, dataset: PreferenceDataset) -> None:
+        """
+        Fit the Bayesian preference model.
+        
+        Args:
+            dataset: PreferenceDataset containing training data
+        """
+        try:
+            # For now, implement a simple version that learns feature weights
+            feature_names = dataset.get_feature_names()
+            self.feature_weights = {name: 0.0 for name in feature_names}
+            
+            # Simple weight calculation based on preference correlations
+            for feature in feature_names:
+                diffs = []
+                prefs = []
+                for pref in dataset.preferences:
+                    try:
+                        diff = pref.features1[feature] - pref.features2[feature]
+                        diffs.append(diff)
+                        prefs.append(1.0 if pref.preferred else -1.0)
+                    except KeyError:
+                        continue
+                
+                if diffs:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        correlation = stats.spearmanr(diffs, prefs).correlation
+                        self.feature_weights[feature] = (
+                            correlation if not np.isnan(correlation) else 0.0
+                        )
+                        
+        except Exception as e:
+            logger.error(f"Model fitting failed: {str(e)}")
+            raise
+                
+    def predict_preference(self, bigram1: str, bigram2: str) -> float:
+        """
+        Predict preference probability for bigram1 over bigram2.
+        
+        Returns:
+            Float between 0 and 1, probability of preferring bigram1
+        """
+        if self.feature_weights is None:
+            raise RuntimeError("Model must be fit before making predictions")
+            
+        try:
+            # Extract features for both bigrams
+            from ..features.extraction import extract_bigram_features
+            from ..features.definitions import (
+                column_map, row_map, finger_map,
+                engram_position_values, row_position_values
+            )
+            
+            # Get features for each bigram
+            features1 = extract_bigram_features(
+                bigram1[0], bigram1[1],
+                column_map, row_map, finger_map,
+                engram_position_values, row_position_values
+            )
+            
+            features2 = extract_bigram_features(
+                bigram2[0], bigram2[1],
+                column_map, row_map, finger_map,
+                engram_position_values, row_position_values
+            )
+            
+            # Calculate scores using feature weights
+            score1 = sum(self.feature_weights.get(f, 0.0) * features1.get(f, 0.0) 
+                        for f in self.feature_weights)
+            score2 = sum(self.feature_weights.get(f, 0.0) * features2.get(f, 0.0) 
+                        for f in self.feature_weights)
+            
+            # Convert to probability using sigmoid
+            return 1 / (1 + np.exp(-(score1 - score2)))
+            
+        except Exception as e:
+            logger.error(f"Prediction failed: {str(e)}")
+            return 0.5  # Return uncertainty in case of error
+            
+    def get_feature_weights(self) -> Dict[str, float]:
+        """Get the learned feature weights."""
+        if self.feature_weights is None:
+            raise RuntimeError("Model must be fit before getting weights")
+        return self.feature_weights.copy()
+    
+    def cross_validate(self, dataset: PreferenceDataset, n_splits: int = 5) -> Dict[str, Any]:
         """
         Perform cross-validation with participant-based splits.
         

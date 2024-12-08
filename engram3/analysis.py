@@ -1,6 +1,6 @@
 from typing import Dict, List, Any
 import numpy as np
-from scipy import stats
+import scipy.stats
 import logging
 import warnings
 
@@ -43,7 +43,7 @@ def analyze_feature_importance(dataset: PreferenceDataset) -> Dict[str, Any]:
             # Calculate correlation with proper error handling
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                correlation = stats.spearmanr(diffs, prefs)
+                correlation = scipy.stats.spearmanr(diffs, prefs)
                 results['correlations'][feature] = (
                     correlation.correlation if not np.isnan(correlation.correlation) else 0.0
                 )

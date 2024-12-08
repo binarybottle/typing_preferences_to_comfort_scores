@@ -3,12 +3,12 @@ from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 import scipy.stats
+import warnings
 from sklearn.metrics import mutual_info_score
 import logging
 from pathlib import Path
 from collections import defaultdict
 import json
-import warnings
 
 from engram3.data import PreferenceDataset
 from engram3.models.bayesian import BayesianPreferenceModel
@@ -45,106 +45,138 @@ class FeatureEvaluator:
         ) -> Tuple[List[str], Dict[str, Any]]:
         """
         Run feature selection multiple times to get stable feature recommendations.
-        
-        Args:
-            dataset: PreferenceDataset containing preferences
-            n_repetitions: Number of times to repeat feature evaluation
-            output_dir: Optional directory to save results
-            
-        Returns:
-            Tuple of:
-            - List of recommended features
-            - Dictionary of diagnostics
         """        
         # Log initial dataset info
         feature_names = dataset.get_feature_names()
         logger.info(f"\nStarting feature selection:")
+        logger.info(f"Analyzing {len(feature_names)} features")
+
+        # Validate features before processing
+        valid_features = []
+        problematic_features = set()
+        
+        # Initial feature validation
+        X1, X2, y = self._prepare_feature_matrices(dataset)
+        for i, feature in enumerate(feature_names):
+            diff = X1[:, i] - X2[:, i]
+            n_unique = len(np.unique(diff[~np.isnan(diff)]))
+            n_nan = np.sum(np.isnan(diff))
+            n_inf = np.sum(np.isinf(diff))
+            
+            if n_unique <= 1:
+                logger.warning(f"Feature '{feature}' has constant differences - will be excluded")
+                problematic_features.add(feature)
+            elif n_nan > 0:
+                logger.warning(f"Feature '{feature}' has {n_nan} NaN values - will be excluded")
+                problematic_features.add(feature)
+            elif n_inf > 0:
+                logger.warning(f"Feature '{feature}' has {n_inf} infinite values - will be excluded")
+                problematic_features.add(feature)
+            else:
+                valid_features.append(feature)
+        
+        logger.info(f"Using {len(valid_features)} valid features for selection")
+        if problematic_features:
+            logger.info(f"Excluded {len(problematic_features)} problematic features")
 
         # Collect results and diagnostics across repetitions
         feature_results = defaultdict(list)
         all_diagnostics = {
             'importance_diagnostics': [],
             'correlation_diagnostics': [],
-            'problematic_features': set(),
+            'problematic_features': problematic_features,
             'iteration_metrics': []
         }
                     
         for iter_idx in range(n_repetitions):
             logger.debug(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")
             
-            # Prepare feature matrices
-            X1, X2, y = self._prepare_feature_matrices(dataset)
-            feature_names = dataset.get_feature_names()
-            
-            # Calculate correlations once
-            correlations, correlation_diagnostics = self._calculate_feature_correlations(
-                X1, X2, feature_names)
-            
-            # Run cross-validation
-            model = BayesianPreferenceModel()
-            cv_results = model.cross_validate(dataset)  # Store the results
-            
-            # Evaluate features using pre-calculated correlations
-            eval_results = self.evaluate_features(
-                dataset, 
-                cv_results,  # Pass the stored results
-                output_dir=output_dir,
-                feature_matrices=(X1, X2, y),
-                correlation_results=(correlations, correlation_diagnostics)
-            )
-            
-            # Store basic results
-            for feature in feature_names:
-                feature_results[feature].append({
-                    'importance': eval_results['importance'][feature],
-                    'stability': eval_results['stability'][feature]
+            try:
+                # Calculate correlations once
+                correlations, correlation_diagnostics = self._calculate_feature_correlations(
+                    X1, X2, feature_names)
+                
+                # Run cross-validation
+                model = BayesianPreferenceModel()
+                cv_results = model.cross_validate(dataset)
+                
+                if not cv_results.get('feature_effects'):
+                    logger.warning("No feature effects obtained from cross-validation")
+                    continue
+                
+                # Evaluate features using pre-calculated correlations
+                eval_results = self.evaluate_features(
+                    dataset, 
+                    cv_results,
+                    output_dir=output_dir,
+                    feature_matrices=(X1, X2, y),
+                    correlation_results=(correlations, correlation_diagnostics)
+                )
+                
+                # Store basic results
+                for feature in valid_features:  # Only store results for valid features
+                    if feature in eval_results['importance']:
+                        feature_results[feature].append({
+                            'importance': eval_results['importance'][feature],
+                            'stability': eval_results['stability'][feature]
+                        })
+                
+                # Store diagnostics
+                all_diagnostics['importance_diagnostics'].append(
+                    eval_results.get('diagnostics', {}))
+                all_diagnostics['correlation_diagnostics'].append(correlation_diagnostics)
+                
+                # Store iteration metrics
+                all_diagnostics['iteration_metrics'].append({
+                    'iteration': iter_idx + 1,
+                    'n_features': len(valid_features),
+                    'n_problematic': len(problematic_features),
+                    'correlation_issues': len(correlation_diagnostics.get('correlation_issues', [])),
+                    'highly_correlated_pairs': len(correlation_diagnostics.get('highly_correlated_pairs', []))
                 })
-            
-            # Store diagnostics
-            all_diagnostics['importance_diagnostics'].append(
-                eval_results.get('diagnostics', {}))
-            all_diagnostics['correlation_diagnostics'].append(correlation_diagnostics)
-            
-            # Track problematic features
-            for feature, diag in eval_results.get('diagnostics', {}).items():
-                if (diag.get('n_unique_differences', 0) == 1 or
-                    diag.get('n_nan', 0) > 0 or
-                    diag.get('n_inf', 0) > 0):
-                    all_diagnostics['problematic_features'].add(feature)
-            
-            # Store iteration metrics
-            all_diagnostics['iteration_metrics'].append({
-                'iteration': iter_idx + 1,
-                'n_features': len(feature_names),
-                'n_problematic': len(all_diagnostics['problematic_features']),
-                'correlation_issues': len(correlation_diagnostics.get('correlation_issues', [])),
-                'highly_correlated_pairs': len(correlation_diagnostics.get('highly_correlated_pairs', []))
-            })
+                
+            except Exception as e:
+                logger.error(f"Error in iteration {iter_idx + 1}: {str(e)}")
+                continue
+        
+        if not feature_results:
+            logger.warning("No valid results collected across iterations")
+            return [], all_diagnostics
         
         # Aggregate results and make final recommendations
         final_recommendations = self._analyze_selection_results(
             feature_results, all_diagnostics)
         
-        # Save results and diagnostics if output directory provided
+        # Save results if output directory provided
         if output_dir:
-            self._save_diagnostic_report(all_diagnostics, output_dir)
-            self._save_detailed_report({
-                'selected_features': final_recommendations['selected_features'],
-                'rejected_features': final_recommendations.get('rejected_features', []),
-                'all_features': feature_names,
-                'importance': eval_results.get('importance', {}),
-                'stability': eval_results.get('stability', {})
-            }, output_dir)
+            try:
+                self._save_diagnostic_report(all_diagnostics, output_dir)
+                self._save_detailed_report({
+                    'selected_features': final_recommendations['selected_features'],
+                    'rejected_features': final_recommendations.get('rejected_features', []),
+                    'all_features': feature_names,
+                    'valid_features': valid_features,
+                    'importance': eval_results.get('importance', {}),
+                    'stability': eval_results.get('stability', {})
+                }, output_dir)
+            except Exception as e:
+                logger.error(f"Error saving results: {str(e)}")
         
-        # Final summary only
+        # Final summary
         logger.info("\nFeature Selection Results:")
+        logger.info(f"- Analyzed {len(feature_names)} total features")
+        logger.info(f"- {len(valid_features)} valid features")
+        logger.info(f"- {len(problematic_features)} problematic features")
         logger.info(f"- Selected {len(final_recommendations['selected_features'])} features")
+        
         if final_recommendations['selected_features']:
-            logger.info("Selected features:")
+            logger.info("\nSelected features:")
             for feature in final_recommendations['selected_features']:
                 logger.info(f"  - {feature}")
-        logger.info(f"Results saved to {output_dir}")
-
+        
+        if output_dir:
+            logger.info(f"\nResults saved to {output_dir}")
+        
         return (final_recommendations['selected_features'], all_diagnostics)
     
     def evaluate_features(
@@ -165,50 +197,58 @@ class FeatureEvaluator:
             feature_matrices: Optional tuple of (X1, X2, y) matrices
             correlation_results: Optional tuple of (correlations, diagnostics)
         """
-        feature_names = dataset.get_feature_names()
-        
-        # Use provided matrices if available, otherwise calculate them
-        if feature_matrices is not None:
-            X1, X2, y = feature_matrices
-        else:
-            X1, X2, y = self._prepare_feature_matrices(dataset)
-        
-        # Calculate feature importance
-        importance = self._calculate_feature_importance(
-            X1, X2, y, feature_names, model_results)
-        
-        # Use provided correlation results or calculate new ones
-        if correlation_results is not None:
-            correlations, corr_diagnostics = correlation_results
-        else:
-            correlations, corr_diagnostics = self._calculate_feature_correlations(
-                X1, X2, feature_names)
+        try:
+            feature_names = dataset.get_feature_names()
             
-        # Get stability metrics from model results
-        stability = model_results['stability']
+            # Use provided matrices if available, otherwise calculate them
+            if feature_matrices is not None:
+                X1, X2, y = feature_matrices
+            else:
+                X1, X2, y = self._prepare_feature_matrices(dataset)
             
-        # Generate recommendations
-        recommendations = self._generate_recommendations(
-            importance, stability, correlations, corr_diagnostics)
+            # Calculate feature importance
+            # Calculate feature importance
+            logger.info("Calculating feature importance...")
+            importance = self._calculate_feature_importance(X1, X2, y, feature_names, model_results)
+            if not importance:
+                logger.warning("No feature importance scores were calculated")
             
-        # Organize results
-        results = {
-            'importance': importance,
-            'stability': stability,
-            'correlations': correlations,
-            'correlation_diagnostics': corr_diagnostics,
-            'recommendations': recommendations,
-            'selected_features': recommendations['strong_features'],  # Add this line
-            'rejected_features': recommendations.get('weak_features', []),  # And this line
-            'all_features': feature_names
-        }
+            # Use provided correlation results or calculate new ones
+            if correlation_results is not None:
+                correlations, corr_diagnostics = correlation_results
+            else:
+                correlations, corr_diagnostics = self._calculate_feature_correlations(
+                    X1, X2, feature_names)
+                
+            # Get stability metrics from model results
+            stability = model_results['stability']
+                
+            # Generate recommendations
+            recommendations = self._generate_recommendations(
+                importance, stability, correlations, corr_diagnostics)
+                
+            # Organize results
+            results = {
+                'importance': importance,
+                'stability': stability,
+                'correlations': correlations,
+                'correlation_diagnostics': corr_diagnostics,
+                'recommendations': recommendations,
+                'selected_features': recommendations['strong_features'],  # Add this line
+                'rejected_features': recommendations.get('weak_features', []),  # And this line
+                'all_features': feature_names
+            }
+            
+            # Save detailed report if output_dir provided
+            if output_dir:
+                self._save_detailed_report(results, output_dir)
+                
+            return results
         
-        # Save detailed report if output_dir provided
-        if output_dir:
-            self._save_detailed_report(results, output_dir)
-            
-        return results
-    
+        except Exception as e:
+            logger.error(f"Feature evaluation failed: {str(e)}")
+            raise
+        
     def _analyze_selection_results(
         self,
         feature_results: Dict[str, List[Dict]],
@@ -569,7 +609,7 @@ class FeatureEvaluator:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    corr, _ = stats.spearmanr(valid_diff, valid_y)
+                    corr, _ = scipy.stats.spearmanr(valid_diff, valid_y)
                     if np.isnan(corr):
                         corr = 0.0
                         importance[feature]['diagnostics']['issues'].append(
@@ -727,15 +767,8 @@ class FeatureEvaluator:
                         try:
                             with warnings.catch_warnings():
                                 warnings.simplefilter("ignore")
-                                correlation_result = scipy.stats.spearmanr(diff_i, diff_j)
-                                corr = correlation_result.correlation if not np.isnan(correlation_result.correlation) else 0.0
-                                if np.isnan(corr):
-                                    corr = 0.0
-                                    diagnostics['correlation_issues'].append({
-                                        'feature1': feature_names[i],
-                                        'feature2': feature_names[j],
-                                        'reason': 'correlation calculation failed'
-                                    })
+                                result = scipy.stats.spearmanr(diff_i, diff_j)
+                                corr = result.correlation if not np.isnan(result.correlation) else 0.0
                         except Exception as e:
                             logger.error(f"Error calculating correlation between "
                                     f"'{feature_names[i]}' and '{feature_names[j]}': {str(e)}")

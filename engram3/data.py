@@ -233,10 +233,9 @@ class PreferenceDataset:
             'violation_rate': violation_rate
         }
         
-        print("\nTransitivity check results:")
-        print(f"Total transitive triples checked: {triples}")
-        print(f"Number of violations: {violations}")
-        print(f"Violation rate: {violation_rate:.2%}")
+        logger.info("\nTransitivity check results:")
+        logger.info(f"Total transitive triples checked: {triples}")
+        logger.info(f"Number of violations: {violations}")
         
         return results
     
