@@ -1,9 +1,12 @@
 # Data settings
 data:
-  #file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
-  #file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
-  #file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
-  file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
+  #input_file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
+  #input_file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
+  #input_file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
+  input_file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
+  output_dir: "output"
+
+
   splits:
     test_ratio: 0.2
     random_seed: 42
@@ -29,24 +32,13 @@ features:
 
 # Feature evaluation settings
 feature_evaluation:
-  enabled: true
   thresholds:
     importance: 0.05
     stability: 0.7
     correlation: 0.7
-  analysis:
-    check_transitivity: true
-    analyze_features: true
-    find_sparse_regions: true
-    evaluate_features: true
   validation:
-    perform_stability_check: true
-    min_training_samples: 1000
-    min_validation_samples: 200
     outlier_detection: true
     outlier_threshold: 3.0
-  reporting:
-    save_raw_metrics: true
   output_dir: "output/feature_evaluation"
 
 recommendations:
@@ -67,11 +59,6 @@ model:
 
 # Logging settings
 logging:
-  # set level to "DEBUG" or "INFO" at the top of main.py
+  level: "logging.INFO"  # set level to "DEBUG" or "INFO" at the top of main.py
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "output/logs/pipeline.log"
-
-# Output paths
-paths:
-  base: "output"
-  analysis: "output/analysis"
+  output_file: "output/logs/pipeline.log"

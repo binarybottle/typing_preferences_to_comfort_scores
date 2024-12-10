@@ -1,9 +1,7 @@
 """
+English language bigram frequencies
+
 The ngram data below come from Peter Norvig's table: http://www.norvig.com/mayzner.html
-    
-NOTE: To compute an optimized layout for another language, or based on another corpus, 
-you can run the tally_bigrams() function in the engram GitHub repo and replace 
-bigram_frequencies below before running the rest of the code.
 """
 
 import numpy as np

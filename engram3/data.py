@@ -5,11 +5,8 @@ import logging
 import pandas as pd
 import numpy as np
 
-from engram3.features.definitions import (
-    column_map, row_map, finger_map, 
-    engram_position_values, row_position_values
-)
-from engram3.features.extraction import extract_bigram_features
+from engram3.features.keymaps import *
+from engram3.features.extraction import extract_bigram_features, extract_same_letter_features
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +33,6 @@ class Preference:
         """Return detailed string representation."""
         return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
     
-# data.py
 class PreferenceDataset:
 
     REQUIRED_COLUMNS = {
@@ -53,23 +49,39 @@ class PreferenceDataset:
 
     def __init__(self, 
                  file_path: Union[str, Path],
-                 precomputed_features: Dict[str, Any]):
-        """Initialize dataset from CSV file with precomputed features."""
+                 column_map: Dict[str, int],
+                 row_map: Dict[str, int],
+                 finger_map: Dict[str, int],
+                 engram_position_values: Dict[str, float],
+                 row_position_values: Dict[str, float],
+                 precomputed_features: Optional[Dict] = None):
+        """Initialize dataset from CSV file."""
         self.file_path = Path(file_path)
         self.preferences: List[Preference] = []
         self.participants: Set[str] = set()
         
+        # Store layout maps
+        self.column_map = column_map
+        self.row_map = row_map
+        self.finger_map = finger_map
+        self.engram_position_values = engram_position_values
+        self.row_position_values = row_position_values
+        
         # Store precomputed features
-        self.all_bigrams = precomputed_features['all_bigrams']
-        self.all_bigram_features = precomputed_features['all_bigram_features']
-        self.feature_names = precomputed_features['feature_names']
-        self.samekey_bigrams = precomputed_features['samekey_bigrams']
-        self.samekey_bigram_features = precomputed_features['samekey_bigram_features']
-        self.samekey_feature_names = precomputed_features['samekey_feature_names']
+        if precomputed_features:
+            self.all_bigrams = precomputed_features['all_bigrams']
+            self.all_bigram_features = precomputed_features['all_bigram_features']
+            self.feature_names = precomputed_features['feature_names']
         
         # Load and process data
         print(f"Loading data from {self.file_path}")
-        self._load_csv()    
+        self._load_csv()  
+
+    def get_feature_names(self) -> List[str]:
+        """Get list of all feature names."""
+        if not self.preferences:
+            return []
+        return list(self.preferences[0].features1.keys())
 
     def _load_csv(self):
         """Load and validate preference data from CSV."""
@@ -94,13 +106,12 @@ class PreferenceDataset:
                     success_count += 1
                     
                     if success_count == 1:
-                        print("\nFirst successful preference creation:")
-                        print(f"Bigram1: {pref.bigram1}")
-                        print(f"Bigram2: {pref.bigram2}")
+                        print(f"Bigram 1: {pref.bigram1}")
+                        print(f"Bigram 2: {pref.bigram2}")
                         print(f"Participant: {pref.participant_id}")
                         print(f"Preferred: {pref.preferred}")
-                        print(f"Features1: {pref.features1}")
-                        print(f"Features2: {pref.features2}")
+                        print(f"Features Bigram 1: {pref.features1}")
+                        print(f"Features Bigram 2: {pref.features2}")
                 except Exception as e:
                     print(f"\nError processing row {idx}:")
                     print(f"Error: {str(e)}")
@@ -118,40 +129,75 @@ class PreferenceDataset:
             print(f"Error loading CSV: {str(e)}")
             raise
 
-    def get_feature_names(self) -> List[str]:
-        """Get list of all feature names."""
-        if not self.preferences:
-            return []
-        return list(self.preferences[0].features1.keys())
-
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
-        # Use precomputed features instead of computing them
         bigram1 = (row['bigram1'][0], row['bigram1'][1])
         bigram2 = (row['bigram2'][0], row['bigram2'][1])
-        
-        features1 = self.all_bigram_features.get(bigram1, {})
-        features2 = self.all_bigram_features.get(bigram2, {})
-        
-        # Add timing and any other non-precomputed features
-        features1.update({
-            'typing_time': float(row['bigram1_time'])
-        })
-        features2.update({
-            'typing_time': float(row['bigram2_time'])
-        })
 
-        return Preference(
-            bigram1=str(row['bigram1']),
-            bigram2=str(row['bigram2']),
-            participant_id=str(row['user_id']),
-            preferred=(row['chosen_bigram'] == row['bigram1']),
-            features1=features1,
-            features2=features2,
-            confidence=float(row['abs_sliderValue']),
-            typing_time1=float(row['bigram1_time']),
-            typing_time2=float(row['bigram2_time'])
-        )
+        try:
+            # Extract bigram features
+            if bigram1[0] == bigram1[1]:  # Same-letter bigram
+                features1 = extract_same_letter_features(bigram1[0], 
+                                column_map, finger_map, 
+                                engram_position_values, row_position_values)
+            else:
+                features1 = extract_bigram_features(
+                    bigram1[0], bigram1[1],
+                    self.column_map, self.row_map, self.finger_map,
+                    self.engram_position_values, self.row_position_values
+                )
+
+            if bigram2[0] == bigram2[1]:  # Same-letter bigram
+                features2 = extract_same_letter_features(bigram2[0],
+                                column_map, finger_map, 
+                                engram_position_values, row_position_values)
+            
+            else:
+                features2 = extract_bigram_features(
+                    bigram2[0], bigram2[1],
+                    self.column_map, self.row_map, self.finger_map,
+                    self.engram_position_values, self.row_position_values
+                )
+
+            # Handle timing information
+            try:
+                time1 = float(row['bigram1_time'])
+                time2 = float(row['bigram2_time'])
+                
+                if np.isnan(time1) or np.isnan(time2):
+                    logger.warning(f"NaN timing values for bigrams {bigram1}-{bigram2}")
+                    # Option 1: Use None
+                    time1 = None if np.isnan(time1) else time1
+                    time2 = None if np.isnan(time2) else time2
+                    # Option 2: Use dataset median (would need to be calculated)
+                    # time1 = self.median_timing if np.isnan(time1) else time1
+                    # time2 = self.median_timing if np.isnan(time2) else time2
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid timing values for bigrams {bigram1}-{bigram2}: {e}")
+                time1 = None
+                time2 = None
+
+            # Add timing to features
+            features1['typing_time'] = time1
+            features2['typing_time'] = time2
+
+            return Preference(
+                bigram1=str(row['bigram1']),
+                bigram2=str(row['bigram2']),
+                participant_id=str(row['user_id']),
+                preferred=(row['chosen_bigram'] == row['bigram1']),
+                features1=features1,
+                features2=features2,
+                confidence=float(row['abs_sliderValue']),
+                typing_time1=time1,
+                typing_time2=time2
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing row {row.name}:")
+            logger.error(f"Bigrams: {bigram1}-{bigram2}")
+            logger.error(f"Error: {str(e)}")
+            raise
 
     def split_by_participants(self, test_fraction: float = 0.2) -> Tuple['PreferenceDataset', 'PreferenceDataset']:
         """Split into train/test keeping participants separate."""

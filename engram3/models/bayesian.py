@@ -6,13 +6,13 @@ from scipy import stats
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import roc_auc_score, accuracy_score
 import logging
+from collections import defaultdict
 
 from engram3.data import PreferenceDataset
-from engram3.models.base import PreferenceModel
 
 logger = logging.getLogger(__name__)
 
-class BayesianPreferenceModel(PreferenceModel):
+class BayesianPreferenceModel():
     
     def __init__(self, config: Optional[Dict] = None):
         self.feature_weights = None
@@ -22,27 +22,31 @@ class BayesianPreferenceModel(PreferenceModel):
         self.target_accept = self.config.get('model', {}).get('target_accept', 0.85)
         
     def fit(self, dataset: PreferenceDataset) -> None:
-        """
-        Fit the Bayesian preference model.
-        
-        Args:
-            dataset: PreferenceDataset containing training data
-        """
+        """Fit the model to training data."""
         try:
-            # For now, implement a simple version that learns feature weights
+            # Get feature names once
             feature_names = dataset.get_feature_names()
             self.feature_weights = {name: 0.0 for name in feature_names}
             
-            # Simple weight calculation based on preference correlations
+            # Calculate feature differences and handle None/NaN
             for feature in feature_names:
                 diffs = []
                 prefs = []
                 for pref in dataset.preferences:
+                    val1 = pref.features1.get(feature)
+                    val2 = pref.features2.get(feature)
+                    
+                    # Skip if either value is None/NaN
+                    if val1 is None or val2 is None:
+                        continue
+                    
                     try:
-                        diff = pref.features1[feature] - pref.features2[feature]
-                        diffs.append(diff)
-                        prefs.append(1.0 if pref.preferred else -1.0)
-                    except KeyError:
+                        diff = float(val1) - float(val2)
+                        if not np.isnan(diff):
+                            diffs.append(diff)
+                            prefs.append(1.0 if pref.preferred else -1.0)
+                    except (TypeError, ValueError) as e:
+                        logger.warning(f"Error calculating difference for feature {feature}: {e}")
                         continue
                 
                 if diffs:
@@ -56,37 +60,46 @@ class BayesianPreferenceModel(PreferenceModel):
         except Exception as e:
             logger.error(f"Model fitting failed: {str(e)}")
             raise
-                
+
     def predict_preference(self, bigram1: str, bigram2: str) -> float:
-        """
-        Predict preference probability for bigram1 over bigram2.
-        
-        Returns:
-            Float between 0 and 1, probability of preferring bigram1
-        """
+        """Predict preference probability."""
         if self.feature_weights is None:
             raise RuntimeError("Model must be fit before making predictions")
             
         try:
             # Extract features for both bigrams
-            from ..features.extraction import extract_bigram_features
-            from ..features.definitions import (
+            from ..features.extraction import extract_bigram_features, extract_same_letter_features
+            from ..features.keymaps import (
                 column_map, row_map, finger_map,
                 engram_position_values, row_position_values
             )
             
             # Get features for each bigram
-            features1 = extract_bigram_features(
-                bigram1[0], bigram1[1],
-                column_map, row_map, finger_map,
-                engram_position_values, row_position_values
-            )
-            
-            features2 = extract_bigram_features(
-                bigram2[0], bigram2[1],
-                column_map, row_map, finger_map,
-                engram_position_values, row_position_values
-            )
+            if bigram1[0] == bigram1[1]:  # Same-letter bigram
+                features1 = extract_same_letter_features(
+                    bigram1[0], 
+                    column_map, finger_map,
+                    engram_position_values, row_position_values
+                )
+            else:
+                features1 = extract_bigram_features(
+                    bigram1[0], bigram1[1],
+                    column_map, row_map, finger_map,
+                    engram_position_values, row_position_values
+                )
+                
+            if bigram2[0] == bigram2[1]:  # Same-letter bigram
+                features2 = extract_same_letter_features(
+                    bigram2[0],
+                    column_map, finger_map,
+                    engram_position_values, row_position_values
+                )
+            else:
+                features2 = extract_bigram_features(
+                    bigram2[0], bigram2[1],
+                    column_map, row_map, finger_map,
+                    engram_position_values, row_position_values
+                )
             
             # Calculate scores using feature weights
             score1 = sum(self.feature_weights.get(f, 0.0) * features1.get(f, 0.0) 
@@ -100,78 +113,40 @@ class BayesianPreferenceModel(PreferenceModel):
         except Exception as e:
             logger.error(f"Prediction failed: {str(e)}")
             return 0.5  # Return uncertainty in case of error
-            
+        
     def get_feature_weights(self) -> Dict[str, float]:
         """Get the learned feature weights."""
         if self.feature_weights is None:
             raise RuntimeError("Model must be fit before getting weights")
         return self.feature_weights.copy()
-    
+        
     def cross_validate(
         self, 
         dataset: PreferenceDataset, 
         n_splits: Optional[int] = None
     ) -> Dict[str, Any]:
-        """
-        Perform cross-validation with participant-based splits.
-        
-        Args:
-            dataset: PreferenceDataset containing all data
-            n_splits: Number of cross-validation folds
-            
-        Returns:
-            Dictionary containing:
-            - metrics: Dict of lists containing scores for each fold
-            - feature_effects: Dict of feature effect sizes across folds
-            - stability: Dict of feature stability metrics
-            - fold_details: Optional detailed fold information
-            - raw_metrics: Optional raw prediction data
-        """
+        """Perform cross-validation with participant-based splits."""
         if n_splits is None:
             n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
-
-        # Get validation settings from config
-        validation_config = self.config.get('feature_evaluation', {}).get('validation', {})
-        reporting_config = self.config.get('feature_evaluation', {}).get('reporting', {})
         
-        min_samples = validation_config.get('min_training_samples', 1000)
-        min_val_samples = validation_config.get('min_validation_samples', 200)
-        perform_outlier_detection = validation_config.get('outlier_detection', True)
-        outlier_threshold = validation_config.get('outlier_threshold', 3.0)
-        save_fold_details = reporting_config.get('save_fold_details', True)
-        save_raw_metrics = reporting_config.get('save_raw_metrics', True)
+        # Get feature names upfront
+        feature_names = dataset.get_feature_names()
+        logger.debug(f"Features for cross-validation: {feature_names}")
         
-        # Validate dataset size
-        if len(dataset.preferences) < min_samples:
-            logger.warning(f"Dataset has fewer than {min_samples} samples")
+        # Initialize metrics storage
+        metrics = defaultdict(list)
+        #feature_effects = {feature: [] for feature in feature_names}  # Initialize for all features
         
-        expected_val_size = len(dataset.preferences) // n_splits
-        if expected_val_size < min_val_samples:
-            logger.warning(f"Expected validation set size ({expected_val_size}) "
-                        f"is less than minimum ({min_val_samples})")
-        
-        # Initialize storage
-        feature_effects = {name: [] for name in dataset.get_feature_names()}
-        metrics = {
-            'accuracy': [], 
-            'auc': [],
-            'log_likelihood': []
-        }
-        
-        logger.info(f"Starting {n_splits}-fold cross-validation")
-        
-        # Convert participants to array for splitting
-        participants = np.array([p.participant_id for p in dataset.preferences])
-        
-        # Prepare data arrays
+        # Get participant IDs and prepare data arrays
+        participant_ids = np.array([p.participant_id for p in dataset.preferences])
         all_preferences = []
         all_features1 = []
         all_features2 = []
         
         for pref in dataset.preferences:
             all_preferences.append(float(pref.preferred))
-            feat1 = [pref.features1[f] for f in dataset.get_feature_names()]
-            feat2 = [pref.features2[f] for f in dataset.get_feature_names()]
+            feat1 = [pref.features1[f] for f in feature_names]
+            feat2 = [pref.features2[f] for f in feature_names]
             all_features1.append(feat1)
             all_features2.append(feat2)
             
@@ -179,33 +154,24 @@ class BayesianPreferenceModel(PreferenceModel):
         X2 = np.array(all_features2)
         y = np.array(all_preferences)
         
-        # Initialize fold details if needed
-        if save_fold_details:
-            fold_details = []
-        
-        # Initialize raw metrics if needed
-        if save_raw_metrics:
-            raw_metrics = {
-                'predictions': [],
-                'true_values': [],
-                'fold_indices': []
-            }
-        
         # Perform cross-validation
-        group_kfold = GroupKFold(n_splits=n_splits)
+        cv = GroupKFold(n_splits=n_splits)
         
-        for fold, (train_idx, val_idx) in enumerate(
-            group_kfold.split(X1, y, participants)
-        ):
-            logger.info(f"Processing fold {fold + 1}/{n_splits}")
-            
-            # Create train/validation datasets
-            train_data = self._create_subset_dataset(
-                dataset, train_idx, X1, X2, y, participants)
-            val_data = self._create_subset_dataset(
-                dataset, val_idx, X1, X2, y, participants)
-            
+        feature_effects = defaultdict(list)
+        for fold, (train_idx, val_idx) in enumerate(cv.split(X1, y, groups=participant_ids)):
             try:
+                logger.info(f"Processing fold {fold + 1}/{n_splits}")
+                
+                # Create train/val datasets with all required arguments
+                train_data = self._create_subset_dataset(
+                    dataset, train_idx, X1, X2, y, participant_ids)
+                val_data = self._create_subset_dataset(
+                    dataset, val_idx, X1, X2, y, participant_ids)
+                
+                if len(train_data.preferences) == 0 or len(val_data.preferences) == 0:
+                    logger.warning(f"Empty split in fold {fold + 1}, skipping")
+                    continue
+                
                 # Fit model on training data
                 self.fit(train_data)
                 
@@ -214,108 +180,62 @@ class BayesianPreferenceModel(PreferenceModel):
                 val_true = []
                 
                 for pref in val_data.preferences:
-                    pred = self.predict_preference(pref.bigram1, pref.bigram2)
-                    val_predictions.append(pred)
-                    val_true.append(float(pref.preferred))
+                    try:
+                        pred = self.predict_preference(pref.bigram1, pref.bigram2)
+                        if not np.isnan(pred):  # Skip NaN predictions
+                            val_predictions.append(pred)
+                            val_true.append(1.0 if pref.preferred else 0.0)
+                    except Exception as e:
+                        logger.warning(f"Prediction failed for {pref.bigram1}-{pref.bigram2}: {str(e)}")
+                        continue
+                
+                if not val_predictions:  # Skip fold if no valid predictions
+                    logger.warning(f"No valid predictions in fold {fold + 1}, skipping")
+                    continue
                 
                 val_predictions = np.array(val_predictions)
                 val_true = np.array(val_true)
                 
-                # Handle outliers if enabled
-                if perform_outlier_detection:
-                    z_scores = np.abs((val_predictions - np.mean(val_predictions)) / np.std(val_predictions))
-                    outliers = z_scores > outlier_threshold
-                    if np.any(outliers):
-                        logger.warning(f"Found {np.sum(outliers)} outlier predictions in fold {fold + 1}")
-                        val_predictions_clean = val_predictions[~outliers]
-                        val_true_clean = val_true[~outliers]
-                    else:
-                        val_predictions_clean = val_predictions
-                        val_true_clean = val_true
-                else:
-                    val_predictions_clean = val_predictions
-                    val_true_clean = val_true
-                
                 # Calculate metrics
-                fold_accuracy = accuracy_score(val_true_clean, val_predictions_clean > 0.5)
-                fold_auc = roc_auc_score(val_true_clean, val_predictions_clean)
+                metrics['accuracy'].append(accuracy_score(val_true, val_predictions > 0.5))
+                metrics['auc'].append(roc_auc_score(val_true, val_predictions))
                 
-                metrics['accuracy'].append(fold_accuracy)
-                metrics['auc'].append(fold_auc)
-                
-                # Store feature effects
+                # Get feature weights and store them properly
                 weights = self.get_feature_weights()
-                for feature, weight in weights.items():
-                    feature_effects[feature].append(weight)
+                if weights:  # Add debug logging
+                    logger.debug(f"Fold {fold + 1} weights: {weights}")
+                    for feature, weight in weights.items():
+                        if not np.isnan(weight):
+                            feature_effects[feature].append(weight)
+                else:
+                    logger.warning(f"No weights obtained in fold {fold + 1}")
                 
-                # Save fold details if enabled
-                if save_fold_details:
-                    fold_details.append({
-                        'fold': fold + 1,
-                        'train_size': len(train_data.preferences),
-                        'val_size': len(val_data.preferences),
-                        'n_outliers': np.sum(outliers) if perform_outlier_detection else 0,
-                        'metrics': {
-                            'accuracy': float(fold_accuracy),
-                            'auc': float(fold_auc)
-                        },
-                        'feature_weights': {
-                            f: float(w) for f, w in weights.items()
-                        }
-                    })
-                
-                # Save raw metrics if enabled
-                if save_raw_metrics:
-                    raw_metrics['predictions'].extend(val_predictions.tolist())
-                    raw_metrics['true_values'].extend(val_true.tolist())
-                    raw_metrics['fold_indices'].append({
-                        'train': train_idx.tolist(),
-                        'val': val_idx.tolist()
-                    })
-                    
             except Exception as e:
                 logger.error(f"Error in fold {fold + 1}: {str(e)}")
                 continue
         
-        # Log feature effects summary
+        # Process feature effects with better error handling
+        processed_effects = {}
         for feature, effects in feature_effects.items():
-            if not effects:
-                logger.warning(f"No effects collected for feature: {feature}")
-            else:
-                logger.debug(f"Feature {feature}: collected {len(effects)} effects")
-            
-        # Calculate stability metrics
-        stability = self._calculate_stability_metrics(feature_effects, config=self.config)
-        
-        # Prepare results
-        results = {
-            'metrics': {
-                name: {
-                    'mean': float(np.mean(scores)),
-                    'std': float(np.std(scores)),
-                    'values': list(scores)
-                }
-                for name, scores in metrics.items()
-            },
-            'feature_effects': {
-                name: {
+            if effects:  # Only process if we have effects
+                processed_effects[feature] = {
                     'mean': float(np.mean(effects)),
                     'std': float(np.std(effects)),
-                    'values': list(effects)
+                    'values': effects
                 }
-                for name, effects in feature_effects.items()
-            },
-            'stability': stability
+                logger.debug(f"Feature {feature}: {len(effects)} effects, mean={processed_effects[feature]['mean']:.3f}")
+            else:
+                logger.warning(f"No effects collected for feature {feature}")
+        
+        results = {
+            'metrics': metrics,
+            'feature_effects': processed_effects,
+            'stability': self._calculate_stability_metrics(feature_effects)
         }
         
-        # Add optional detailed results
-        if save_fold_details:
-            results['fold_details'] = fold_details
-        if save_raw_metrics:
-            results['raw_metrics'] = raw_metrics
-        
+        logger.debug(f"Cross-validation complete. Features with effects: {list(processed_effects.keys())}")
         return results
-    
+            
     def _create_subset_dataset(
         self, 
         dataset: PreferenceDataset,
@@ -329,6 +249,11 @@ class BayesianPreferenceModel(PreferenceModel):
         subset = PreferenceDataset.__new__(PreferenceDataset)
         subset.preferences = [dataset.preferences[i] for i in indices]
         subset.participants = set(participants[indices])
+        subset.feature_names = dataset.get_feature_names()
+        # Copy over needed attributes from original dataset
+        subset.file_path = dataset.file_path
+        subset.all_bigrams = dataset.all_bigrams
+        subset.all_bigram_features = dataset.all_bigram_features
         return subset
     
     def _calculate_stability_metrics(

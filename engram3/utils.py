@@ -1,6 +1,9 @@
-import logging
 from pathlib import Path
 from typing import Optional, List, Dict
+import yaml
+import logging
+
+logger = logging.getLogger(__name__)
 
 def setup_logging(log_file: Optional[Path] = None) -> None:
     """Setup basic logging configuration.
@@ -26,18 +29,6 @@ def setup_logging(log_file: Optional[Path] = None) -> None:
     # Apply configuration
     logging.basicConfig(**config)
 
-def load_interactions(filepath: str) -> List[List[str]]:
-    """Load feature interactions from file."""
-    import yaml
-    
-    with open(filepath, 'r') as f:
-        data = yaml.safe_load(f)
-        
-    if not data or 'interactions' not in data:
-        return []
-        
-    return data['interactions']
-
 def validate_config(config: Dict) -> None:
     """Validate required configuration settings exist."""
     required = [
@@ -55,3 +46,50 @@ def validate_config(config: Dict) -> None:
             if key not in value:
                 raise ValueError(f"Missing required config: {' -> '.join(path)}")
             value = value[key]
+
+def load_interactions(filepath: str) -> List[List[str]]:
+    """
+    Load feature interactions from file.
+    
+    Args:
+        filepath: Path to YAML file containing interaction definitions
+        
+    Returns:
+        List of lists, where each inner list contains feature names to interact
+        
+    Example:
+        interactions:
+        - ['same_finger', 'sum_finger_values']
+        - ['same_finger', 'rows_apart']
+        - ['sum_finger_values', 'adj_finger_diff_row']
+    """
+    logger.debug(f"Loading interactions from {filepath}")
+    
+    try:
+        with open(filepath, 'r') as f:
+            data = yaml.safe_load(f)
+            
+        if not data or 'interactions' not in data:
+            logger.warning(f"No interactions found in {filepath}")
+            return []
+            
+        interactions = data['interactions']
+        
+        if not isinstance(interactions, list):
+            logger.error("Interactions must be a list")
+            return []
+            
+        # Validate each interaction
+        valid_interactions = []
+        for interaction in interactions:
+            if isinstance(interaction, list) and all(isinstance(f, str) for f in interaction):
+                valid_interactions.append(interaction)
+            else:
+                logger.warning(f"Skipping invalid interaction format: {interaction}")
+                
+        logger.info(f"Loaded {len(valid_interactions)} valid interactions")
+        return valid_interactions
+        
+    except Exception as e:
+        logger.error(f"Error loading interactions file: {str(e)}")
+        return []

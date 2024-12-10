@@ -10,7 +10,6 @@ from scipy import stats
 
 from engram3.data import PreferenceDataset
 from engram3.features.extraction import extract_bigram_features
-from engram3.analysis import find_sparse_regions
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ class BigramRecommender:
     def get_uncertainty_pairs(self) -> List[Tuple[str, str]]:
         """Generate pairs from regions of high feature uncertainty."""
         # Use sparse regions from analysis
-        sparse_points = find_sparse_regions(self.dataset)
+        sparse_points = self._find_sparse_regions(self.dataset)
         
         # Generate all possible bigrams
         all_bigrams = self._generate_all_possible_bigrams()
@@ -113,6 +112,60 @@ class BigramRecommender:
             self.dataset.engram_position_values,
             self.dataset.row_position_values
         )
+
+    def _find_sparse_regions(dataset: PreferenceDataset) -> List[Dict[str, float]]:
+        """
+        Identify sparse regions in feature space.
+        
+        Args:
+            dataset: PreferenceDataset containing preferences
+            
+        Returns:
+            List of dictionaries representing points in sparse regions
+        """
+        # Get all feature vectors
+        vectors = []
+        feature_names = dataset.get_feature_names()
+        
+        for pref in dataset.preferences:
+            for features in [pref.features1, pref.features2]:
+                try:
+                    # Check for None or NaN values
+                    if any(features.get(f) is None for f in feature_names):
+                        continue
+                        
+                    vector = [features[f] for f in feature_names]
+                    if any(np.isnan(v) for v in vector):
+                        continue
+                        
+                    vectors.append(vector)
+                    
+                except KeyError as e:
+                    logger.warning(f"Missing feature in preference: {str(e)}")
+                    continue
+        
+        if not vectors:
+            logger.warning("No valid feature vectors found")
+            return []
+        
+        vectors = np.array(vectors)
+        
+        # Find points with few neighbors
+        sparse_points = []
+        for i, v in enumerate(vectors):
+            try:
+                distances = np.linalg.norm(vectors - v, axis=1)
+                n_neighbors = (distances < np.percentile(distances, 10)).sum()
+                if n_neighbors < 5:  # Arbitrary threshold
+                    sparse_points.append(dict(zip(feature_names, v)))
+            except Exception as e:
+                logger.warning(f"Error processing vector {i}: {str(e)}")
+                continue
+                
+        logger.info(f"Found {len(sparse_points)} points in sparse regions "
+                f"from {len(vectors)} valid vectors")
+        
+        return sparse_points
 
     def _calculate_uncertainty_score(self, features1: Dict, features2: Dict, 
                                    sparse_points: List[Dict]) -> float:

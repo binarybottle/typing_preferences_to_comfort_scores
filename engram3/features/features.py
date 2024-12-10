@@ -1,75 +1,19 @@
-from math import atan2, degrees, sqrt
+"""
+Feature definitions
 
+These functions compute bigram features for keyboard layout analysis.
+"""
+from math import atan2, degrees, sqrt
+import logging
+
+from engram3.features.keymaps import *
 from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 
-#=====================================#
-# Keyboard layout and finger mappings #
-#=====================================#
-qwerty_map = {
-    'left': ['q', 'w', 'e', 'r', 't', 
-             'a', 's', 'd', 'f', 'g', 
-             'z', 'x', 'c', 'v', 'b'],
-    'rite': ['y', 'u', 'i', 'o', 'p', 
-             'h', 'j', 'k', 'l', ';', 
-             'n', 'm', ',', '.', '/']
-}
+logger = logging.getLogger(__name__)
 
-finger_map = {
-    'q': 4, 'w': 3, 'e': 2, 'r': 1, 't': 1,
-    'a': 4, 's': 3, 'd': 2, 'f': 1, 'g': 1,
-    'z': 4, 'x': 3, 'c': 2, 'v': 1, 'b': 1,
-    'y': 1, 'u': 1, 'i': 2, 'o': 3, 'p': 4,
-    'h': 1, 'j': 1, 'k': 2, 'l': 3, ';': 4, 
-    'n': 1, 'm': 1, ',': 2, '.': 3, '/': 4
-}
-
-row_map = {
-    'q': 3, 'w': 3, 'e': 3, 'r': 3, 't': 3, 
-    'a': 2, 's': 2, 'd': 2, 'f': 2, 'g': 2, 
-    'z': 1, 'x': 1, 'c': 1, 'v': 1, 'b': 1,
-    'y': 3, 'u': 3, 'i': 3, 'o': 3, 'p': 3, 
-    'h': 2, 'j': 2, 'k': 2, 'l': 2, ';': 2, 
-    'n': 1, 'm': 1, ',': 1, '.': 1, '/': 1
-}
-
-column_map = {
-    'q': 1, 'w': 2, 'e': 3, 'r': 4, 't': 5, 
-    'a': 1, 's': 2, 'd': 3, 'f': 4, 'g': 5, 
-    'z': 1, 'x': 2, 'c': 3, 'v': 4, 'b': 5,
-    'y': 6, 'u': 7, 'i': 8, 'o': 9, 'p': 10, 
-    'h': 6, 'j': 7, 'k': 8, 'l': 9, ';': 10, 
-    'n': 6, 'm': 7, ',': 8, '.': 9, '/': 10
-}
-
-matrix_position_map = {
-    'q': (3, 1), 'w': (3, 2), 'e': (3, 3), 'r': (3, 4), 't': (3, 5),
-    'a': (2, 1), 's': (2, 2), 'd': (2, 3), 'f': (2, 4), 'g': (2, 5),
-    'z': (1, 1), 'x': (1, 2), 'c': (1, 3), 'v': (1, 4), 'b': (1, 5),
-    'y': (3, 6), 'u': (3, 7), 'i': (3, 8), 'o': (3, 9), 'p': (3, 10),
-    'h': (2, 6), 'j': (2, 7), 'k': (2, 8), 'l': (2, 9), ';': (2, 10),
-    'n': (1, 6), 'm': (1, 7), ',': (1, 8), '.': (1, 9), '/': (1, 10)
-}
-
-# Positions of keys on a staggered keyboard with 19mm interkey spacing, 
-# and 5mm and 10mm stagger between top/home and home/bottom rows
-staggered_position_map = {
-    # Top row (no stagger reference point)
-    'q': (0, 0),    'w': (19, 0),   'e': (38, 0),   'r': (57, 0),   't': (76, 0),
-    # Home row (staggered 5mm right from top row)
-    'a': (5, 19),   's': (24, 19),  'd': (43, 19),  'f': (62, 19),  'g': (81, 19),
-    # Bottom row (staggered 10mm right from home row)
-    'z': (15, 38),  'x': (34, 38),  'c': (53, 38),  'v': (72, 38),  'b': (91, 38),
-    # Top row continued
-    'y': (95, 0),   'u': (114, 0),  'i': (133, 0),  'o': (152, 0),  'p': (171, 0),
-    # Home row continued
-    'h': (100, 19), 'j': (119, 19), 'k': (138, 19), 'l': (157, 19), ';': (176, 19),
-    # Bottom row continued
-    'n': (110, 38), 'm': (129, 38), ',': (148, 38), '.': (167, 38), '/': (186, 38)
-}
-
-#=========================================================#
-# Keyboard layout: angles and distances between key pairs #
-#=========================================================#
+#-----------------------------------#
+# Angles and distances between keys #
+#-----------------------------------#
 def calculate_metrics(pos1, pos2):
     """Calculate angle (0-90 degrees) and distance between two positions"""
     dx = pos2[0] - pos1[0]
@@ -92,7 +36,7 @@ def calculate_metrics(pos1, pos2):
 key_metrics = {}
 letters = 'qwertyuiopasdfghjkl;zxcvbnm,./'
 
-# Calculate metrics between all possible pairs, storing both directions
+# Calculate metrics between all possible keys, storing both directions
 for c1 in letters:
     for c2 in letters:
         if c1 != c2:
@@ -133,33 +77,6 @@ if verbose:
     print(f"Longest distance: {max(distances)}mm")
     print(f"Average distance: {sum(distances)/len(distances):.1f}mm")
     print(f"Most common angle: {max(set(angles), key=angles.count)}°")
-
-#===================================#
-# Assigned keyboard position values #
-#===================================#
-# original Engram position values, penalizing fingers 1 & 4 up, 2 & 3 down, and middle columns:
-engram_position_values = {
-    'q': 1, 'w': 0, 'e': 0, 'r': 1, 't': 2,
-    'a': 0, 's': 0, 'd': 0, 'f': 0, 'g': 2,
-    'z': 0, 'x': 1, 'c': 1, 'v': 0, 'b': 2,
-    'y': 2, 'u': 1, 'i': 0, 'o': 0, 'p': 1,
-    'h': 2, 'j': 0, 'k': 0, 'l': 0, ';': 0, 
-    'n': 2, 'm': 0, ',': 1, '.': 1, '/': 0
-}
-
-# position values determined by row (home=0, top=1, bottom=2), without penalizing middle columns:
-row_position_values = {
-    'q': 1, 'w': 1, 'e': 1, 'r': 1, 't': 1,
-    'a': 0, 's': 0, 'd': 0, 'f': 0, 'g': 0,
-    'z': 2, 'x': 2, 'c': 2, 'v': 2, 'b': 2,
-    'y': 1, 'u': 1, 'i': 1, 'o': 1, 'p': 1,
-    'h': 0, 'j': 0, 'k': 0, 'l': 0, ';': 0, 
-    'n': 2, 'm': 2, ',': 2, '.': 2, '/': 2
-}
-
-#==========#
-# Features #
-#==========#
 
 #---------------------------------#
 # Qwerty bigram frequency feature #
@@ -418,13 +335,6 @@ def sum_row_position_values(char1, char2, column_map, row_position_values):
     else:
         return 0
 
-def sum_data_position_values(char1, char2, column_map, data_position_values):
-    """Sum data_position_values for the two characters (typed by the same hand)."""
-    if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return data_position_values[char1] + data_position_values[char2]
-    else:
-        return 0
-
 #-----------------#
 # Finger features #
 #-----------------#
@@ -466,90 +376,3 @@ def finger2or3_bottom_below(char1, char2, column_map, row_map):
             return 0
     else:
         return 0
-
-def finger_pairs(char1, char2, column_map, finger_map):
-    """
-    Check which finger pairs on the same hand are used to type the two keys.
-      12: finger4, finger3
-      11: finger3, finger4
-      10: finger4, finger2
-       9: finger2, finger4
-       8: finger3, finger2
-       7: finger2, finger3
-       6: finger4, finger1
-       5: finger1, finger4
-       4: finger3, finger1
-       3: finger1, finger3
-       2: finger2, finger1
-       1: finger1, finger2      
-       0: repeat keys or different hands
-    """
-    if same_hand(char1, char2, column_map) == 1:
-        if finger_map[char1] == 4 and finger_map[char2] == 3:
-            return 12
-        elif finger_map[char1] == 3 and finger_map[char2] == 4:
-            return 11
-        elif finger_map[char1] == 4 and finger_map[char2] == 2:
-            return 10
-        elif finger_map[char1] == 2 and finger_map[char2] == 4:
-            return 9
-        elif finger_map[char1] == 3 and finger_map[char2] == 2:
-            return 8
-        elif finger_map[char1] == 2 and finger_map[char2] == 3:
-            return 7
-        elif finger_map[char1] == 4 and finger_map[char2] == 1:
-            return 6
-        elif finger_map[char1] == 1 and finger_map[char2] == 4:
-            return 5
-        elif finger_map[char1] == 3 and finger_map[char2] == 1:
-            return 4
-        elif finger_map[char1] == 1 and finger_map[char2] == 3:
-            return 3
-        elif finger_map[char1] == 2 and finger_map[char2] == 1:
-            return 2
-        elif finger_map[char1] == 1 and finger_map[char2] == 2:
-            return 1
-        else: 
-            return 0
-    else:
-        return 0
-
-#================================#
-# Map feature names to functions #
-#================================#
-def function_map(char1, char2, column_map, row_map, finger_map, 
-                 engram_position_values, row_position_values, 
-                 bigrams, bigram_frequencies_array):
-    """Map feature names to their calculation functions."""
-    return {
-        # Qwerty bigram frequency feature 
-        'qwerty_bigram_frequency': lambda: qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array),
-        # Same features 
-        'same_hand': lambda: same_hand(char1, char2, column_map),
-        'same_finger': lambda: same_finger(char1, char2, column_map, finger_map),
-        'same_key': lambda: same_key(char1, char2),
-        # Adjacent features 
-        'adjacent_finger': lambda: adjacent_finger(char1, char2, column_map, finger_map),
-        'adj_finger_diff_row': lambda: adj_finger_diff_row(char1, char2, column_map, row_map, finger_map),
-        'adj_finger_skip': lambda: adj_finger_skip(char1, char2, column_map, row_map, finger_map),
-        # Separation features 
-        'rows_apart': lambda: rows_apart(char1, char2, column_map, row_map),
-        'skip_home': lambda: skip_home(char1, char2, column_map, row_map),
-        'columns_apart': lambda: columns_apart(char1, char2, column_map),
-        'distance_apart': lambda: distance_apart(char1, char2, column_map, key_metrics),
-        'angle_apart': lambda: angle_apart(char1, char2, column_map, key_metrics),
-        # Direction features 
-        'outward_roll': lambda: outward_roll(char1, char2, column_map, finger_map),
-        'outward_roll_same_row': lambda: outward_roll_same_row(char1, char2, column_map, row_map, finger_map),
-        'outward_skip': lambda: outward_skip(char1, char2, column_map, finger_map),
-        # Position features 
-        'middle_column': lambda: middle_column(char1, char2, column_map),
-        'sum_engram_position_values': lambda: sum_engram_position_values(char1, char2, column_map, engram_position_values),
-        'sum_row_position_values': lambda: sum_row_position_values(char1, char2, column_map, row_position_values),
-        # Finger features 
-        'sum_finger_values': lambda: sum_finger_values(char1, char2, finger_map),
-        'finger1or4_top_above': lambda: finger1or4_top_above(char1, char2, column_map, row_map),
-        'finger2or3_bottom_below': lambda: finger2or3_bottom_below(char1, char2, column_map, row_map),
-        'finger_pairs': lambda: finger_pairs(char1, char2, column_map, finger_map)
-    }
-

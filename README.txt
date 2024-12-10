@@ -14,19 +14,16 @@ engram3/                        # Root project directory
 └── engram3/                    # Package directory
     ├── __init__.py
     ├── data.py                 # Dataset handling
-    ├── analysis.py             # General analysis functions
     ├── utils.py
     ├── features/               # Feature-related code
     │   ├── __init__.py
     │   ├── definitions.py
     │   ├── extraction.py
-    │   └── recommendations.py  # Recommend bigram pairs
+    │   ├── recommendations.py  # Recommend bigram pairs
+    │   └── selection.py
     ├── models/                 # Model-related code
     │   ├── __init__.py
-    │   ├── base.py
-    │   ├── simple.py           # Mock model
-    │   ├── bayesian.py
-    │   └── utils.py
+    │   └── bayesian.py
     └── tests/                  # Tests
         ├── __init__.py
         └── test_models.py
