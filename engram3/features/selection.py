@@ -39,12 +39,6 @@ class FeatureEvaluator:
         
         # Get features configuration
         base_features = feature_set_config['base_features']
-
-        cv_config = self.config.get('model', {}).get('cross_validation', {})
-        n_splits = cv_config.get('n_splits', 5)
-        n_repetitions = cv_config.get('n_repetitions', 1)
-
-        # Get and load interactions
         interaction_file = feature_set_config.get('interactions_file')
         if interaction_file:
             interactions = load_interactions(interaction_file)
@@ -53,51 +47,19 @@ class FeatureEvaluator:
             interactions = []
 
         # Prepare features including interactions
-        X1, X2, y, all_features = self._prepare_feature_matrices(
+        X1, X2, y, valid_features = self._prepare_feature_matrices(
             dataset, 
             base_features=base_features,
             interactions=interactions
         )
         
-        # Validate all features (both base and interaction features)
         logger.info(f"\nStarting feature selection:")
-        logger.info(f"Analyzing {len(all_features)} features "
-                f"({len(base_features)} base + {len(interactions)} interactions)")
+        logger.info(f"Analyzing {len(valid_features)} features")
         
-        # Validate features before processing
-        valid_features = []
-        problematic_features = set()
-        
-        # Initial feature validation
-        for i, feature in enumerate(all_features):
-            diff = X1[:, i] - X2[:, i]
-            n_unique = len(np.unique(diff[~np.isnan(diff)]))
-            n_nan = np.sum(np.isnan(diff))
-            n_inf = np.sum(np.isinf(diff))
-            
-            if n_unique <= 1:
-                logger.warning(f"Feature '{feature}' has constant differences - will be excluded")
-                problematic_features.add(feature)
-            elif n_nan > 0:
-                logger.warning(f"Feature '{feature}' has {n_nan} NaN values - will be excluded")
-                problematic_features.add(feature)
-            elif n_inf > 0:
-                logger.warning(f"Feature '{feature}' has {n_inf} infinite values - will be excluded")
-                problematic_features.add(feature)
-            else:
-                valid_features.append(feature)
-        
-        logger.info(f"Using {len(valid_features)} valid features for selection")
-        if problematic_features:
-            logger.info("Excluded features:")
-            for feat in sorted(problematic_features):
-                if feat in base_features:
-                    logger.info(f"  - {feat} (base feature)")
-                else:
-                    logger.info(f"  - {feat} (interaction feature)")
-                    
-        # Collect results and diagnostics across repetitions
-        feature_names = dataset.get_feature_names()
+        if not valid_features:
+            logger.error("No valid features found after preparation")
+            return [], {'error': 'No valid features'}
+
         feature_results = defaultdict(list)
         all_diagnostics = {
             'importance': {},
@@ -107,13 +69,15 @@ class FeatureEvaluator:
             'iteration_metrics': []
         }
                     
+        cv_config = self.config.get('model', {}).get('cross_validation', {})
+        n_repetitions = cv_config.get('n_repetitions', 1)
         for iter_idx in range(n_repetitions):
             logger.debug(f"Feature selection iteration {iter_idx+1}/{n_repetitions}")
             
             try:
                 # Calculate correlations once
                 correlations, correlation_diagnostics = self._calculate_feature_correlations(
-                    X1, X2, feature_names)
+                    X1, X2, valid_features)  # Changed from feature_names
                 
                 # Run cross-validation
                 model = BayesianPreferenceModel(config=self.config)
@@ -137,7 +101,7 @@ class FeatureEvaluator:
                     continue
                 
                 # Store basic results
-                for feature in valid_features:  # Only store results for valid features
+                for feature in valid_features: 
                     if feature in eval_results.get('importance', {}):
                         feature_results[feature].append({
                             'importance': eval_results['importance'][feature],
@@ -357,15 +321,28 @@ class FeatureEvaluator:
         """
         Analyze feature selection results across iterations with diagnostics.
         """
-        logger = logging.getLogger(__name__)
         aggregated_results = {}
         importance_metrics = {}  # Add this to store importance metrics
         
-        # First pass: Calculate basic metrics for each feature
+        # First pass: Calculate basic metrics for each valid feature
         for feature, iterations in feature_results.items():
+            if not iterations:  # Skip features with no results
+                continue
+
             # Extract scores across iterations
             importance_scores = [it['importance'].get('combined_score', 0.0) for it in iterations]
             stability_scores = [it['stability'].get('sign_consistency', 0.0) for it in iterations]
+            
+            # Get model effects for CV and range calculations
+            model_effects = [it['importance'].get('model_effect_mean', 0.0) for it in iterations]
+            model_effects = np.array([x for x in model_effects if not np.isnan(x)])
+            
+            if len(model_effects) > 0:
+                effect_cv = np.std(model_effects) / max(abs(np.mean(model_effects)), 1e-10)
+                effect_range = (np.max(model_effects) - np.min(model_effects)) / max(abs(np.mean(model_effects)), 1e-10)
+            else:
+                effect_cv = 0.0
+                effect_range = 0.0
             
             # Calculate basic metrics
             aggregated_results[feature] = {
@@ -373,6 +350,8 @@ class FeatureEvaluator:
                 'std_importance': np.std(importance_scores),
                 'mean_stability': np.mean(stability_scores),
                 'std_stability': np.std(stability_scores),
+                'effect_cv': effect_cv,
+                'relative_range': effect_range,
                 'selection_frequency': sum(
                     s >= self.stability_threshold and i >= self.importance_threshold
                     for s, i in zip(stability_scores, importance_scores)
@@ -380,6 +359,19 @@ class FeatureEvaluator:
                 'is_problematic': feature in diagnostics.get('problematic_features', set())
             }
             
+            # Calculate CV and range for each feature from raw effects
+            feature_effects = [it['importance'].get('model_effect_mean', 0.0) for it in iterations]
+            feature_effects = [x for x in feature_effects if not np.isnan(x)]  # Remove NaNs
+            
+            if feature_effects:
+                effect_mean = np.mean(feature_effects)
+                effect_std = np.std(feature_effects)
+                effect_cv = effect_std / max(abs(effect_mean), 1e-10)
+                relative_range = (max(feature_effects) - min(feature_effects)) / max(abs(effect_mean), 1e-10)
+            else:
+                effect_cv = 0.0
+                relative_range = 0.0
+
             # Store importance metrics
             importance_metrics[feature] = {
                 'combined_score': aggregated_results[feature]['mean_importance'],
@@ -387,10 +379,8 @@ class FeatureEvaluator:
                 'model_effect_std': np.mean([it['importance'].get('model_effect_std', 0.0) for it in iterations]),
                 'correlation': np.mean([it['importance'].get('correlation', 0.0) for it in iterations]),
                 'mutual_info': np.mean([it['importance'].get('mutual_info', 0.0) for it in iterations]),
-                'effect_cv': aggregated_results[feature]['std_importance'] / max(aggregated_results[feature]['mean_importance'], 1e-10),
-                'relative_range': (max([it['importance'].get('combined_score', 0.0) for it in iterations]) - 
-                                 min([it['importance'].get('combined_score', 0.0) for it in iterations])) / 
-                                max(abs(aggregated_results[feature]['mean_importance']), 1e-10)
+                'effect_cv': effect_cv,
+                'relative_range': relative_range
             }
 
             # Add correlation information
@@ -563,33 +553,42 @@ class FeatureEvaluator:
         logger.debug(f"Final matrix shapes - X1: {X1.shape}, X2: {X2.shape}, y: {y.shape}")
         logger.debug(f"Total features: {len(all_features)}")
         
+        # Validate features before processing
+        valid_features = []
+        problematic_features = set()
+
         # Check for invalid values in each feature
         for i, feature in enumerate(all_features):
-            n_nan1 = np.sum(np.isnan(X1[:, i]))
-            n_nan2 = np.sum(np.isnan(X2[:, i]))
-            n_inf1 = np.sum(np.isinf(X1[:, i]))
-            n_inf2 = np.sum(np.isinf(X2[:, i]))
-            n_unique1 = len(np.unique(X1[:, i][~np.isnan(X1[:, i])]))  # Exclude NaN when counting uniques
-            n_unique2 = len(np.unique(X2[:, i][~np.isnan(X2[:, i])]))
+            diff = X1[:, i] - X2[:, i]
+            n_valid = np.sum(~np.isnan(diff))  # Count non-NaN values
+            n_total = len(diff)
+            valid_ratio = n_valid / n_total
+            n_unique = len(np.unique(diff[~np.isnan(diff)]))  # Count unique non-NaN values
+            n_inf = np.sum(np.isinf(diff))
             
             is_interaction = feature not in base_features
             feature_type = "Interaction" if is_interaction else "Base"
             
             logger.debug(f"\n{feature_type} feature '{feature}':")
-            logger.debug(f"  Bigram 1 features: {n_unique1} unique values, {n_nan1} NaN, {n_inf1} Inf")
-            logger.debug(f"  Bigram 2 features: {n_unique2} unique values, {n_nan2} NaN, {n_inf2} Inf")
-            logger.debug(f"  Range Bigram 1 features: [{np.nanmin(X1[:, i])}, {np.nanmax(X1[:, i])}]")
-            logger.debug(f"  Range Bigram 2 features: [{np.nanmin(X2[:, i])}, {np.nanmax(X2[:, i])}]")
+            logger.debug(f"  Valid values: {n_valid} of {n_total} ({valid_ratio*100:.1f}%)")
+            logger.debug(f"  Unique values: {n_unique}")
+            logger.debug(f"  Range: [{np.nanmin(diff)}, {np.nanmax(diff)}]")
             
-            # Keep these as warnings
-            if n_unique1 == 1 or n_unique2 == 1:
-                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has constant values")
-            if n_nan1 > 0 or n_nan2 > 0:
-                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has NaN values")
-            if n_inf1 > 0 or n_inf2 > 0:
-                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has Inf values")
-        
-        return X1, X2, y, all_features
+            # Validate and warn
+            if valid_ratio < 0.5:  # More than 50% missing
+                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has {n_total - n_valid} NaN values "
+                             f"({(1-valid_ratio)*100:.1f}%) - will be excluded")
+                problematic_features.add(feature)
+            elif n_unique <= 1:
+                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has constant values - will be excluded")
+                problematic_features.add(feature)
+            elif n_inf > 0:
+                logger.warning(f"  WARNING: {feature_type} feature '{feature}' has {n_inf} infinite values - will be excluded")
+                problematic_features.add(feature)
+            else:
+                valid_features.append(feature)
+
+        return X1, X2, y, valid_features
              
     def _calculate_feature_importance(
         self,
@@ -952,11 +951,14 @@ class FeatureEvaluator:
             # Selected Features section
             f.write("Selected Features\n")
             f.write("----------------\n")
-            for feature in sorted(results['selected_features']):
+
+            # Write data for valid features only
+            for feature in sorted(results['importance'].keys()):  # These are already valid features
+                imp = results['importance'].get(feature, {})
+                stab = results['stability'].get(feature, {})
+                is_interaction = '_x_' in feature
+                status = "selected" if feature in results['selected_features'] else "rejected"
                 if '_x_' not in feature:  # Base features only
-                    imp = results['importance'].get(feature, {})
-                    stab = results['stability'].get(feature, {})
-                    
                     f.write(f"\n{feature}:\n")
                     f.write(f"Importance: {imp.get('combined_score', 0.0):.3f}\n")
                     f.write(f"Stability: {stab.get('sign_consistency', 0.0):.3f}\n")

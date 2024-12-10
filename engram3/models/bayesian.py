@@ -213,28 +213,24 @@ class BayesianPreferenceModel():
             except Exception as e:
                 logger.error(f"Error in fold {fold + 1}: {str(e)}")
                 continue
-        
-        # Process feature effects with better error handling
+
+        # Process feature effects for valid features only
         processed_effects = {}
-        for feature, effects in feature_effects.items():
-            if effects:  # Only process if we have effects
+        for feature in feature_names:  # feature_names already contains valid features
+            effects = feature_effects.get(feature, [])
+            if effects:
                 processed_effects[feature] = {
                     'mean': float(np.mean(effects)),
                     'std': float(np.std(effects)),
                     'values': effects
                 }
-                logger.debug(f"Feature {feature}: {len(effects)} effects, mean={processed_effects[feature]['mean']:.3f}")
-            else:
-                logger.warning(f"No effects collected for feature {feature}")
-        
-        results = {
+                logger.debug(f"Feature {feature}: collected {len(effects)} effects")
+
+        return {
             'metrics': metrics,
             'feature_effects': processed_effects,
             'stability': self._calculate_stability_metrics(feature_effects)
         }
-        
-        logger.debug(f"Cross-validation complete. Features with effects: {list(processed_effects.keys())}")
-        return results
             
     def _create_subset_dataset(
         self, 

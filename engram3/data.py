@@ -165,7 +165,7 @@ class PreferenceDataset:
                 time2 = float(row['bigram2_time'])
                 
                 if np.isnan(time1) or np.isnan(time2):
-                    logger.warning(f"NaN timing values for bigrams {bigram1}-{bigram2}")
+                    logger.debug(f"NaN timing values for bigrams {bigram1}-{bigram2}")
                     # Option 1: Use None
                     time1 = None if np.isnan(time1) else time1
                     time2 = None if np.isnan(time2) else time2
