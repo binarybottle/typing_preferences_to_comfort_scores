@@ -5,39 +5,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def setup_logging(log_file: Optional[Path] = None) -> None:
-    """Setup basic logging configuration.
-    
-    Args:
-        log_file: Optional path to log file. If None, logs to console only.
-    """
-    # Basic config
-    config = {
-        'level': logging.INFO,
-        'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    }
-    
-    # Add file handler if log_file specified
-    if log_file is not None:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        config['filename'] = str(log_file)
-    
-    # Clear any existing handlers
-    root_logger = logging.getLogger()
-    root_logger.handlers = []
-    
-    # Apply configuration
-    logging.basicConfig(**config)
-
 def validate_config(config: Dict) -> None:
     """Validate required configuration settings exist."""
     required = [
-        ('model', 'n_samples'),
+        ('data', 'splits', 'random_seed'),
+        ('data', 'splits', 'test_ratio'),
+        ('data', 'splits', 'split_data_file'),
+        ('data', 'input_file'),
+        ('data', 'output_dir'),
+        ('data', 'layout', 'chars'),
+        ('feature_evaluation', 'thresholds', 'importance'),
+        ('feature_evaluation', 'thresholds', 'stability'),
+        ('feature_evaluation', 'importance_weights', 'model_effect'),
+        ('feature_evaluation', 'importance_weights', 'correlation'),
+        ('feature_evaluation', 'importance_weights', 'mutual_info'),
+        ('feature_evaluation', 'metrics_file'),
+        ('features', 'base_features'),
+        ('features', 'interactions_file'),
         ('model', 'chains'),
         ('model', 'target_accept'),
+        ('model', 'n_samples'),
         ('model', 'cross_validation', 'n_splits'),
-        ('model', 'cross_validation', 'n_repetitions'),
-        ('model', 'cross_validation', 'random_seed')
+        ('model', 'cross_validation', 'n_repetitions')
     ]
     
     for path in required:

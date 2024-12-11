@@ -1,5 +1,5 @@
 train_test_indices.npz
-data/input*
+data/*
 output*
 __pycache__
 package-lock.json

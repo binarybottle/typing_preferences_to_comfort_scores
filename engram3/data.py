@@ -78,126 +78,12 @@ class PreferenceDataset:
         self._load_csv()  
 
     def get_feature_names(self) -> List[str]:
-        """Get list of all feature names."""
-        if not self.preferences:
-            return []
-        return list(self.preferences[0].features1.keys())
-
-    def _load_csv(self):
-        """Load and validate preference data from CSV."""
-        if not self.file_path.exists():
-            raise FileNotFoundError(f"Data file not found: {self.file_path}")
-            
-        try:
-            data = pd.read_csv(self.file_path)
-            logger.info(f"\nLoaded CSV with {len(data)} rows")
-
-            # Validate required columns
-            missing = set(self.REQUIRED_COLUMNS) - set(data.columns)
-            if missing:
-                raise ValueError(f"Missing required columns: {missing}")
-
-            success_count = 0
-            for idx, row in data.iterrows():
-                try:
-                    pref = self._create_preference(row)
-                    self.preferences.append(pref)
-                    self.participants.add(pref.participant_id)
-                    success_count += 1
-                    
-                    if success_count == 1:
-                        print(f"Bigram 1: {pref.bigram1}")
-                        print(f"Bigram 2: {pref.bigram2}")
-                        print(f"Participant: {pref.participant_id}")
-                        print(f"Preferred: {pref.preferred}")
-                        print(f"Features Bigram 1: {pref.features1}")
-                        print(f"Features Bigram 2: {pref.features2}")
-                except Exception as e:
-                    print(f"\nError processing row {idx}:")
-                    print(f"Error: {str(e)}")
-                    continue
-
-            print(f"\nSuccessfully processed {success_count} out of {len(data)} rows")
-
-            if not self.preferences:
-                raise ValueError("No valid preferences found in data")
-
-            logger.info(f"Loaded {len(self.preferences)} preferences from "
-                  f"{len(self.participants)} participants")
-
-        except Exception as e:
-            print(f"Error loading CSV: {str(e)}")
-            raise
-
-    def _create_preference(self, row: pd.Series) -> Preference:
-        """Create single Preference instance from data row."""
-        bigram1 = (row['bigram1'][0], row['bigram1'][1])
-        bigram2 = (row['bigram2'][0], row['bigram2'][1])
-
-        try:
-            # Extract bigram features
-            if bigram1[0] == bigram1[1]:  # Same-letter bigram
-                features1 = extract_same_letter_features(bigram1[0], 
-                                column_map, finger_map, 
-                                engram_position_values, row_position_values)
-            else:
-                features1 = extract_bigram_features(
-                    bigram1[0], bigram1[1],
-                    self.column_map, self.row_map, self.finger_map,
-                    self.engram_position_values, self.row_position_values
-                )
-
-            if bigram2[0] == bigram2[1]:  # Same-letter bigram
-                features2 = extract_same_letter_features(bigram2[0],
-                                column_map, finger_map, 
-                                engram_position_values, row_position_values)
-            
-            else:
-                features2 = extract_bigram_features(
-                    bigram2[0], bigram2[1],
-                    self.column_map, self.row_map, self.finger_map,
-                    self.engram_position_values, self.row_position_values
-                )
-
-            # Handle timing information
-            try:
-                time1 = float(row['bigram1_time'])
-                time2 = float(row['bigram2_time'])
-                
-                if np.isnan(time1) or np.isnan(time2):
-                    logger.debug(f"NaN timing values for bigrams {bigram1}-{bigram2}")
-                    # Option 1: Use None
-                    time1 = None if np.isnan(time1) else time1
-                    time2 = None if np.isnan(time2) else time2
-                    # Option 2: Use dataset median (would need to be calculated)
-                    # time1 = self.median_timing if np.isnan(time1) else time1
-                    # time2 = self.median_timing if np.isnan(time2) else time2
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid timing values for bigrams {bigram1}-{bigram2}: {e}")
-                time1 = None
-                time2 = None
-
-            # Add timing to features
-            features1['typing_time'] = time1
-            features2['typing_time'] = time2
-
-            return Preference(
-                bigram1=str(row['bigram1']),
-                bigram2=str(row['bigram2']),
-                participant_id=str(row['user_id']),
-                preferred=(row['chosen_bigram'] == row['bigram1']),
-                features1=features1,
-                features2=features2,
-                confidence=float(row['abs_sliderValue']),
-                typing_time1=time1,
-                typing_time2=time2
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing row {row.name}:")
-            logger.error(f"Bigrams: {bigram1}-{bigram2}")
-            logger.error(f"Error: {str(e)}")
-            raise
+        """Get list of all feature names including interactions."""
+        if hasattr(self, 'feature_names'):
+            return self.feature_names  # This should include interaction features from precompute
+        elif self.preferences:
+            return list(self.preferences[0].features1.keys())
+        return []
 
     def split_by_participants(self, test_fraction: float = 0.2) -> Tuple['PreferenceDataset', 'PreferenceDataset']:
         """Split into train/test keeping participants separate."""
@@ -280,3 +166,126 @@ class PreferenceDataset:
         
         return results
     
+    def _load_csv(self):
+        """Load and validate preference data from CSV."""
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"Data file not found: {self.file_path}")
+            
+        try:
+            data = pd.read_csv(self.file_path)
+            logger.info(f"\nLoaded CSV with {len(data)} rows")
+
+            # Validate required columns
+            missing = set(self.REQUIRED_COLUMNS) - set(data.columns)
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+
+            success_count = 0
+            for idx, row in data.iterrows():
+                try:
+                    pref = self._create_preference(row)
+                    self.preferences.append(pref)
+                    self.participants.add(pref.participant_id)
+                    success_count += 1
+                    
+                    if success_count == 1:
+                        print(f"Bigram 1: {pref.bigram1}")
+                        print(f"Bigram 2: {pref.bigram2}")
+                        print(f"Participant: {pref.participant_id}")
+                        print(f"Preferred: {pref.preferred}")
+                        print(f"Features Bigram 1: {pref.features1}")
+                        print(f"Features Bigram 2: {pref.features2}")
+                except Exception as e:
+                    print(f"\nError processing row {idx}:")
+                    print(f"Error: {str(e)}")
+                    continue
+
+            print(f"\nSuccessfully processed {success_count} out of {len(data)} rows")
+
+            if not self.preferences:
+                raise ValueError("No valid preferences found in data")
+
+            logger.info(f"Loaded {len(self.preferences)} preferences from "
+                  f"{len(self.participants)} participants")
+
+        except Exception as e:
+            print(f"Error loading CSV: {str(e)}")
+            raise
+
+    def _create_subset_dataset(self, indices: List[int]) -> 'PreferenceDataset':
+        """Create a new dataset containing only the specified preferences.
+        
+        Args:
+            indices: List of preference indices to include
+            
+        Returns:
+            New PreferenceDataset with subset of preferences
+        """
+        subset = PreferenceDataset.__new__(PreferenceDataset)
+        
+        # Copy attributes
+        subset.file_path = self.file_path
+        subset.column_map = self.column_map
+        subset.row_map = self.row_map
+        subset.finger_map = self.finger_map
+        subset.engram_position_values = self.engram_position_values
+        subset.row_position_values = self.row_position_values
+        
+        # Copy precomputed features if they exist
+        if hasattr(self, 'all_bigrams'):
+            subset.all_bigrams = self.all_bigrams
+            subset.all_bigram_features = self.all_bigram_features
+            subset.feature_names = self.feature_names
+        
+        # Create subset of preferences
+        subset.preferences = [self.preferences[i] for i in indices]
+        subset.participants = {p.participant_id for p in subset.preferences}
+        
+        return subset
+
+    def _create_preference(self, row: pd.Series) -> Preference:
+        """Create single Preference instance from data row."""
+        bigram1 = (row['bigram1'][0], row['bigram1'][1])
+        bigram2 = (row['bigram2'][0], row['bigram2'][1])
+
+        try:
+            # Get base features
+            features1 = self.all_bigram_features[bigram1].copy()
+            features2 = self.all_bigram_features[bigram2].copy()
+
+            # Add timing information
+            try:
+                time1 = float(row['bigram1_time'])
+                time2 = float(row['bigram2_time'])
+                
+                if np.isnan(time1) or np.isnan(time2):
+                    logger.debug(f"NaN timing values for bigrams {bigram1}-{bigram2}")
+                    time1 = None if np.isnan(time1) else time1
+                    time2 = None if np.isnan(time2) else time2
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid timing values for bigrams {bigram1}-{bigram2}: {e}")
+                time1 = None
+                time2 = None
+
+            # Add timing to features
+            features1['typing_time'] = time1
+            features2['typing_time'] = time2
+
+            return Preference(
+                bigram1=str(row['bigram1']),
+                bigram2=str(row['bigram2']),
+                participant_id=str(row['user_id']),
+                preferred=(row['chosen_bigram'] == row['bigram1']),
+                features1=features1,
+                features2=features2,
+                confidence=float(row['abs_sliderValue']),
+                typing_time1=time1,
+                typing_time2=time2
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing row {row.name}:")
+            logger.error(f"Bigrams: {bigram1}-{bigram2}")
+            logger.error(f"Error: {str(e)}")
+            raise
+        

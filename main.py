@@ -1,31 +1,54 @@
-import logging
-
-# Configure logging at the start
-logging.basicConfig(
-    level=logging.INFO,  # Set console output to INFO/DEBUG level
-    format='%(message)s'  # Simple format for console
-)
-
 import argparse
 import yaml
 import json
 import numpy as np
-from typing import Dict, Any
+import pandas as pd
+from typing import Dict, Any, Tuple
 from pathlib import Path
+import logging
 
 from engram3.data import PreferenceDataset
 from engram3.utils import validate_config
-from engram3.models.bayesian import BayesianPreferenceModel
-from engram3.features.selection import FeatureEvaluator
-from engram3.features.recommendations import BigramRecommender
+from engram3.model import PreferenceModel
+#from engram3.features.recommendations import BigramRecommender
 from engram3.features.extraction import precompute_all_bigram_features
-from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
+#from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
 
 logger = logging.getLogger(__name__)
+
+# In main.py, modify the setup_logging function:
+
+def setup_logging(config):
+    # Create log directory if it doesn't exist
+    log_file = Path(config['logging']['output_file'])
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Clear any existing handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers = []
+    
+    # Configure console handler with INFO level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')  # Simple format for console
+    console_handler.setFormatter(console_formatter)
+    
+    # Configure file handler with DEBUG level
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(config['logging']['format'])
+    file_handler.setFormatter(file_formatter)
+    
+    # Set root logger to DEBUG to capture all messages
+    root_logger.setLevel(logging.DEBUG)
+    
+    # Add both handlers
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -35,16 +58,52 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 def create_output_directories(config: Dict[str, Any]) -> None:
     """Create necessary output directories."""
-    dirs_to_create = [
-        Path(config['data']['output_dir']),
-        Path(config['logging']['output_file']).parent,
-        Path(config['feature_evaluation']['output_dir'])
-    ]
+    dirs_to_create = [Path(config['data']['output_dir'])]
     for directory in dirs_to_create:
         directory.mkdir(parents=True, exist_ok=True)
 
+def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[PreferenceDataset, PreferenceDataset]:
+    """Load existing split or create and save new one."""
+    split_file = Path(config['data']['splits']['split_data_file'])
+    
+    if split_file.exists():
+        logger.info("Loading existing train/test split...")
+        split_data = np.load(split_file)
+        train_indices = split_data['train_indices']
+        test_indices = split_data['test_indices']
+    else:
+        logger.info("Creating new train/test split...")
+        
+        # Get participant IDs
+        participant_ids = list(dataset.participants)
+        n_participants = len(participant_ids)
+        n_test = int(n_participants * config['data']['splits']['test_ratio'])
+        
+        # Randomly select test participants
+        test_participants = set(np.random.choice(participant_ids, n_test, replace=False))
+        
+        # Get indices for train/test split
+        train_indices = []
+        test_indices = []
+        for i, pref in enumerate(dataset.preferences):
+            if pref.participant_id in test_participants:
+                test_indices.append(i)
+            else:
+                train_indices.append(i)
+        
+        # Save split
+        split_file.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(split_file, 
+                 train_indices=train_indices, 
+                 test_indices=test_indices)
+    
+    # Create datasets
+    train_data = dataset._create_subset_dataset(train_indices)
+    test_data = dataset._create_subset_dataset(test_indices)
+    
+    return train_data, test_data
+
 def main():
-    # Parse command line arguments    
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['select_features', 'train_model'], required=True,
@@ -55,10 +114,12 @@ def main():
         # Load configuration and setup
         config = load_config(args.config)
         validate_config(config)
+        setup_logging(config)
         create_output_directories(config)
+
+        # Set random seed for all operations
+        np.random.seed(config['data']['splits']['random_seed'])
         
-        # Use model's CV random seed instead of feature evaluation seed
-        np.random.seed(config['model']['cross_validation']['random_seed'])        
         # Precompute bigram features
         logger.info("Precomputing bigram features...")
         all_bigrams, all_bigram_features, feature_names = precompute_all_bigram_features(
@@ -70,8 +131,10 @@ def main():
             row_position_values=row_position_values,
             config=config
         )
+        logger.debug(f"Precomputed features include interactions: {[f for f in feature_names if '_x_' in f]}")
 
         # Load dataset with precomputed features
+        logger.info("Loading dataset...")
         dataset = PreferenceDataset(
             config['data']['input_file'],
             column_map=column_map,
@@ -85,117 +148,46 @@ def main():
                 'feature_names': feature_names
             }
         )
-            
-        #-------------------------------------------------------------------
-        # FEATURE SELECTION
-        #-------------------------------------------------------------------
+
         if args.mode == 'select_features':
-            logger.info("Starting feature selection phase...")
+            # Get train/test split
+            train_data, test_data = load_or_create_split(dataset, config)
+            logger.info(f"Split dataset: {len(train_data.preferences)} train, "
+                       f"{len(test_data.preferences)} test preferences")
             
-            # Initialize evaluator with config settings
-            evaluator = FeatureEvaluator(config)
-
-            # Run feature selection
-            selected_features, diagnostics = evaluator.run_feature_selection(
-                dataset,
-                output_dir=Path(config['feature_evaluation']['output_dir']),
-                feature_set_config=config['features']  # Pass entire features section
-            )
+            # Run feature selection on training data
+            logger.info("Running feature selection on training data...")
+            model = PreferenceModel(config=config)
+            results = model.cross_validate(train_data)
             
-            logger.info(f"\nFeature selection completed:")
-            logger.info(f"- Selected {len(selected_features)} features")
-            
-            # Get importance metrics with fallback
-            importance_metrics = diagnostics.get('importance', {})
-            
-            if selected_features:
-                logger.info("\nSelected features:")
-                for feature in selected_features:
-                    importance = importance_metrics.get(feature, {}).get('combined_score', 0.0)
-                    logger.info(f"  - {feature} (importance: {importance:.3f})")
-            
-            # Always show non-selected features
-            non_selected = set(importance_metrics.keys()) - set(selected_features)
-            if non_selected:
-                logger.info("\nNon-selected features:")
-                for feature in sorted(non_selected):
-                    importance = importance_metrics.get(feature, {}).get('combined_score', 0.0)
-                    logger.info(f"  - {feature} (importance: {importance:.3f})")
-            
-            if not importance_metrics:
-                logger.warning("No importance metrics available")
-
-        #-------------------------------------------------------------------
-        # BIGRAM PAIR DATA COLLECTION RECOMMENDATIONS
-        #-------------------------------------------------------------------
-        elif args.mode == "recommend_bigram_pairs":
-
-            logger.info("Generating bigram pair recommendations...")
-            
-            # Load selected features from CSV
-            features_file = Path(config['feature_evaluation']['output_dir']) / 'selected_features.csv'
-            if not features_file.exists():
-                raise FileNotFoundError("Selected features file not found. Run feature selection first.")
-            
-            with open(features_file, 'r') as f:
-                # Skip comment lines and header
-                selected_features = [line.strip() for line in f 
-                                  if line.strip() and not line.startswith('#') 
-                                  and line.strip() != 'feature_name']
-            
-            # Initialize recommender
-            recommender = BigramRecommender(dataset, config, selected_features)
-
-            # Generate recommendations
-            uncertainty_pairs = recommender.get_uncertainty_pairs()
-            interaction_pairs = recommender.get_interaction_pairs()
-            transitivity_pairs = recommender.get_transitivity_pairs()
-            
-            # Create output directory
-            output_dir = Path(config['feature_evaluation']['output_dir'])
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save recommendations to CSV
-            csv_file = output_dir / 'recommended_pairs.csv'
-            with open(csv_file, 'w') as f:
-                f.write("rank,type,bigram1,bigram2\n")
-                for name, pairs in [
-                    ('uncertainty', uncertainty_pairs),
-                    ('interaction', interaction_pairs),
-                    ('transitivity', transitivity_pairs)
-                ]:
-                    for i, (b1, b2) in enumerate(pairs, 1):
-                        f.write(f"{i},{name},{b1},{b2}\n")
-            
-            logger.info(f"Generated recommendations saved to {csv_file}")
-
-        #-------------------------------------------------------------------
-        # MODEL TRAINING
-        #-------------------------------------------------------------------
         elif args.mode == 'train_model':
-            logger.info("Starting model training phase...")
+            # Load train/test split
+            train_data, test_data = load_or_create_split(dataset, config)
             
             # Load selected features
-            features_file = Path(config['feature_evaluation']['output_dir']) / 'selected_features.json'
-            if not features_file.exists():
-                raise FileNotFoundError("Selected features file not found. Run feature selection first.")
-                
-            with open(features_file, 'r') as f:
-                selected_features_data = json.load(f)
-                selected_features = selected_features_data['features']
+            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            if not metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
-            logger.info(f"Using {len(selected_features)} selected features for training.")
+            df = pd.read_csv(metrics_file)
+            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
             
-            # Create train/test split
-            train_data, test_data = dataset.split_by_participants(
-                test_fraction=config['data']['splits']['test_ratio']
-            )
+            if not selected_features:
+                raise ValueError("No features were selected in feature selection phase")
             
-            # Initialize and train model with config
-            model = BayesianPreferenceModel(config=config)
-            model.fit(train_data)
+            logger.info(f"Training model using {len(selected_features)} selected features...")
             
-            logger.info(f"Model training completed.")
+            # Train final model
+            model = PreferenceModel(config=config)
+            model.fit(train_data, features=selected_features)
+            
+            # Evaluate on test set
+            logger.info("Evaluating model on test set...")
+            test_metrics = model.evaluate(test_data)
+            
+            logger.info("\nTest set metrics:")
+            for metric, value in test_metrics.items():
+                logger.info(f"{metric}: {value:.3f}")
         
         logger.info("Pipeline completed successfully")
         

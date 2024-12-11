@@ -6,10 +6,10 @@ data:
   input_file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
   output_dir: "output"
 
-
   splits:
     test_ratio: 0.2
     random_seed: 42
+    split_data_file: "data/split_train_test_indices.npz"
   
   # Keyboard layout
   layout:
@@ -28,37 +28,32 @@ features:
     - middle_column
     - sum_engram_position_values
     - sum_row_position_values
-  interactions_file: "data/filtered_feature_interactions.txt"
+  interactions_file: "data/feature_interactions.txt"
 
 # Feature evaluation settings
 feature_evaluation:
   thresholds:
-    importance: 0.05
-    stability: 0.7
-    correlation: 0.7
-  validation:
-    outlier_detection: true
-    outlier_threshold: 3.0
-  output_dir: "output/feature_evaluation"
+    importance: 0.05  # Threshold for feature selection
+    stability: 0.7    # Minimum stability requirement
+  importance_weights:
+    model_effect: 0.4
+    correlation: 0.3
+    mutual_info: 0.3
+  metrics_file: "output/feature_metrics.csv"
 
 recommendations:
   n_recommendations: 20
-  uncertainty_threshold: 0.8  # For high uncertainty regions
-  interaction_strength_threshold: 0.3  # For feature interactions
-  transitivity_chain_length: 3  # For transitivity testing
 
 model:
-  train: false
   chains: 8
   target_accept: 0.85
   n_samples: 10000
   cross_validation:
     n_splits: 5
     n_repetitions: 1
-    random_seed: 42
 
 # Logging settings
 logging:
-  level: "logging.INFO"  # set level to "DEBUG" or "INFO" at the top of main.py
+  # set level to "DEBUG" or "INFO" at the top of main.py
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  output_file: "output/logs/pipeline.log"
+  output_file: "output/debug.log"

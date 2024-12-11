@@ -1,18 +1,23 @@
 # engram3/models/bayesian.py
-from typing import Dict, List, Optional, Tuple, Any
+"""
+Preference learning model for analyzing bigram typing preferences.
+Handles feature selection, cross-validation, and model evaluation.
+"""
 import numpy as np
 import warnings 
 from scipy import stats 
 from sklearn.model_selection import GroupKFold
-from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.metrics import mutual_info_score, accuracy_score, roc_auc_score
 import logging
 from collections import defaultdict
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
 
 from engram3.data import PreferenceDataset
 
 logger = logging.getLogger(__name__)
 
-class BayesianPreferenceModel():
+class PreferenceModel():
     
     def __init__(self, config: Optional[Dict] = None):
         self.feature_weights = None
@@ -68,8 +73,8 @@ class BayesianPreferenceModel():
             
         try:
             # Extract features for both bigrams
-            from ..features.extraction import extract_bigram_features, extract_same_letter_features
-            from ..features.keymaps import (
+            from .features.extraction import extract_bigram_features, extract_same_letter_features
+            from .features.keymaps import (
                 column_map, row_map, finger_map,
                 engram_position_values, row_position_values
             )
@@ -128,14 +133,12 @@ class BayesianPreferenceModel():
         """Perform cross-validation with participant-based splits."""
         if n_splits is None:
             n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
-        
-        # Get feature names upfront
-        feature_names = dataset.get_feature_names()
-        logger.debug(f"Features for cross-validation: {feature_names}")
-        
+
+        # Get feature names including interactions
+        feature_names = dataset.get_feature_names()  # This should include interaction features
+        logger.debug(f"Features for cross-validation (including interactions): {feature_names}")        
         # Initialize metrics storage
         metrics = defaultdict(list)
-        #feature_effects = {feature: [] for feature in feature_names}  # Initialize for all features
         
         # Get participant IDs and prepare data arrays
         participant_ids = np.array([p.participant_id for p in dataset.preferences])
@@ -162,7 +165,7 @@ class BayesianPreferenceModel():
             try:
                 logger.info(f"Processing fold {fold + 1}/{n_splits}")
                 
-                # Create train/val datasets with all required arguments
+                # Create train/val datasets
                 train_data = self._create_subset_dataset(
                     dataset, train_idx, X1, X2, y, participant_ids)
                 val_data = self._create_subset_dataset(
@@ -182,14 +185,14 @@ class BayesianPreferenceModel():
                 for pref in val_data.preferences:
                     try:
                         pred = self.predict_preference(pref.bigram1, pref.bigram2)
-                        if not np.isnan(pred):  # Skip NaN predictions
+                        if not np.isnan(pred):
                             val_predictions.append(pred)
                             val_true.append(1.0 if pref.preferred else 0.0)
                     except Exception as e:
                         logger.warning(f"Prediction failed for {pref.bigram1}-{pref.bigram2}: {str(e)}")
                         continue
                 
-                if not val_predictions:  # Skip fold if no valid predictions
+                if not val_predictions:
                     logger.warning(f"No valid predictions in fold {fold + 1}, skipping")
                     continue
                 
@@ -200,9 +203,9 @@ class BayesianPreferenceModel():
                 metrics['accuracy'].append(accuracy_score(val_true, val_predictions > 0.5))
                 metrics['auc'].append(roc_auc_score(val_true, val_predictions))
                 
-                # Get feature weights and store them properly
+                # Store feature weights
                 weights = self.get_feature_weights()
-                if weights:  # Add debug logging
+                if weights:
                     logger.debug(f"Fold {fold + 1} weights: {weights}")
                     for feature, weight in weights.items():
                         if not np.isnan(weight):
@@ -214,24 +217,155 @@ class BayesianPreferenceModel():
                 logger.error(f"Error in fold {fold + 1}: {str(e)}")
                 continue
 
-        # Process feature effects for valid features only
+        # Process feature effects and calculate metrics
         processed_effects = {}
-        for feature in feature_names:  # feature_names already contains valid features
+        importance_metrics = {}
+        for feature in feature_names:
             effects = feature_effects.get(feature, [])
             if effects:
+                # Calculate effect statistics
+                effects = np.array(effects)
+                mean_effect = float(np.mean(effects))
+                std_effect = float(np.std(effects))
+                
                 processed_effects[feature] = {
-                    'mean': float(np.mean(effects)),
-                    'std': float(np.std(effects)),
-                    'values': effects
+                    'mean': mean_effect,
+                    'std': std_effect,
+                    'values': effects.tolist()
                 }
-                logger.debug(f"Feature {feature}: collected {len(effects)} effects")
+
+                # Calculate feature importance metrics
+                diffs = []
+                prefs = []
+                for pref in dataset.preferences:
+                    try:
+                        diff = pref.features1[feature] - pref.features2[feature]
+                        if not np.isnan(diff):
+                            diffs.append(diff)
+                            prefs.append(1.0 if pref.preferred else -1.0)
+                    except (KeyError, TypeError):
+                        continue
+
+                if diffs:
+                    diffs = np.array(diffs)
+                    prefs = np.array(prefs)
+                    
+                    # Calculate correlation
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        correlation = stats.spearmanr(diffs, prefs).correlation
+                        if np.isnan(correlation):
+                            correlation = 0.0
+
+                    # Calculate mutual information
+                    feat_diff_bin = diffs > np.median(diffs)
+                    mutual_info = mutual_info_score(feat_diff_bin, prefs > 0)
+
+                    # Calculate combined score
+                    combined_score = (
+                        0.4 * abs(mean_effect) +
+                        0.3 * abs(correlation) +
+                        0.3 * mutual_info
+                    )
+
+                    importance_metrics[feature] = {
+                        'correlation': correlation,
+                        'mutual_info': mutual_info,
+                        'combined_score': combined_score
+                    }
+
+        # Calculate stability metrics
+        stability_metrics = self._calculate_stability_metrics(feature_effects)
+
+        # Determine selected features
+        importance_threshold = self.config['feature_evaluation']['thresholds']['importance']
+        selected_features = [
+            feature for feature in feature_names
+            if importance_metrics.get(feature, {}).get('combined_score', 0.0) >= importance_threshold
+        ]
+
+        # Log results
+        logger.info(f"\nFeature selection results:")
+        logger.info(f"Selected {len(selected_features)} features")
+        
+        logger.info("\nSelected features:")
+        for feature in sorted(selected_features, 
+                            key=lambda x: importance_metrics[x]['combined_score'], 
+                            reverse=True):
+            score = importance_metrics[feature]['combined_score']
+            logger.info(f"- {feature} (importance: {score:.3f})")
+        
+        logger.info("\nNon-selected features:")
+        non_selected = set(feature_names) - set(selected_features)
+        for feature in sorted(non_selected, 
+                            key=lambda x: importance_metrics[x]['combined_score'], 
+                            reverse=True):
+            score = importance_metrics[feature].get('combined_score', 0.0)
+            logger.info(f"- {feature} (importance: {score:.3f})")
+
+        # Save metrics to CSV
+        metrics_file = Path(self.config['feature_evaluation']['metrics_file'])
+        self.save_metrics_csv(metrics_file, processed_effects, importance_metrics, stability_metrics, selected_features)
 
         return {
             'metrics': metrics,
+            'selected_features': selected_features,
             'feature_effects': processed_effects,
-            'stability': self._calculate_stability_metrics(feature_effects)
+            'importance_metrics': importance_metrics,
+            'stability_metrics': stability_metrics
         }
+
+    def save_metrics_csv(self, csv_file: str, 
+                        processed_effects: Dict, 
+                        importance_metrics: Dict,
+                        stability_metrics: Dict,
+                        selected_features: List[str]) -> None:
+        """Save all feature metrics to CSV."""            
+        with open(csv_file, 'w') as f:
+            # Write header
+            header = [
+                "feature_name",
+                "selected",
+                "combined_score",
+                "model_effect_mean",
+                "model_effect_std",
+                "correlation",
+                "mutual_information",
+                "effect_cv",
+                "relative_range",
+                "sign_consistency"
+            ]
+            f.write(','.join(header) + '\n')
             
+            # Get all features (base + interactions)
+            all_features = sorted(processed_effects.keys(), 
+                                key=lambda x: (1 if '_x_' in x else 0, x))
+            
+            # Write data for each feature
+            for feature in all_features:
+                effects = processed_effects.get(feature, {})
+                importance = importance_metrics.get(feature, {})
+                stability = stability_metrics.get(feature, {})
+                
+                # Determine if feature was selected based on importance threshold
+                selected = "1" if feature in selected_features else "0"
+                
+                values = [
+                    feature,
+                    selected,
+                    f"{importance.get('combined_score', 0.0):.6f}",
+                    f"{effects.get('mean', 0.0):.6f}",
+                    f"{effects.get('std', 0.0):.6f}",
+                    f"{importance.get('correlation', 0.0):.6f}",
+                    f"{importance.get('mutual_info', 0.0):.6f}",
+                    f"{stability.get('effect_cv', 0.0):.6f}",
+                    f"{stability.get('relative_range', 0.0):.6f}",
+                    f"{stability.get('sign_consistency', 0.0):.6f}"
+                ]
+                f.write(','.join(values) + '\n')
+            
+            logger.info(f"Saved feature metrics to {csv_file}")
+
     def _create_subset_dataset(
         self, 
         dataset: PreferenceDataset,
@@ -267,6 +401,15 @@ class BayesianPreferenceModel():
         Returns:
             Dictionary containing stability metrics for each feature
         """
+        logger.debug("\nStarting stability metric calculations")
+        logger.debug(f"Number of features: {len(feature_effects)}")
+        for feature, effects in feature_effects.items():
+            logger.debug(f"\nFeature '{feature}':")
+            logger.debug(f"Raw effects: {effects}")
+            logger.debug(f"Number of effects: {len(effects)}")
+            if len(effects) > 0:
+                logger.debug(f"Range: [{min(effects)}, {max(effects)}]")
+
         stability = {}
         
         # Get validation settings from config
@@ -279,36 +422,19 @@ class BayesianPreferenceModel():
             perform_stability_check = True
             outlier_detection = True
             outlier_threshold = 3.0
-        
+
         for feature, effects in feature_effects.items():
-            if not effects:  # Handle empty lists
-                stability[feature] = {
-                    'effect_mean': 0.0,
-                    'effect_std': 0.0,
-                    'effect_cv': float('inf'),
-                    'sign_consistency': 0.0,
-                    'relative_range': float('inf'),
-                    'is_stable': False,
-                    'n_outliers': 0
-                }
+            if not effects:  # Skip empty effects
                 continue
-            
-            # Convert to numpy array and remove any NaN values
+                
             effects = np.array(effects)
             effects = effects[~np.isnan(effects)]  # Remove NaN values
             
-            if len(effects) == 0:  # Skip if no valid effects
-                stability[feature] = {
-                    'effect_mean': 0.0,
-                    'effect_std': 0.0,
-                    'effect_cv': float('inf'),
-                    'sign_consistency': 0.0,
-                    'relative_range': float('inf'),
-                    'is_stable': False,
-                    'n_outliers': 0,
-                    'n_samples': 0
-                }
+            if len(effects) == 0:
                 continue
+                
+            mean_effect = np.mean(effects)
+            std_effect = np.std(effects)
             
             # Outlier detection if enabled
             if outlier_detection and len(effects) > 1:  # Need at least 2 points
@@ -328,29 +454,43 @@ class BayesianPreferenceModel():
             
             if len(effects) == 0:  # Check again after outlier removal
                 continue
-            
-            # Calculate basic statistics
-            mean_effect = np.mean(effects)
+                    
+                        # Recalculate statistics after outlier removal
+            mean_effect = np.mean(effects)  # This is crucial - recalculate with cleaned data
             std_effect = np.std(effects)
+            logger.debug(f"After outlier removal for {feature}:")
+            logger.debug(f"Number of effects: {len(effects)}")
+            logger.debug(f"Effects: {effects}")
+            logger.debug(f"Mean effect: {mean_effect}")
+            logger.debug(f"Std effect: {std_effect}")
             
             # Calculate stability metrics with error handling
             try:
-                effect_cv = std_effect / mean_effect if mean_effect != 0 else float('inf')
-            except:
+                effect_cv = std_effect / abs(mean_effect) if abs(mean_effect) > 1e-10 else float('inf')
+                logger.debug(f"{feature} effect_cv calculation:")
+                logger.debug(f"std_effect: {std_effect}, mean_effect: {mean_effect}, cv: {effect_cv}")
+            except Exception as e:
+                logger.error(f"CV calculation failed for {feature}: {str(e)}")
                 effect_cv = float('inf')
-                
+
             try:
                 sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
-            except:
+                logger.debug(f"{feature} sign_consistency calculation:")
+                logger.debug(f"sign_consistency: {sign_consistency}")
+            except Exception as e:
+                logger.error(f"Sign consistency calculation failed for {feature}: {str(e)}")
                 sign_consistency = 0.0
-                
+
             try:
                 relative_range = ((np.max(effects) - np.min(effects)) / 
-                                np.abs(mean_effect)) if mean_effect != 0 else float('inf')
-            except:
+                                abs(mean_effect)) if abs(mean_effect) > 1e-10 else float('inf')
+                logger.debug(f"{feature} relative_range calculation:")
+                logger.debug(f"max: {np.max(effects)}, min: {np.min(effects)}, range: {relative_range}")
+            except Exception as e:
+                logger.error(f"Range calculation failed for {feature}: {str(e)}")
                 relative_range = float('inf')
-            
-            # Determine if feature is stable based on metrics
+   
+            # NOW we can determine stability
             is_stable = (
                 effect_cv < 1.0 and  # Coefficient of variation less than 100%
                 sign_consistency > 0.8 and  # Consistent sign in >80% of folds
@@ -380,3 +520,4 @@ class BayesianPreferenceModel():
                 logger.warning(f"Feature '{feature}' is unstable: {', '.join(reasons)}")
         
         return stability
+

@@ -148,10 +148,14 @@ def precompute_all_bigram_features(
                         continue
                     
                     # Compute interaction
-                    interaction_name = "_".join(interaction)
+                    interaction_name = "_x_".join(interaction)
                     interaction_value = np.prod([base_features[f] for f in interaction])
                     all_bigram_features[bigram][interaction_name] = interaction_value
                     
+                    logger.debug(f"Computing interaction: {interaction}")
+                    logger.debug(f"Interaction name: {interaction_name}")
+                    logger.debug(f"Features available for bigram: {sorted(base_features.keys())}")
+
                     # Add interaction name to feature list if new
                     if interaction_name not in feature_names:
                         feature_names.append(interaction_name)
