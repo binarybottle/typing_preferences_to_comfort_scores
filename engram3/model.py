@@ -26,11 +26,17 @@ class PreferenceModel():
         self.n_chains = self.config.get('model', {}).get('chains', 8)
         self.target_accept = self.config.get('model', {}).get('target_accept', 0.85)
         
-    def fit(self, dataset: PreferenceDataset) -> None:
-        """Fit the model to training data."""
+    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
+        """
+        Fit the model to training data.
+        
+        Args:
+            dataset: PreferenceDataset containing training data
+            features: Optional list of feature names to use. If None, uses all features.
+        """
         try:
-            # Get feature names once
-            feature_names = dataset.get_feature_names()
+            # Get feature names - either passed in or all available
+            feature_names = features if features is not None else dataset.get_feature_names()
             self.feature_weights = {name: 0.0 for name in feature_names}
             
             # Calculate feature differences and handle None/NaN
@@ -65,7 +71,7 @@ class PreferenceModel():
         except Exception as e:
             logger.error(f"Model fitting failed: {str(e)}")
             raise
-
+        
     def predict_preference(self, bigram1: str, bigram2: str) -> float:
         """Predict preference probability."""
         if self.feature_weights is None:
@@ -120,11 +126,11 @@ class PreferenceModel():
             return 0.5  # Return uncertainty in case of error
         
     def get_feature_weights(self) -> Dict[str, float]:
-        """Get the learned feature weights."""
+        """Get the learned feature weights including interactions."""
         if self.feature_weights is None:
             raise RuntimeError("Model must be fit before getting weights")
         return self.feature_weights.copy()
-        
+  
     def cross_validate(
         self, 
         dataset: PreferenceDataset, 

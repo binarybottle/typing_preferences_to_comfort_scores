@@ -47,6 +47,7 @@ feature_evaluation:
 
 recommendations:
   n_recommendations: 20  # Number of pairs to recommend
+  max_candidates: 1000  # Maximum number of candidate pairs to consider
   weights:
     uncertainty: 0.4
     interaction: 0.3
