@@ -20,8 +20,6 @@ from engram3.features.extraction import extract_bigram_features
 logger = logging.getLogger(__name__)
 
 class BigramRecommender:
-    """Generate recommended bigram pairs for data collection."""
-    
     def __init__(self, dataset: PreferenceDataset, model: PreferenceModel, config: Dict):
         self.dataset = dataset
         self.model = model
@@ -30,57 +28,89 @@ class BigramRecommender:
         self.n_recommendations = config['recommendations']['n_recommendations']
         self.layout_chars = config['data']['layout']['chars']
 
-    def score_pair(self, bigram1: str, bigram2: str) -> float:
-        """
-        Score a bigram pair based on model uncertainty.
-        Higher score = model is more uncertain about preference.
-        """
-        try:
-            # Get model's prediction probability
-            pred_prob = self.model.predict_preference(bigram1, bigram2)
-            
-            # Higher score when prediction is closer to 0.5 (uncertain)
-            uncertainty = 1 - abs(pred_prob - 0.5) * 2
-            
-            return float(uncertainty)
-            
-        except Exception as e:
-            logger.warning(f"Error scoring pair {bigram1}-{bigram2}: {e}")
-            return 0.0
-
     def get_recommended_pairs(self) -> List[Tuple[str, str]]:
         """Get recommended bigram pairs based on multiple criteria."""
-        # Get candidate pairs
         candidate_pairs = self._generate_candidate_pairs()
         
         # Score each candidate pair
         scored_pairs = []
         weights = self.config.get('recommendations', {}).get('weights', {
-            'uncertainty': 0.4,
-            'interaction': 0.3,
-            'transitivity': 0.3
+            'prediction_uncertainty': 0.4,
+            'comfort_uncertainty': 0.3,
+            'feature_space': 0.3
         })
         
         for pair in candidate_pairs:
             try:
-                uncertainty_score = self.score_pair(*pair)
-                interaction_score = self._calculate_interaction_score(*pair)
-                transitivity_score = self._calculate_transitivity_score(*pair)
+                # 1. Get prediction uncertainty
+                pred_mean, pred_std = self.model.predict_preference(*pair)
+                prediction_score = pred_std  # Higher uncertainty = higher score
                 
+                # 2. Get comfort score uncertainties
+                comfort1_mean, comfort1_std = self.model.get_bigram_comfort_scores(pair[0])
+                comfort2_mean, comfort2_std = self.model.get_bigram_comfort_scores(pair[1])
+                comfort_score = (comfort1_std + comfort2_std) / 2
+                
+                # 3. Calculate feature space coverage score
+                feature_score = self._calculate_feature_space_score(pair)
+                
+                # Combine scores
                 total_score = (
-                    weights['uncertainty'] * uncertainty_score +
-                    weights['interaction'] * interaction_score +
-                    weights['transitivity'] * transitivity_score
+                    weights['prediction_uncertainty'] * prediction_score +
+                    weights['comfort_uncertainty'] * comfort_score +
+                    weights['feature_space'] * feature_score
                 )
                 
                 scored_pairs.append((pair, total_score))
+                
             except Exception as e:
                 logger.warning(f"Error scoring pair {pair}: {str(e)}")
                 continue
-            
+        
         # Filter and return top pairs
-        return self._filter_top_pairs(scored_pairs)
+        scored_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Log recommendation details
+        logger.info("\nTop recommended pairs:")
+        for pair, score in scored_pairs[:self.n_recommendations]:
+            pred_mean, pred_std = self.model.predict_preference(*pair)
+            logger.info(f"{pair[0]}-{pair[1]}: score={score:.3f} "
+                       f"(pred={pred_mean:.3f}±{pred_std:.3f})")
+        
+        return [pair for pair, _ in scored_pairs[:self.n_recommendations]]
 
+    def _calculate_feature_space_score(self, pair: Tuple[str, str]) -> float:
+        """
+        Calculate how well a pair covers sparse regions of feature space.
+        """
+        try:
+            # Get features for both bigrams
+            features1 = self._extract_features(pair[0])
+            features2 = self._extract_features(pair[1])
+            
+            # Get feature vectors for existing data
+            existing_vectors = []
+            for pref in self.dataset.preferences:
+                feat1 = [pref.features1.get(f, 0.0) for f in self.selected_features]
+                feat2 = [pref.features2.get(f, 0.0) for f in self.selected_features]
+                existing_vectors.extend([feat1, feat2])
+            
+            existing_vectors = np.array(existing_vectors)
+            
+            # Calculate minimum distances to existing points
+            new_vector1 = np.array([features1.get(f, 0.0) for f in self.selected_features])
+            new_vector2 = np.array([features2.get(f, 0.0) for f in self.selected_features])
+            
+            dist1 = np.min(np.linalg.norm(existing_vectors - new_vector1, axis=1))
+            dist2 = np.min(np.linalg.norm(existing_vectors - new_vector2, axis=1))
+            
+            # Return average distance (higher = better coverage of sparse regions)
+            return (dist1 + dist2) / 2
+            
+        except Exception as e:
+            logger.warning(f"Error calculating feature space score: {str(e)}")
+            return 0.0
+          
     def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
         """
         Create two plots: current data and current+recommended pairs
@@ -106,81 +136,146 @@ class BigramRecommender:
                 logger.warning(f"Skipping preference due to feature error: {e}")
                 continue
 
-        # Convert to numpy array
+        # Convert to numpy array and standardize features
         X = np.array(feature_vectors)
+        X = (X - np.mean(X, axis=0)) / np.std(X, axis=0, ddof=1)
         
         # Verify no NaN values remain
         if np.any(np.isnan(X)):
             logger.warning("NaN values found in feature matrix after preprocessing")
-            # Replace any remaining NaNs with 0
             X = np.nan_to_num(X, nan=0.0)
         
         # Fit PCA
         pca = PCA(n_components=2)
         X_2d = pca.fit_transform(X)
         
+        # Calculate explained variance for axis labels
+        var1 = pca.explained_variance_ratio_[0] * 100
+        var2 = pca.explained_variance_ratio_[1] * 100
+        
         # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+        
+        def setup_ax(ax):
+            """Set up common axis properties"""
+            ax.set_xlabel(f'PC1 ({var1:.1f}% variance)')
+            ax.set_ylabel(f'PC2 ({var2:.1f}% variance)')
+            ax.grid(True, alpha=0.3)
+            
+            # Add equal aspect ratio to prevent distortion
+            ax.set_aspect('equal')
+            
+            # Add some padding to the limits
+            xlim = ax.get_xlim()
+            ylim = ax.get_ylim()
+            padding = 0.1
+            x_range = xlim[1] - xlim[0]
+            y_range = ylim[1] - ylim[0]
+            ax.set_xlim(xlim[0] - x_range*padding, xlim[1] + x_range*padding)
+            ax.set_ylim(ylim[0] - y_range*padding, ylim[1] + y_range*padding)
         
         # Plot 1: Current data
         # Plot nodes
-        ax1.scatter(X_2d[:, 0], X_2d[:, 1], c='lightblue', s=100)
+        scatter1 = ax1.scatter(X_2d[:, 0], X_2d[:, 1], 
+                            c='lightblue', s=100, alpha=0.6,
+                            edgecolor='darkblue')
         
-        # Add labels
+        # Add labels with offset for better readability
         for i, label in enumerate(bigram_labels):
-            ax1.annotate(label, (X_2d[i, 0], X_2d[i, 1]), fontsize=8)
+            offset = 0.02 * (max(X_2d[:, 0]) - min(X_2d[:, 0]))
+            ax1.annotate(label, 
+                        (X_2d[i, 0] + offset, X_2d[i, 1] + offset),
+                        fontsize=8,
+                        bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
         
-        # Plot edges for existing pairs
+        # Plot edges for existing pairs with curved lines
         for i in range(0, len(bigram_labels), 2):
-            ax1.plot([X_2d[i, 0], X_2d[i+1, 0]], 
-                    [X_2d[i, 1], X_2d[i+1, 1]], 
-                    'gray', alpha=0.5)
+            # Create curved line between points
+            mid_point = [(X_2d[i, 0] + X_2d[i+1, 0])/2,
+                        (X_2d[i, 1] + X_2d[i+1, 1])/2]
+            # Add some curvature
+            mid_point[1] += 0.05 * (max(X_2d[:, 1]) - min(X_2d[:, 1]))
+            
+            curve = plt.matplotlib.patches.ConnectionPatch(
+                xyA=(X_2d[i, 0], X_2d[i, 1]),
+                xyB=(X_2d[i+1, 0], X_2d[i+1, 1]),
+                coordsA="data", coordsB="data",
+                axesA=ax1, axesB=ax1,
+                color='gray', alpha=0.3,
+                connectionstyle="arc3,rad=0.2")
+            ax1.add_patch(curve)
         
-        ax1.set_title("Current Bigram Pairs")
+        ax1.set_title("Current Bigram Pairs", pad=20)
+        setup_ax(ax1)
         
         # Plot 2: Current + Recommended
-        # Copy first plot
-        ax2.scatter(X_2d[:, 0], X_2d[:, 1], c='lightblue', s=100)
-        for i, label in enumerate(bigram_labels):
-            ax2.annotate(label, (X_2d[i, 0], X_2d[i, 1]), fontsize=8)
+        scatter2 = ax2.scatter(X_2d[:, 0], X_2d[:, 1],
+                            c='lightblue', s=100, alpha=0.6,
+                            edgecolor='darkblue')
         
-        # Plot existing edges
-        for i in range(0, len(bigram_labels), 2):
-            ax2.plot([X_2d[i, 0], X_2d[i+1, 0]], 
-                    [X_2d[i, 1], X_2d[i+1, 1]], 
-                    'gray', alpha=0.5)
+        # Copy labels from first plot
+        for i, label in enumerate(bigram_labels):
+            offset = 0.02 * (max(X_2d[:, 0]) - min(X_2d[:, 0]))
+            ax2.annotate(label,
+                        (X_2d[i, 0] + offset, X_2d[i, 1] + offset),
+                        fontsize=8,
+                        bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
         
         # Add recommended pairs
+        recommended_points = []
+        recommended_labels = []
+        
         for b1, b2 in recommended_pairs:
             try:
                 # Get feature vectors
                 feat1 = [self._extract_features(b1).get(f, 0.0) for f in self.selected_features]
                 feat2 = [self._extract_features(b2).get(f, 0.0) for f in self.selected_features]
                 
-                # Replace NaN with 0.0
-                feat1 = [0.0 if pd.isna(x) else x for x in feat1]
-                feat2 = [0.0 if pd.isna(x) else x for x in feat2]
+                # Standardize using same parameters as training data
+                feat1 = (feat1 - np.mean(X, axis=0)) / np.std(X, axis=0, ddof=1)
+                feat2 = (feat2 - np.mean(X, axis=0)) / np.std(X, axis=0, ddof=1)
                 
                 # Project to 2D
                 new_points = pca.transform(np.array([feat1, feat2]))
+                recommended_points.extend(new_points)
+                recommended_labels.extend([b1, b2])
                 
-                # Plot new points
-                ax2.scatter(new_points[:, 0], new_points[:, 1], c='red', s=100)
+                # Add curved connection
+                mid_point = [(new_points[0, 0] + new_points[1, 0])/2,
+                            (new_points[0, 1] + new_points[1, 1])/2]
+                mid_point[1] += 0.05 * (max(X_2d[:, 1]) - min(X_2d[:, 1]))
                 
-                # Add labels
-                for i, label in enumerate([b1, b2]):
-                    ax2.annotate(label, (new_points[i, 0], new_points[i, 1]), 
-                                fontsize=8, color='red')
+                curve = plt.matplotlib.patches.ConnectionPatch(
+                    xyA=(new_points[0, 0], new_points[0, 1]),
+                    xyB=(new_points[1, 0], new_points[1, 1]),
+                    coordsA="data", coordsB="data",
+                    axesA=ax2, axesB=ax2,
+                    color='red', alpha=0.5,
+                    connectionstyle="arc3,rad=0.2")
+                ax2.add_patch(curve)
                 
-                # Add edge
-                ax2.plot([new_points[0, 0], new_points[1, 0]], 
-                        [new_points[0, 1], new_points[1, 1]], 
-                        'red', linewidth=2)
             except Exception as e:
                 logger.warning(f"Error plotting recommended pair {b1}-{b2}: {e}")
                 continue
         
-        ax2.set_title("Current + Recommended Pairs")
+        if recommended_points:
+            recommended_points = np.array(recommended_points)
+            scatter_rec = ax2.scatter(recommended_points[:, 0], recommended_points[:, 1],
+                                    c='red', s=100, alpha=0.6,
+                                    edgecolor='darkred', label='Recommended')
+            
+            # Add labels for recommended points
+            for i, label in enumerate(recommended_labels):
+                offset = 0.02 * (max(X_2d[:, 0]) - min(X_2d[:, 0]))
+                ax2.annotate(label,
+                            (recommended_points[i, 0] + offset, 
+                            recommended_points[i, 1] + offset),
+                            fontsize=8, color='darkred',
+                            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+        
+        ax2.set_title("Current + Recommended Pairs", pad=20)
+        ax2.legend()
+        setup_ax(ax2)
         
         plt.tight_layout()
         
@@ -188,17 +283,17 @@ class BigramRecommender:
         if self.config.get('recommendations', {}).get('save_plots', False):
             output_dir = Path(self.config['data']['output_dir']) / 'plots'
             output_dir.mkdir(parents=True, exist_ok=True)
-            plt.savefig(output_dir / 'bigram_recommendations.png')
+            plt.savefig(output_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
             logger.info(f"Saved plot to {output_dir / 'bigram_recommendations.png'}")
         
         plt.show()
         
         # Print feature space coverage statistics
         print("\nFeature Space Coverage:")
-        print(f"Variance explained by 2D projection: {pca.explained_variance_ratio_.sum():.2%}")
+        print(f"Total variance explained by 2D projection: {(var1 + var2):.1f}%")
         print(f"Number of existing pairs: {len(self.dataset.preferences)}")
         print(f"Number of recommended pairs: {len(recommended_pairs)}")
-        
+            
     def _calculate_interaction_score(self, bigram1: str, bigram2: str) -> float:
         """
         Score how well a pair tests feature interactions.

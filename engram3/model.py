@@ -1,7 +1,15 @@
-# engram3/models/bayesian.py
+# engram3/model.py
 """
 Preference learning model for analyzing bigram typing preferences.
 Handles feature selection, cross-validation, and model evaluation.
+
+  - Models latent comfort scores directly through features
+  - Includes participant random effects
+  - Uses proper Bayesian inference for uncertainty estimation
+  - Maintains transitivity through Bradley-Terry structure
+  - Can predict preferences for new participants
+  - Can estimate absolute comfort scores for any bigram
+
 """
 import numpy as np
 import warnings 
@@ -12,119 +20,107 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+import pymc as pm
+import aesara.tensor as at
 
 from engram3.data import PreferenceDataset
 
 logger = logging.getLogger(__name__)
 
-class PreferenceModel():
-    
+class PreferenceModel:
     def __init__(self, config: Optional[Dict] = None):
-        self.feature_weights = None
         self.config = config or {}
-        self.n_samples = self.config.get('model', {}).get('n_samples', 10000)
-        self.n_chains = self.config.get('model', {}).get('chains', 8)
-        self.target_accept = self.config.get('model', {}).get('target_accept', 0.85)
+        self.feature_weights = None
+        self.participant_effects = None
+        self.model = None
         
-    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
+    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None):
         """
-        Fit the model to training data.
+        Fit hierarchical feature-based Bradley-Terry model.
+        """
+        feature_names = features if features is not None else dataset.get_feature_names()
+        n_features = len(feature_names)
+        n_participants = len(dataset.participants)
         
-        Args:
-            dataset: PreferenceDataset containing training data
-            features: Optional list of feature names to use. If None, uses all features.
-        """
-        try:
-            # Get feature names - either passed in or all available
-            feature_names = features if features is not None else dataset.get_feature_names()
-            self.feature_weights = {name: 0.0 for name in feature_names}
+        # Extract feature matrices and preferences
+        X1, X2, y, participant_ids = self._prepare_data(dataset, feature_names)
+        
+        with pm.Model() as self.model:
+            # Global feature weights (fixed effects)
+            feature_weights = pm.Normal('feature_weights', 
+                                     mu=0, sigma=1, 
+                                     shape=n_features)
             
-            # Calculate feature differences and handle None/NaN
-            for feature in feature_names:
-                diffs = []
-                prefs = []
-                for pref in dataset.preferences:
-                    val1 = pref.features1.get(feature)
-                    val2 = pref.features2.get(feature)
-                    
-                    # Skip if either value is None/NaN
-                    if val1 is None or val2 is None:
-                        continue
-                    
-                    try:
-                        diff = float(val1) - float(val2)
-                        if not np.isnan(diff):
-                            diffs.append(diff)
-                            prefs.append(1.0 if pref.preferred else -1.0)
-                    except (TypeError, ValueError) as e:
-                        logger.warning(f"Error calculating difference for feature {feature}: {e}")
-                        continue
-                
-                if diffs:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        correlation = stats.spearmanr(diffs, prefs).correlation
-                        self.feature_weights[feature] = (
-                            correlation if not np.isnan(correlation) else 0.0
-                        )
-                        
-        except Exception as e:
-            logger.error(f"Model fitting failed: {str(e)}")
-            raise
-        
-    def predict_preference(self, bigram1: str, bigram2: str) -> float:
-        """Predict preference probability."""
-        if self.feature_weights is None:
+            # Participant-level random effects
+            participant_effects = pm.Normal('participant_effects',
+                                         mu=0, sigma=1,
+                                         shape=n_participants)
+            
+            # Compute latent comfort scores for each bigram
+            comfort_score1 = at.dot(X1, feature_weights)
+            comfort_score2 = at.dot(X2, feature_weights)
+            
+            # Add participant effects
+            comfort_score1 = comfort_score1 + participant_effects[participant_ids]
+            comfort_score2 = comfort_score2 + participant_effects[participant_ids]
+            
+            # Bradley-Terry probability
+            p = pm.math.sigmoid(comfort_score1 - comfort_score2)
+            
+            # Likelihood
+            pm.Bernoulli('likelihood', p=p, observed=y)
+            
+            # Fit model using NUTS sampler
+            self.trace = pm.sample(
+                draws=self.config.get('model', {}).get('n_samples', 1000),
+                chains=self.config.get('model', {}).get('chains', 4),
+                target_accept=self.config.get('model', {}).get('target_accept', 0.8)
+            )
+    
+    def predict_preference(self, bigram1: str, bigram2: str, 
+                         participant_id: Optional[str] = None) -> Tuple[float, float]:
+        """
+        Predict preference probability with uncertainty.
+        Returns (mean probability, standard deviation)
+        """
+        if self.model is None:
             raise RuntimeError("Model must be fit before making predictions")
             
-        try:
-            # Extract features for both bigrams
-            from .features.extraction import extract_bigram_features, extract_same_letter_features
-            from .features.keymaps import (
-                column_map, row_map, finger_map,
-                engram_position_values, row_position_values
-            )
-            
-            # Get features for each bigram
-            if bigram1[0] == bigram1[1]:  # Same-letter bigram
-                features1 = extract_same_letter_features(
-                    bigram1[0], 
-                    column_map, finger_map,
-                    engram_position_values, row_position_values
-                )
-            else:
-                features1 = extract_bigram_features(
-                    bigram1[0], bigram1[1],
-                    column_map, row_map, finger_map,
-                    engram_position_values, row_position_values
-                )
-                
-            if bigram2[0] == bigram2[1]:  # Same-letter bigram
-                features2 = extract_same_letter_features(
-                    bigram2[0],
-                    column_map, finger_map,
-                    engram_position_values, row_position_values
-                )
-            else:
-                features2 = extract_bigram_features(
-                    bigram2[0], bigram2[1],
-                    column_map, row_map, finger_map,
-                    engram_position_values, row_position_values
-                )
-            
-            # Calculate scores using feature weights
-            score1 = sum(self.feature_weights.get(f, 0.0) * features1.get(f, 0.0) 
-                        for f in self.feature_weights)
-            score2 = sum(self.feature_weights.get(f, 0.0) * features2.get(f, 0.0) 
-                        for f in self.feature_weights)
-            
-            # Convert to probability using sigmoid
-            return 1 / (1 + np.exp(-(score1 - score2)))
-            
-        except Exception as e:
-            logger.error(f"Prediction failed: {str(e)}")
-            return 0.5  # Return uncertainty in case of error
+        # Extract features
+        feat1 = self._extract_features(bigram1)
+        feat2 = self._extract_features(bigram2)
         
+        # Get samples from posterior
+        feature_weights_samples = self.trace.posterior['feature_weights'].values
+        
+        if participant_id is not None:
+            participant_effects = self.trace.posterior['participant_effects'].values
+            participant_idx = self._get_participant_index(participant_id)
+            comfort1 = np.dot(feat1, feature_weights_samples.T) + participant_effects[:, :, participant_idx]
+            comfort2 = np.dot(feat2, feature_weights_samples.T) + participant_effects[:, :, participant_idx]
+        else:
+            comfort1 = np.dot(feat1, feature_weights_samples.T)
+            comfort2 = np.dot(feat2, feature_weights_samples.T)
+        
+        # Calculate probabilities
+        probs = 1 / (1 + np.exp(-(comfort1 - comfort2)))
+        
+        return float(np.mean(probs)), float(np.std(probs))
+    
+    def get_bigram_comfort_scores(self, bigram: str) -> Tuple[float, float]:
+        """
+        Get estimated comfort score for a bigram with uncertainty.
+        Returns (mean score, standard deviation)
+        """
+        if self.model is None:
+            raise RuntimeError("Model must be fit before getting comfort scores")
+            
+        features = self._extract_features(bigram)
+        feature_weights_samples = self.trace.posterior['feature_weights'].values
+        comfort_scores = np.dot(features, feature_weights_samples.T)
+        
+        return float(np.mean(comfort_scores)), float(np.std(comfort_scores))
+            
     def get_feature_weights(self) -> Dict[str, float]:
         """Get the learned feature weights including interactions."""
         if self.feature_weights is None:
@@ -136,18 +132,21 @@ class PreferenceModel():
         dataset: PreferenceDataset, 
         n_splits: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Perform cross-validation with participant-based splits."""
+        """Perform cross-validation with multiple validation strategies."""
         if n_splits is None:
             n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
-
-        # Get feature names including interactions
-        feature_names = dataset.get_feature_names()  # This should include interaction features
-        logger.debug(f"Features for cross-validation (including interactions): {feature_names}")        
-        # Initialize metrics storage
-        metrics = defaultdict(list)
         
-        # Get participant IDs and prepare data arrays
+        feature_names = dataset.get_feature_names()
+        logger.debug(f"Features for cross-validation (including interactions): {feature_names}")
+        
+        metrics = defaultdict(list)
+        feature_effects = defaultdict(list)
+        
+        # 1. Participant-based Cross-validation
         participant_ids = np.array([p.participant_id for p in dataset.preferences])
+        cv = GroupKFold(n_splits=n_splits)
+        
+        # Prepare data arrays once
         all_preferences = []
         all_features1 = []
         all_features2 = []
@@ -158,41 +157,39 @@ class PreferenceModel():
             feat2 = [pref.features2[f] for f in feature_names]
             all_features1.append(feat1)
             all_features2.append(feat2)
-            
+        
         X1 = np.array(all_features1)
         X2 = np.array(all_features2)
         y = np.array(all_preferences)
         
         # Perform cross-validation
-        cv = GroupKFold(n_splits=n_splits)
-        
-        feature_effects = defaultdict(list)
         for fold, (train_idx, val_idx) in enumerate(cv.split(X1, y, groups=participant_ids)):
             try:
                 logger.info(f"Processing fold {fold + 1}/{n_splits}")
                 
                 # Create train/val datasets
-                train_data = self._create_subset_dataset(
-                    dataset, train_idx, X1, X2, y, participant_ids)
-                val_data = self._create_subset_dataset(
-                    dataset, val_idx, X1, X2, y, participant_ids)
+                train_data = dataset._create_subset_dataset(train_idx)
+                val_data = dataset._create_subset_dataset(val_idx)
                 
                 if len(train_data.preferences) == 0 or len(val_data.preferences) == 0:
                     logger.warning(f"Empty split in fold {fold + 1}, skipping")
                     continue
                 
-                # Fit model on training data
+                # Fit Bayesian model on training data
                 self.fit(train_data)
                 
-                # Get predictions on validation set
+                # Get predictions with uncertainty on validation set
                 val_predictions = []
+                val_uncertainties = []
                 val_true = []
                 
                 for pref in val_data.preferences:
                     try:
-                        pred = self.predict_preference(pref.bigram1, pref.bigram2)
-                        if not np.isnan(pred):
-                            val_predictions.append(pred)
+                        pred_mean, pred_std = self.predict_preference(
+                            pref.bigram1, pref.bigram2)
+                        if not np.isnan(pred_mean):
+                            val_predictions.append(pred_mean)
+                            val_uncertainties.append(pred_std)
                             val_true.append(1.0 if pref.preferred else 0.0)
                     except Exception as e:
                         logger.warning(f"Prediction failed for {pref.bigram1}-{pref.bigram2}: {str(e)}")
@@ -208,117 +205,73 @@ class PreferenceModel():
                 # Calculate metrics
                 metrics['accuracy'].append(accuracy_score(val_true, val_predictions > 0.5))
                 metrics['auc'].append(roc_auc_score(val_true, val_predictions))
+                metrics['mean_uncertainty'].append(np.mean(val_uncertainties))
                 
-                # Store feature weights
+                # Store feature weights with uncertainty
                 weights = self.get_feature_weights()
                 if weights:
                     logger.debug(f"Fold {fold + 1} weights: {weights}")
-                    for feature, weight in weights.items():
-                        if not np.isnan(weight):
-                            feature_effects[feature].append(weight)
+                    for feature, (weight_mean, weight_std) in weights.items():
+                        if not np.isnan(weight_mean):
+                            feature_effects[feature].append({
+                                'mean': weight_mean,
+                                'std': weight_std
+                            })
                 else:
                     logger.warning(f"No weights obtained in fold {fold + 1}")
                 
             except Exception as e:
                 logger.error(f"Error in fold {fold + 1}: {str(e)}")
                 continue
-
+        
         # Process feature effects and calculate metrics
         processed_effects = {}
         importance_metrics = {}
+        
         for feature in feature_names:
             effects = feature_effects.get(feature, [])
             if effects:
-                # Calculate effect statistics
-                effects = np.array(effects)
-                mean_effect = float(np.mean(effects))
-                std_effect = float(np.std(effects))
+                # Calculate effect statistics considering uncertainty
+                effect_means = [e['mean'] for e in effects]
+                effect_stds = [e['std'] for e in effects]
+                
+                mean_effect = float(np.mean(effect_means))
+                mean_uncertainty = float(np.mean(effect_stds))
                 
                 processed_effects[feature] = {
                     'mean': mean_effect,
-                    'std': std_effect,
-                    'values': effects.tolist()
+                    'std': mean_uncertainty,
+                    'values': effect_means
                 }
-
-                # Calculate feature importance metrics
-                diffs = []
-                prefs = []
-                for pref in dataset.preferences:
-                    try:
-                        diff = pref.features1[feature] - pref.features2[feature]
-                        if not np.isnan(diff):
-                            diffs.append(diff)
-                            prefs.append(1.0 if pref.preferred else -1.0)
-                    except (KeyError, TypeError):
-                        continue
-
-                if diffs:
-                    diffs = np.array(diffs)
-                    prefs = np.array(prefs)
-                    
-                    # Calculate correlation
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        correlation = stats.spearmanr(diffs, prefs).correlation
-                        if np.isnan(correlation):
-                            correlation = 0.0
-
-                    # Calculate mutual information
-                    feat_diff_bin = diffs > np.median(diffs)
-                    mutual_info = mutual_info_score(feat_diff_bin, prefs > 0)
-
-                    # Calculate combined score
-                    combined_score = (
-                        0.4 * abs(mean_effect) +
-                        0.3 * abs(correlation) +
-                        0.3 * mutual_info
-                    )
-
-                    importance_metrics[feature] = {
-                        'correlation': correlation,
-                        'mutual_info': mutual_info,
-                        'combined_score': combined_score
-                    }
-
+                
+                # Calculate feature importance incorporating uncertainty
+                importance_metrics[feature] = self._calculate_feature_importance(
+                    feature, dataset, mean_effect, mean_uncertainty)
+        
         # Calculate stability metrics
         stability_metrics = self._calculate_stability_metrics(feature_effects)
-
-        # Determine selected features
-        importance_threshold = self.config['feature_evaluation']['thresholds']['importance']
-        selected_features = [
-            feature for feature in feature_names
-            if importance_metrics.get(feature, {}).get('combined_score', 0.0) >= importance_threshold
-        ]
-
+        
+        # Determine selected features using Bayesian criteria
+        selected_features = self._select_features_bayesian(
+            importance_metrics, stability_metrics)
+        
         # Log results
-        logger.info(f"\nFeature selection results:")
-        logger.info(f"Selected {len(selected_features)} features")
+        self._log_feature_selection_results(
+            selected_features, importance_metrics)
         
-        logger.info("\nSelected features:")
-        for feature in sorted(selected_features, 
-                            key=lambda x: importance_metrics[x]['combined_score'], 
-                            reverse=True):
-            score = importance_metrics[feature]['combined_score']
-            logger.info(f"- {feature} (importance: {score:.3f})")
-        
-        logger.info("\nNon-selected features:")
-        non_selected = set(feature_names) - set(selected_features)
-        for feature in sorted(non_selected, 
-                            key=lambda x: importance_metrics[x]['combined_score'], 
-                            reverse=True):
-            score = importance_metrics[feature].get('combined_score', 0.0)
-            logger.info(f"- {feature} (importance: {score:.3f})")
-
         # Save metrics to CSV
-        metrics_file = self.config['feature_evaluation']['metrics_file']
-        self.save_metrics_csv(metrics_file, processed_effects, importance_metrics, stability_metrics, selected_features)
-
+        self.save_metrics_csv(
+            self.config['feature_evaluation']['metrics_file'],
+            processed_effects, importance_metrics, 
+            stability_metrics, selected_features)
+        
         return {
             'metrics': metrics,
             'selected_features': selected_features,
             'feature_effects': processed_effects,
             'importance_metrics': importance_metrics,
-            'stability_metrics': stability_metrics
+            'stability_metrics': stability_metrics,
+            'fold_uncertainties': dict(metrics['mean_uncertainty'])
         }
 
     def save_metrics_csv(self, csv_file: str, 

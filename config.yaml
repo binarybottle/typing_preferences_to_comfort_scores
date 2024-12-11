@@ -46,12 +46,12 @@ feature_evaluation:
   metrics_file: "output/feature_metrics.csv"
 
 recommendations:
-  n_recommendations: 20  # Number of pairs to recommend
-  max_candidates: 1000  # Maximum number of candidate pairs to consider
   weights:
-    uncertainty: 0.4
-    interaction: 0.3
-    transitivity: 0.3
+    prediction_uncertainty: 0.4
+    comfort_uncertainty: 0.3
+    feature_space: 0.3
+  n_recommendations: 20
+  max_candidates: 1000
   recommendations_file: "output/recommended_bigram_pairs.csv"
 
 model:
