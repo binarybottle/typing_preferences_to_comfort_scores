@@ -5,13 +5,15 @@ description = "Keyboard layout optimization through preference learning"
 authors = ["Arno Klein <binarybottle@gmail.com>"]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"  # Changed from ^3.8 to >=3.9
+python = ">=3.10,<4.0"
 pandas = "^1.5.0"
 numpy = "^1.23.0"
 pyyaml = "^6.0"
 setuptools = "^69.0.2"
 pytest = "^8.3.4"
 scikit-learn = "^1.5.2"
+matplotlib = "^3.9.3"
+networkx = "^3.4.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

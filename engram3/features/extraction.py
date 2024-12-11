@@ -34,6 +34,9 @@ def extract_bigram_features(char1: str,
     """
     features = {}
     
+    # typing_time as a base feature with default value
+    features['typing_time'] = 0.0  # Will be updated with actual values later
+    
     # Same finger usage
     features['same_finger'] = same_finger(char1, char2, column_map, finger_map)
     
@@ -65,6 +68,7 @@ def extract_same_letter_features(letter: str,
         column_map, finger_map, engram_position_values, row_position_values) -> Dict[str, float]:
     """Get features for same-letter bigrams."""
     return {
+        'typing_time': 0.0,
         'same_finger': 1.0,  # Always same finger
         'sum_finger_values': finger_map.get(letter, 0) * 2,  # Double the finger value
         'adj_finger_diff_row': 0.0,  # No finger movement

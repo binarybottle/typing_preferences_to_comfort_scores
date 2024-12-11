@@ -304,7 +304,7 @@ class PreferenceModel():
             logger.info(f"- {feature} (importance: {score:.3f})")
 
         # Save metrics to CSV
-        metrics_file = Path(self.config['feature_evaluation']['metrics_file'])
+        metrics_file = self.config['feature_evaluation']['metrics_file']
         self.save_metrics_csv(metrics_file, processed_effects, importance_metrics, stability_metrics, selected_features)
 
         return {

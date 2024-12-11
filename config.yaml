@@ -15,6 +15,10 @@ data:
   layout:
     chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
 
+  visualization:
+    output_dir: "output/plots"
+    save_plots: true
+
 # Feature settings
 features:
   base_features:
@@ -42,7 +46,12 @@ feature_evaluation:
   metrics_file: "output/feature_metrics.csv"
 
 recommendations:
-  n_recommendations: 20
+  n_recommendations: 20  # Number of pairs to recommend
+  weights:
+    uncertainty: 0.4
+    interaction: 0.3
+    transitivity: 0.3
+  recommendations_file: "output/recommended_bigram_pairs.csv"
 
 model:
   chains: 8

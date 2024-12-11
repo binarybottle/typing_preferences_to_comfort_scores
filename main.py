@@ -10,7 +10,7 @@ import logging
 from engram3.data import PreferenceDataset
 from engram3.utils import validate_config
 from engram3.model import PreferenceModel
-#from engram3.features.recommendations import BigramRecommender
+from engram3.features.recommendations import BigramRecommender
 from engram3.features.extraction import precompute_all_bigram_features
 #from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.features.keymaps import (
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 def setup_logging(config):
     # Create log directory if it doesn't exist
     log_file = Path(config['logging']['output_file'])
-    log_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Clear any existing handlers
     root_logger = logging.getLogger()
@@ -55,12 +54,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
-
-def create_output_directories(config: Dict[str, Any]) -> None:
-    """Create necessary output directories."""
-    dirs_to_create = [Path(config['data']['output_dir'])]
-    for directory in dirs_to_create:
-        directory.mkdir(parents=True, exist_ok=True)
 
 def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[PreferenceDataset, PreferenceDataset]:
     """Load existing split or create and save new one."""
@@ -106,8 +99,9 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
 def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
-    parser.add_argument('--mode', choices=['select_features', 'train_model'], required=True,
-                       help='Pipeline mode: feature selection or model training')
+    parser.add_argument('--mode', choices=['select_features', 'train_model', 'recommend_bigram_pairs'], 
+                       required=True,
+                       help='Pipeline mode: feature selection, model training, or bigram recommendations')
     args = parser.parse_args()
 
     try:
@@ -115,7 +109,6 @@ def main():
         config = load_config(args.config)
         validate_config(config)
         setup_logging(config)
-        create_output_directories(config)
 
         # Set random seed for all operations
         np.random.seed(config['data']['splits']['random_seed'])
@@ -131,12 +124,11 @@ def main():
             row_position_values=row_position_values,
             config=config
         )
-        logger.debug(f"Precomputed features include interactions: {[f for f in feature_names if '_x_' in f]}")
 
         # Load dataset with precomputed features
         logger.info("Loading dataset...")
         dataset = PreferenceDataset(
-            config['data']['input_file'],
+            Path(config['data']['input_file']),
             column_map=column_map,
             row_map=row_map,
             finger_map=finger_map,
@@ -149,7 +141,11 @@ def main():
             }
         )
 
+        #---------------------------------
+        # Select features
+        #---------------------------------
         if args.mode == 'select_features':
+
             # Get train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
@@ -159,13 +155,57 @@ def main():
             logger.info("Running feature selection on training data...")
             model = PreferenceModel(config=config)
             results = model.cross_validate(train_data)
+
+        #---------------------------------
+        # Recommend bigram pairs
+        #---------------------------------
+        elif args.mode == 'recommend_bigram_pairs':
+
+            # Load feature metrics from previous feature selection
+            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            if not metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
+            df = pd.read_csv(metrics_file)
+            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
+            
+            if not selected_features:
+                raise ValueError("No features were selected in feature selection phase")
+            
+            # Load trained model
+            logger.info("Loading trained model...")
+            model = PreferenceModel(config=config)
+            model.fit(dataset, features=selected_features)
+            
+            # Initialize recommender
+            logger.info("Generating bigram pair recommendations...")
+            recommender = BigramRecommender(dataset, model, config)
+            recommended_pairs = recommender.get_recommended_pairs()
+            
+            # Visualize recommendations
+            logger.info("Visualizing recommendations...")
+            recommender.visualize_recommendations(recommended_pairs)
+            
+            # Save recommendations
+            output_file = Path(config['recommendations']['recommendations_file'])
+            pd.DataFrame(recommended_pairs, columns=['bigram1', 'bigram2']).to_csv(
+                output_file, index=False)
+            logger.info(f"Saved recommendations to {output_file}")
+            
+            # Print recommendations
+            logger.info("\nRecommended bigram pairs:")
+            for b1, b2 in recommended_pairs:
+                logger.info(f"{b1} - {b2}")
+
+        #---------------------------------
+        # Train model
+        #---------------------------------
         elif args.mode == 'train_model':
             # Load train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             
             # Load selected features
-            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            metrics_file = config['feature_evaluation']['metrics_file']
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             

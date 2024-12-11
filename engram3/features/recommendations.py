@@ -7,8 +7,12 @@ import numpy as np
 from itertools import combinations
 import warnings
 from scipy import stats
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+import networkx as nx
 
 from engram3.data import PreferenceDataset
+from engram3.model import PreferenceModel
 from engram3.features.extraction import extract_bigram_features
 
 logger = logging.getLogger(__name__)
@@ -16,92 +20,197 @@ logger = logging.getLogger(__name__)
 class BigramRecommender:
     """Generate recommended bigram pairs for data collection."""
     
-    def __init__(self, dataset: PreferenceDataset, config: Dict, selected_features: List[str]):
+    def __init__(self, dataset: PreferenceDataset, model: PreferenceModel, config: Dict):
         self.dataset = dataset
+        self.model = model  # Use existing trained model
         self.config = config
-        
-        # If no selected features, use features above minimum threshold
-        if not selected_features:
-            logger.warning("No selected features provided. Using features above minimum threshold.")
-            min_importance = config['feature_evaluation'].get('min_importance_threshold', 0.03)
-            self.selected_features = [
-                f for f in dataset.get_feature_names()
-                if f in ['rows_apart', 'angle_apart', 'adj_finger_diff_row', 'sum_row_position_values']
-                or f in ['sum_finger_values', 'sum_engram_position_values']  # Add key features
-            ]
-            if not self.selected_features:
-                logger.warning("Using all available features as fallback.")
-                self.selected_features = dataset.get_feature_names()
-        else:
-            self.selected_features = selected_features
-            
+        self.selected_features = model.get_feature_weights().keys()
         self.n_recommendations = config['recommendations']['n_recommendations']
-        logger.info(f"Using {len(self.selected_features)} features for recommendations")
+
+    def score_pair(self, bigram1: str, bigram2: str) -> float:
+        # Get model's prediction confidence
+        pred_prob = self.model.predict_preference(bigram1, bigram2)
+        # Higher score for predictions closer to 0.5 (uncertain)
+        uncertainty = 1 - abs(pred_prob - 0.5) * 2
+        return uncertainty
+
+    def get_recommended_pairs(self) -> List[Tuple[str, str]]:
+        # Weights for different selection criteria
+        weights = {
+            'uncertainty': 0.4,  # Model prediction uncertainty
+            'interaction': 0.3,  # Feature interaction coverage
+            'transitivity': 0.3  # Transitivity validation
+        }
+        
+        scored_pairs = []
+        candidate_pairs = self._generate_candidate_pairs()
+        
+        for pair in candidate_pairs:
+            uncertainty_score = self.score_pair(*pair)
+            interaction_score = self._calculate_interaction_score(*pair)
+            transitivity_score = self._calculate_transitivity_score(*pair)
+            
+            total_score = (
+                weights['uncertainty'] * uncertainty_score +
+                weights['interaction'] * interaction_score +
+                weights['transitivity'] * transitivity_score
+            )
+            scored_pairs.append((pair, total_score))
+            
+        return self._filter_top_pairs(scored_pairs)
+
+    def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
+            """
+            Create two plots: current data and current+recommended pairs
+            Uses PCA to project feature space into 2D for visualization
+            """
+            # Get feature vectors for all bigrams
+            feature_vectors = []
+            bigram_labels = []
+            
+            for pref in self.dataset.preferences:
+                # Get feature vectors for existing pairs
+                feat1 = [pref.features1[f] for f in self.selected_features]
+                feat2 = [pref.features2[f] for f in self.selected_features]
+                feature_vectors.extend([feat1, feat2])
+                bigram_labels.extend([pref.bigram1, pref.bigram2])
+
+            # Convert to numpy array
+            X = np.array(feature_vectors)
+            
+            # Fit PCA
+            pca = PCA(n_components=2)
+            X_2d = pca.fit_transform(X)
+            
+            # Create figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            
+            # Plot 1: Current data
+            G1 = nx.Graph()
+            
+            # Add nodes
+            for i, (x, y) in enumerate(X_2d):
+                G1.add_node(bigram_labels[i], pos=(x, y))
+            
+            # Add edges for existing pairs
+            for pref in self.dataset.preferences:
+                G1.add_edge(pref.bigram1, pref.bigram2)
+            
+            # Draw network
+            pos1 = nx.get_node_attributes(G1, 'pos')
+            nx.draw(G1, pos1, ax=ax1, node_size=100, 
+                node_color='lightblue', with_labels=True, 
+                font_size=8)
+            ax1.set_title("Current Bigram Pairs")
+            
+            # Plot 2: Current + Recommended
+            G2 = G1.copy()
+            
+            # Add recommended pairs
+            for b1, b2 in recommended_pairs:
+                # Get feature vectors
+                feat1 = [self._extract_features(b1)[f] for f in self.selected_features]
+                feat2 = [self._extract_features(b2)[f] for f in self.selected_features]
                 
-    def get_uncertainty_pairs(self) -> List[Tuple[str, str]]:
-        """Generate pairs from regions of high feature uncertainty."""
-        # Use sparse regions from analysis
-        sparse_points = self._find_sparse_regions(self.dataset)
-        
-        # Generate all possible bigrams
-        all_bigrams = self._generate_all_possible_bigrams()
-        
-        # Score bigrams by feature similarity to sparse points
-        scored_pairs = []
-        for b1, b2 in combinations(all_bigrams, 2):
-            features1 = self._extract_features(b1)
-            features2 = self._extract_features(b2)
+                # Project to 2D
+                new_points = pca.transform(np.array([feat1, feat2]))
+                
+                # Add to graph
+                G2.add_node(b1, pos=tuple(new_points[0]))
+                G2.add_node(b2, pos=tuple(new_points[1]))
+                G2.add_edge(b1, b2, color='red', weight=2)
             
-            # Calculate average distance to sparse points
-            uncertainty_score = self._calculate_uncertainty_score(
-                features1, features2, sparse_points)
+            # Draw network
+            pos2 = nx.get_node_attributes(G2, 'pos')
             
-            scored_pairs.append(((b1, b2), uncertainty_score))
+            # Draw existing edges
+            nx.draw_networkx_edges(G2, pos2, ax=ax2, 
+                                edgelist=[(u,v) for (u,v) in G2.edges() 
+                                        if (u,v) not in recommended_pairs],
+                                edge_color='gray')
             
-        # Sort by uncertainty score and return top N
-        scored_pairs.sort(key=lambda x: x[1], reverse=True)
-        return [pair for pair, score in scored_pairs[:self.n_recommendations]]
+            # Draw recommended edges
+            nx.draw_networkx_edges(G2, pos2, ax=ax2,
+                                edgelist=recommended_pairs,
+                                edge_color='red', width=2)
+            
+            # Draw nodes and labels
+            nx.draw_networkx_nodes(G2, pos2, ax=ax2, 
+                                node_size=100, node_color='lightblue')
+            nx.draw_networkx_labels(G2, pos2, ax=ax2, font_size=8)
+            
+            ax2.set_title("Current + Recommended Pairs")
+            
+            plt.tight_layout()
+            plt.show()
 
-    def get_interaction_pairs(self) -> List[Tuple[str, str]]:
-        """Generate pairs that test important feature interactions."""
-        # Get feature interaction strengths from model
-        interaction_strengths = self._get_feature_interaction_strengths()
-        
-        # Generate pairs that maximize difference in interaction features
-        scored_pairs = []
-        all_bigrams = self._generate_all_possible_bigrams()
-        
-        for b1, b2 in combinations(all_bigrams, 2):
-            features1 = self._extract_features(b1)
-            features2 = self._extract_features(b2)
-            
-            interaction_score = self._calculate_interaction_score(
-                features1, features2, interaction_strengths)
-            
-            scored_pairs.append(((b1, b2), interaction_score))
-            
-        scored_pairs.sort(key=lambda x: x[1], reverse=True)
-        return [pair for pair, score in scored_pairs[:self.n_recommendations]]
+            # Print feature space coverage statistics
+            print("\nFeature Space Coverage:")
+            print(f"Variance explained by 2D projection: {pca.explained_variance_ratio_.sum():.2%}")
+            print(f"Number of existing pairs: {len(self.dataset.preferences)}")
+            print(f"Number of recommended pairs: {len(recommended_pairs)}")
 
-    def get_transitivity_pairs(self) -> List[Tuple[str, str]]:
-        """Generate pairs that would help validate transitivity."""
-        # Build preference graph
+    def _calculate_interaction_score(self, bigram1: str, bigram2: str) -> float:
+        # Get feature weights from model
+        feature_weights = self.model.get_feature_weights()
+        
+        # Extract features for both bigrams
+        features1 = self._extract_features(bigram1)
+        features2 = self._extract_features(bigram2)
+        
+        interaction_score = 0.0
+        for feat1, feat2 in self._get_interaction_pairs():
+            if f"{feat1}_x_{feat2}" in feature_weights:
+                # Calculate interaction difference
+                int1 = features1[feat1] * features1[feat2]
+                int2 = features2[feat1] * features2[feat2]
+                weight = feature_weights[f"{feat1}_x_{feat2}"]
+                interaction_score += abs(int1 - int2) * abs(weight)
+                
+        return interaction_score
+
+    def _calculate_transitivity_score(self, bigram1: str, bigram2: str) -> float:
         pref_graph = self._build_preference_graph()
         
-        # Find potential transitivity chains
-        scored_pairs = []
-        for a in pref_graph:
-            for b in pref_graph.get(a, set()):
-                # Look for c where we have a>b, b>c but no direct a:c comparison
-                for c in pref_graph.get(b, set()):
-                    if c not in pref_graph.get(a, set()) and a not in pref_graph.get(c, set()):
-                        score = self._calculate_transitivity_score(a, b, c, pref_graph)
-                        scored_pairs.append(((a, c), score))
-        
-        # Sort by score and return top N
+        # Look for potential transitive chains
+        score = 0.0
+        for intermediate in pref_graph:
+            if (bigram1 in pref_graph.get(intermediate, set()) and 
+                intermediate in pref_graph.get(bigram2, set())):
+                # Found potential chain, increase score
+                score += 1.0
+                
+        return score
+    
+    def _filter_top_pairs(self, scored_pairs: List[Tuple[Tuple[str, str], float]]) -> List[Tuple[str, str]]:
+        # Sort by score
         scored_pairs.sort(key=lambda x: x[1], reverse=True)
-        return [pair for pair, score in scored_pairs[:self.n_recommendations]]
-
+        
+        selected_pairs = []
+        covered_features = set()
+        
+        for pair, score in scored_pairs:
+            # Extract features for this pair
+            features1 = self._extract_features(pair[0])
+            features2 = self._extract_features(pair[1])
+            
+            # Calculate feature coverage
+            new_features = set()
+            for feat, val1 in features1.items():
+                val2 = features2[feat]
+                if abs(val1 - val2) > 0.1:  # Significant difference threshold
+                    new_features.add(feat)
+                    
+            # Add pair if it covers new features or has high score
+            if len(new_features - covered_features) > 0 or score > 0.8:
+                selected_pairs.append(pair)
+                covered_features.update(new_features)
+                
+            if len(selected_pairs) >= self.n_recommendations:
+                break
+                
+        return selected_pairs
+    
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """Extract selected features for a bigram."""
         return extract_bigram_features(
@@ -113,189 +222,7 @@ class BigramRecommender:
             self.dataset.row_position_values
         )
 
-    def _find_sparse_regions(dataset: PreferenceDataset) -> List[Dict[str, float]]:
-        """
-        Identify sparse regions in feature space.
-        
-        Args:
-            dataset: PreferenceDataset containing preferences
-            
-        Returns:
-            List of dictionaries representing points in sparse regions
-        """
-        # Get all feature vectors
-        vectors = []
-        feature_names = dataset.get_feature_names()
-        
-        for pref in dataset.preferences:
-            for features in [pref.features1, pref.features2]:
-                try:
-                    # Check for None or NaN values
-                    if any(features.get(f) is None for f in feature_names):
-                        continue
-                        
-                    vector = [features[f] for f in feature_names]
-                    if any(np.isnan(v) for v in vector):
-                        continue
-                        
-                    vectors.append(vector)
-                    
-                except KeyError as e:
-                    logger.warning(f"Missing feature in preference: {str(e)}")
-                    continue
-        
-        if not vectors:
-            logger.warning("No valid feature vectors found")
-            return []
-        
-        vectors = np.array(vectors)
-        
-        # Find points with few neighbors
-        sparse_points = []
-        for i, v in enumerate(vectors):
-            try:
-                distances = np.linalg.norm(vectors - v, axis=1)
-                n_neighbors = (distances < np.percentile(distances, 10)).sum()
-                if n_neighbors < 5:  # Arbitrary threshold
-                    sparse_points.append(dict(zip(feature_names, v)))
-            except Exception as e:
-                logger.warning(f"Error processing vector {i}: {str(e)}")
-                continue
-                
-        logger.info(f"Found {len(sparse_points)} points in sparse regions "
-                f"from {len(vectors)} valid vectors")
-        
-        return sparse_points
 
-    def _calculate_uncertainty_score(self, features1: Dict, features2: Dict, 
-                                   sparse_points: List[Dict]) -> float:
-        """Score how well a pair covers uncertain regions."""
-        # Implementation details for scoring uncertainty coverage
-        pass
-
-    def _calculate_interaction_score(self, features1: Dict, features2: Dict,
-                                   interaction_strengths: Dict) -> float:
-        """Score how well a pair tests feature interactions."""
-        # Implementation details for scoring interaction testing
-        pass
-
-    def _calculate_transitivity_score(self, a: str, b: str, c: str, 
-                                    pref_graph: Dict) -> float:
-        """Score how valuable a pair would be for transitivity testing."""
-        # Implementation details for scoring transitivity testing
-        pass
-
-    def _build_preference_graph(self) -> Dict[str, Set[str]]:
-        """Build graph of existing preferences."""
-        pref_graph = {}
-        
-        # Build graph from dataset preferences
-        for pref in self.dataset.preferences:
-            if pref.preferred:
-                better, worse = pref.bigram1, pref.bigram2
-            else:
-                better, worse = pref.bigram2, pref.bigram1
-                
-            if better not in pref_graph:
-                pref_graph[better] = set()
-            pref_graph[better].add(worse)
-        
-        return pref_graph
-
-    def _generate_all_possible_bigrams(self) -> List[str]:
-        """Generate all valid bigram combinations."""
-        # Implementation to generate valid bigrams
-        pass
-
-    def _calculate_uncertainty_score(self, features1: Dict, features2: Dict, 
-                               sparse_points: List[Dict]) -> float:
-        """
-        Score how well a pair covers uncertain regions.
-        Higher score = pair better samples uncertain feature space.
-        """
-        # Convert feature dicts to vectors using selected features only
-        vec1 = np.array([features1[f] for f in self.selected_features])
-        vec2 = np.array([features2[f] for f in self.selected_features])
-        
-        # Convert sparse points to array
-        sparse_vecs = np.array([[p[f] for f in self.selected_features] 
-                            for p in sparse_points])
-        
-        # Calculate minimum distances to sparse points for each bigram
-        distances1 = np.min(np.linalg.norm(sparse_vecs - vec1, axis=1))
-        distances2 = np.min(np.linalg.norm(sparse_vecs - vec2, axis=1))
-        
-        # Score based on:
-        # 1. How close at least one bigram is to sparse region
-        # 2. How different the bigrams are from each other
-        pair_distance = np.linalg.norm(vec1 - vec2)
-        min_sparse_distance = min(distances1, distances2)
-        
-        # Combine metrics: want small distance to sparse region but large pair difference
-        uncertainty_score = pair_distance * np.exp(-min_sparse_distance)
-        
-        return float(uncertainty_score)
-
-    def _calculate_interaction_score(self, features1: Dict, features2: Dict,
-                                interaction_strengths: Dict[Tuple[str, str], float]) -> float:
-        """
-        Score how well a pair tests feature interactions.
-        Higher score = pair better tests important interactions.
-        """
-        score = 0.0
-        
-        # For each interaction pair
-        for (feat1, feat2), strength in interaction_strengths.items():
-            if feat1 in features1 and feat2 in features1:
-                # Calculate interaction difference between bigrams
-                interaction1 = features1[feat1] * features1[feat2]
-                interaction2 = features2[feat1] * features2[feat2]
-                diff = abs(interaction1 - interaction2)
-                
-                # Weight difference by interaction strength
-                score += diff * strength
-        
-        return float(score)
-
-    def _calculate_transitivity_score(self, a: str, b: str, c: str, 
-                                    pref_graph: Dict[str, Set[str]]) -> float:
-        """
-        Score how valuable a pair would be for transitivity testing.
-        Higher score = pair better validates transitivity.
-        """
-        # Count existing preference chains involving these bigrams
-        n_chains = 0
-        chain_strength = 0.0
-        
-        # Look for chains a>b>c
-        if b in pref_graph.get(a, set()):
-            for d in pref_graph.get(b, set()):
-                if d != c:  # Don't count the chain we're testing
-                    n_chains += 1
-                    # Add strength based on path length
-                    chain_strength += 1.0 / len(pref_graph.get(a, set())) + \
-                                    1.0 / len(pref_graph.get(b, set()))
-
-        # Add helper scores
-        def _get_feature_difference(bigram1: str, bigram2: str) -> float:
-            """Calculate feature space distance between bigrams."""
-            features1 = self._extract_features(bigram1)
-            features2 = self._extract_features(bigram2)
-            vec1 = np.array([features1[f] for f in self.selected_features])
-            vec2 = np.array([features2[f] for f in self.selected_features])
-            return float(np.linalg.norm(vec1 - vec2))
-
-        # Final score combines:
-        # 1. Number of related chains
-        # 2. Strength of existing preferences
-        # 3. Feature space distances
-        feature_distances = _get_feature_difference(a, c)
-        
-        score = (n_chains + 1) * chain_strength * feature_distances
-        
-        return float(score)
-
-    def _get_feature_interaction_strengths(self) -> Dict[Tuple[str, str], float]:
         """
         Calculate interaction strengths between features based on existing preferences.
         Returns dict mapping feature pairs to interaction strength scores.
@@ -330,7 +257,7 @@ class BigramRecommender:
         
         return interaction_strengths
 
-    def _generate_all_possible_bigrams(self) -> List[str]:
+
         """Generate all valid bigram combinations."""
         # Get unique letters from existing bigrams
         letters = set()
