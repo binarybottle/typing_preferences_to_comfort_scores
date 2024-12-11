@@ -18,6 +18,7 @@ data:
   visualization:
     output_dir: "output/plots"
     save_plots: true
+    dpi: 300
 
 # Feature settings
 features:
@@ -45,25 +46,47 @@ feature_evaluation:
     mutual_info: 0.3
   metrics_file: "output/feature_metrics.csv"
 
+feature_selection:
+  n_iterations: 1
+  importance_threshold: 0.1
+  interaction_threshold: 0.15
+  metric_weights:
+    inclusion_probability: 0.3
+    effect_magnitude: 0.3
+    effect_consistency: 0.2
+    predictive_impact: 0.2
+    correlation: 0.2
+    mutual_information: 0.2
+    model_effect: 0.4
+    stability: 0.2
+
 recommendations:
-  weights:
-    prediction_uncertainty: 0.4
-    comfort_uncertainty: 0.3
-    feature_space: 0.3
+  # Scoring weights for different components
+  weights:  # sum to 1
+    prediction_uncertainty: 0.25
+    comfort_uncertainty: 0.15
+    feature_space: 0.15
+    correlation: 0.075
+    mutual_information: 0.075
+    stability: 0.1
+    interaction_testing: 0.1
+    transitivity: 0.1
+  # Output settings
   n_recommendations: 20
   max_candidates: 1000
   recommendations_file: "output/recommended_bigram_pairs.csv"
+  save_plots: true
 
 model:
-  chains: 8
-  target_accept: 0.85
-  n_samples: 10000
-  cross_validation:
-    n_splits: 5
-    n_repetitions: 1
+  chains: 1        # number of parallel chains
+  warmup: 10     # warmup/adaptation samples per chain
+  samples: 10    # post-warmup samples per chain
+  feature_scale: 2.0    # prior scale for feature weights
+  participant_scale: 1.0 # prior scale for participant effects
 
 # Logging settings
 logging:
-  # set level to "DEBUG" or "INFO" at the top of main.py
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   output_file: "output/debug.log"
+  console_level: "INFO"
+  file_level: "DEBUG"

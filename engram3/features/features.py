@@ -1,7 +1,11 @@
+# features/features.py
 """
-Feature definitions
-
-These functions compute bigram features for keyboard layout analysis.
+Individual feature calculations for typing mechanics.
+Implements specific metrics like:
+  - Same-finger usage
+  - Row transitions
+  - Angle between keys
+Used by feature extraction system.
 """
 from math import atan2, degrees, sqrt
 import logging

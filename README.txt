@@ -1,61 +1,100 @@
-# First, run feature selection
-python main.py --config config.yaml --mode select_features --n_repetitions 10
+# Engram3: Keyboard Layout Optimization via Preference Learning
 
-# Second, generate recommendations
-python main.py --config config.yaml --mode recommend_bigram_pairs
+A system for optimizing keyboard layouts using Bayesian preference learning and active sampling.
 
-# Third, train the model using selected features
-python main.py --config config.yaml --mode train_model
+## Project Structure
 
-engram3/                        # Root project directory
-├── pyproject.toml              # Python poetry settings
-├── config.yaml                 # Configure settings
-├── main.py                     # Main script
-└── engram3/                    # Package directory
-    ├── __init__.py
-    ├── data.py                 # Dataset handling
-    ├── model.py                # Preference model
-    ├── utils.py                # Utility functions
-    ├── features/               # Feature-related code
-    │   ├── __init__.py
-    │   ├── bigram_frequencies.py
-    │   ├── keymaps.py
-    │   ├── features.py
-    │   ├── extraction.py
-    │   └── recommendations.py  # Recommend bigram pairs
-    └── tests/                  # Tests
-        ├── __init__.py
-        └── test_models.py
+engram3/                            # Root project directory
+├── pyproject.toml                  # Project metadata and dependencies
+├── config.yaml                     # Configure settings
+├── main.py                         # Main script
+└── engram3/                        # Package directory
+    ├── features/
+    │   ├── bigram_frequencies.py   # Bigrams and bigram frequencies in the English language
+    │   ├── extraction.py           # Feature computation and interactions
+    │   ├── features.py             # Individual feature calculations
+    │   ├── keymaps.py              # Keyboard layout mappings
+    │   └── visualization.py        # FeatureMetricsVisualizer for visualizing feature measures
+    ├── data.py                     # PreferenceDataset class for data loading/handling 
+    ├── model.py                    # PreferenceModel class for modeling/evaluation
+    ├── recommendations.py          # BigramRecommender class for generating bigram pair recommendations
+    └── config.yaml                 # Configuration settings
 
-## Key measures and their purposes:
+## Usage
 
-Model effect (mean ± std)
-Mean: Average effect size of the feature across cross-validation folds
-Std: Standard deviation of the effect, showing variability across folds
-Purpose: Shows how strongly and consistently the feature influences typing preferences
+The system operates in four main modes:
 
-Correlation
-Direct correlation between feature differences and user preferences
-Purpose: Shows simpler linear relationship between feature and preferences, without controlling for other features
+1. Select Features
+```bash
+python main.py --config config.yaml --mode select_features
 
-Mutual information
-Non-linear measure of dependency between feature and preferences
-Purpose: Can capture more complex relationships that correlation might miss
+Identifies important typing comfort features through cross-validation.
 
-Effect CV (Coefficient of Variation)
-Calculated as std_effect / abs(mean_effect)
-Purpose: Measures relative stability of feature effect across folds, normalized by effect size
-Lower values indicate more stable effects
+2. Generate Recommendations
+```python main.py --config config.yaml --mode recommend_bigram_pairs```
+Suggests new bigram pairs to evaluate, optimizing for information gain.
 
-Relative range
-Calculated as (max_effect - min_effect) / abs(mean_effect)
-Purpose: Another stability measure showing the total spread of effects relative to mean effect size
-Lower values indicate more consistent effects
+3. Train Model
+```python main.py --config config.yaml --mode train_model```
+Trains the final preference model using selected features.
 
-Combined score
-Weighted combination of model effect, correlation, and mutual information
-Purpose: Single metric for overall feature importance, currently used for selection decisions
-These metrics together help evaluate features on both:
+4. Predict Bigram Scores
+```python main.py --config config.yaml --mode predict_bigram_scores```
+Calculates absolute comfort scores for all possible bigrams.
 
-Importance (how much they influence preferences)
-Stability (how reliable/consistent their effects are)
+1. Select important features
+2. Collect more data for those features
+3. Train the final model
+4. Use the model to score all possible bigrams
+
+The output would be a comprehensive CSV containing comfort scores and uncertainties 
+for every possible bigram, which could then be used for keyboard layout optimization.
+
+## Configuration
+See config.yaml for detailed settings including:
+  - Data paths and splits
+  - Feature selection parameters
+  - Model hyperparameters
+  - Recommendation criteria weights
+  
+## Model Details
+Uses a hierarchical Bayesian preference learning model with:
+  - Feature-based comfort scores
+  - Participant-level random effects
+  - Bradley-Terry preference structure
+  - Full posterior uncertainty quantification
+
+## Implementation
+Built using Stan for robust Bayesian inference, providing:
+  - Excellent hierarchical model support
+  - Stable MCMC sampling
+  - Comprehensive diagnostics
+
+## Key Measures of importance (influence on preferences) and stability (consistency of effects)
+
+  - Model Effect (mean ± std): Feature impact strength and consistency
+    - Mean: Average effect size of the feature across MCMC samples
+    - Std: Standard deviation of the effect
+    - Purpose: Quantifies how strongly and consistently the feature influences typing preferences
+  - Effect CV (Coefficient of Variation)
+    - Calculation: std_effect / abs(mean_effect)
+    - Purpose: Measures relative stability of feature effect, normalized by effect size
+    - Interpretation: Lower values indicate more stable effects
+  - Relative Range
+    - Calculation: (max_effect - min_effect) / abs(mean_effect)
+    - Purpose: Shows total spread of effects relative to mean effect size
+    - Interpretation: Lower values indicate more consistent effects
+  - Feature Stability: Reliability across cross-validation
+  - Interaction Strength: Feature interaction importance
+  - Coverage: Feature space exploration
+  - Transitivity: Preference consistency validation
+- Combined Score
+  - Components:
+    - Inclusion probability (probability that feature weight is meaningfully different from 0)
+    - Effect magnitude (strength of feature's impact)
+    - Effect consistency (stability of feature's direction)
+    - Predictive impact (improvement in model predictions when feature is included)
+  - Purpose: Single metric for overall feature importance, used for selection decisions
+
+
+

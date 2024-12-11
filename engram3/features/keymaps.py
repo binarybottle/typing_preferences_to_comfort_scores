@@ -1,8 +1,13 @@
+# features/keymaps.py
 """
-Keymap definitions
+Keyboard layout definitions and mapping utilities.
+Contains physical layout information including:
+  - Key positions
+  - Finger assignments
+  - Row designations
+Used for feature calculations.
+"""
 
-These objects define keymaps from which we can define bigram features for keyboard layout analysis.
-"""
 #-------------------------------------#
 # Keyboard layout and finger mappings #
 #-------------------------------------#

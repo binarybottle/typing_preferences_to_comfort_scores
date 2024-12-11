@@ -1,5 +1,6 @@
+# features/bigram_frequencies.py
 """
-English language bigram frequencies
+English language bigrams and bigram frequencies
 
 The ngram data below come from Peter Norvig's table: http://www.norvig.com/mayzner.html
 """

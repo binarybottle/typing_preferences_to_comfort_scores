@@ -1,14 +1,15 @@
+# features/extraction.py
 """
-Feature extraction
-
-These functions handle the extraction of all bigram features for keyboard layout analysis.
+Core feature extraction functionality for bigrams.
+Handles computation of raw features and feature interactions,
+providing consistent feature representation for the preference model.
 """
 import numpy as np
 import pandas as pd
+import yaml
 from typing import List, Tuple, Dict, Any
 import logging
 
-from engram3.utils import load_interactions
 from engram3.features.keymaps import *
 from engram3.features.features import *
 
@@ -171,3 +172,50 @@ def precompute_all_bigram_features(
         logger.error("Traceback:", exc_info=True)
         
     return all_bigrams, all_bigram_features, feature_names
+
+def load_interactions(filepath: str) -> List[List[str]]:
+    """
+    Load feature interactions from file.
+    
+    Args:
+        filepath: Path to YAML file containing interaction definitions
+        
+    Returns:
+        List of lists, where each inner list contains feature names to interact
+        
+    Example:
+        interactions:
+        - ['same_finger', 'sum_finger_values']
+        - ['same_finger', 'rows_apart']
+        - ['sum_finger_values', 'adj_finger_diff_row']
+    """
+    logger.debug(f"Loading interactions from {filepath}")
+    
+    try:
+        with open(filepath, 'r') as f:
+            data = yaml.safe_load(f)
+            
+        if not data or 'interactions' not in data:
+            logger.warning(f"No interactions found in {filepath}")
+            return []
+            
+        interactions = data['interactions']
+        
+        if not isinstance(interactions, list):
+            logger.error("Interactions must be a list")
+            return []
+            
+        # Validate each interaction
+        valid_interactions = []
+        for interaction in interactions:
+            if isinstance(interaction, list) and all(isinstance(f, str) for f in interaction):
+                valid_interactions.append(interaction)
+            else:
+                logger.warning(f"Skipping invalid interaction format: {interaction}")
+                
+        logger.info(f"Loaded {len(valid_interactions)} valid interactions")
+        return valid_interactions
+        
+    except Exception as e:
+        logger.error(f"Error loading interactions file: {str(e)}")
+        return []

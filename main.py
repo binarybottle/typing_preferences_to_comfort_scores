@@ -1,26 +1,31 @@
+# main.py
+"""
+Main entry point for the Engram3 keyboard layout optimization system.
+Handles command-line interface and orchestrates the three main workflows:
+1. Feature selection - identifies important typing comfort features
+2. Bigram recommendations - suggests new bigram pairs for preference collection
+3. Model training - trains the final preference model using selected features
+"""
+import cmdstanpy
 import argparse
 import yaml
-import json
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple
 from pathlib import Path
+import matplotlib.pyplot as plt
 import logging
 
 from engram3.data import PreferenceDataset
-from engram3.utils import validate_config
 from engram3.model import PreferenceModel
-from engram3.features.recommendations import BigramRecommender
+from engram3.recommendations import BigramRecommender
 from engram3.features.extraction import precompute_all_bigram_features
-#from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
 
 logger = logging.getLogger(__name__)
-
-# In main.py, modify the setup_logging function:
 
 def setup_logging(config):
     # Create log directory if it doesn't exist
@@ -107,7 +112,6 @@ def main():
     try:
         # Load configuration and setup
         config = load_config(args.config)
-        validate_config(config)
         setup_logging(config)
 
         # Set random seed for all operations
@@ -145,16 +149,51 @@ def main():
         # Select features
         #---------------------------------
         if args.mode == 'select_features':
+            # Run feature selection
+            logger.info("Starting feature selection...")
 
             # Get train/test split
-            train_data, test_data = load_or_create_split(dataset, config)
+            train_data, holdout_data = load_or_create_split(dataset, config)
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
-                       f"{len(test_data.preferences)} test preferences")
+                    f"{len(holdout_data.preferences)} holdout preferences")
             
-            # Run feature selection on training data
-            logger.info("Running feature selection on training data...")
+            # Initialize model
             model = PreferenceModel(config=config)
-            results = model.cross_validate(train_data)
+            initial_features = config['features']['base_features']
+            selected_features = model.select_features(train_data)
+            
+            # Generate final visualizations
+            if model.visualizer:
+                fig = model.visualizer.plot_feature_space(model, train_data, 
+                                                        "Final Feature Space")
+                fig.savefig(Path(config['data']['output_dir']) / 'final_feature_space.png')
+                plt.close()
+
+            # Save feature selection results
+            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            feature_weights = model.get_feature_weights()
+            
+            # Create results DataFrame
+            results = []
+            for feature, (weight, std) in feature_weights.items():
+                results.append({
+                    'feature_name': feature,
+                    'selected': 1 if feature in selected_features else 0,
+                    'weight': weight,
+                    'weight_std': std
+                })
+            
+            pd.DataFrame(results).to_csv(metrics_file, index=False)
+            logger.info(f"Saved feature metrics to {metrics_file}")
+            
+            # Print summary
+            logger.info("\nSelected Features:")
+            for feature in selected_features:
+                weight, std = feature_weights[feature]
+                logger.info(f"{feature}: {weight:.3f} ± {std:.3f}")
+                
+                logger.info(f"Selected features: {selected_features}")
+                logger.info(f"Performance: {performance_metrics}")
 
         #---------------------------------
         # Recommend bigram pairs
@@ -229,6 +268,55 @@ def main():
             for metric, value in test_metrics.items():
                 logger.info(f"{metric}: {value:.3f}")
         
+        #---------------------------------
+        # Predict bigram scores
+        #---------------------------------
+        elif args.mode == 'predict_bigram_scores':
+            # Load feature metrics and selected features
+            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            if not metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
+                    
+            df = pd.read_csv(metrics_file)
+            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
+
+            # Ensure model is trained
+            logger.info(f"Loading trained model with {len(selected_features)} features...")
+            model = PreferenceModel(config=config)
+            model.fit(dataset, features=selected_features)
+
+            # Generate all possible bigrams
+            layout_chars = config['data']['layout']['chars']
+            all_bigrams = []
+            for char1 in layout_chars:
+                for char2 in layout_chars:
+                    all_bigrams.append(char1 + char2)
+
+            # Calculate comfort scores for all bigrams
+            results = []
+            for bigram in all_bigrams:
+                comfort_mean, comfort_std = model.get_bigram_comfort_scores(bigram)
+                results.append({
+                    'bigram': bigram,
+                    'comfort_score': comfort_mean,
+                    'uncertainty': comfort_std,
+                    'first_char': bigram[0],
+                    'second_char': bigram[1]
+                })
+
+            # Save results
+            output_file = Path(config['data']['output_dir']) / 'bigram_comfort_scores.csv'
+            pd.DataFrame(results).to_csv(output_file, index=False)
+            logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {output_file}")
+
+            # Generate summary statistics and visualizations
+            df = pd.DataFrame(results)
+            logger.info("\nComfort Score Summary:")
+            logger.info(f"Mean comfort score: {df['comfort_score'].mean():.3f}")
+            logger.info(f"Score range: {df['comfort_score'].min():.3f} to {df['comfort_score'].max():.3f}")
+            logger.info(f"Mean uncertainty: {df['uncertainty'].mean():.3f}")
+
+            
         logger.info("Pipeline completed successfully")
         
     except Exception as e:
