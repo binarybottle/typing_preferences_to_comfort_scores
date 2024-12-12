@@ -221,7 +221,7 @@ class PreferenceModel:
             
             # Generate visualization of current feature metrics
             if feature_metrics:  # Only if we have features to evaluate
-                fig = visualizer.plot_feature_metrics(feature_metrics)
+                fig = self.visualizer.plot_feature_metrics(feature_metrics)
                 fig.savefig(self.output_dir / f'feature_metrics_iter_{iteration}.png')
                 plt.close(fig)
             
