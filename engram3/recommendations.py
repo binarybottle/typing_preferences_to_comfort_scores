@@ -477,16 +477,41 @@ class BigramRecommender:
             return 0.0
                 
     def _extract_features(self, bigram: str) -> Dict[str, float]:
-        """Extract selected features for a bigram."""
-        return extract_bigram_features(
-            bigram[0], bigram[1],
-            self.dataset.column_map,
-            self.dataset.row_map,
-            self.dataset.finger_map,
-            self.dataset.engram_position_values,
-            self.dataset.row_position_values
-        )
-
+        """
+        Extract features for a bigram using dataset's feature extraction configuration.
+        
+        Args:
+            bigram: String containing two characters
+            
+        Returns:
+            Dictionary mapping feature names to their values
+        """
+        if not self.dataset:
+            raise ValueError("Dataset not initialized. Call fit_model first.")
+            
+        if len(bigram) != 2:
+            raise ValueError(f"Bigram must be exactly 2 characters, got {bigram}")
+        
+        try:
+            # Use dataset's precomputed features if available
+            if hasattr(self.dataset, 'all_bigram_features') and bigram in self.dataset.all_bigram_features:
+                return self.dataset.all_bigram_features[bigram]
+                
+            # Otherwise extract features using dataset's configuration
+            return extract_bigram_features(
+                bigram[0], bigram[1],
+                self.dataset.column_map,
+                self.dataset.row_map,
+                self.dataset.finger_map,
+                self.dataset.engram_position_values,
+                self.dataset.row_position_values
+            )
+            
+        except Exception as e:
+            logger.error(f"Error extracting features for bigram {bigram}: {str(e)}")
+            # Return empty features rather than raising to avoid breaking visualization
+            return {feature: 0.0 for feature in self.selected_features}
+        
     def _generate_candidate_pairs(self) -> List[Tuple[str, str]]:
         """
         Generate all possible bigram pairs from layout characters.

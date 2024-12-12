@@ -34,52 +34,249 @@ import logging
 
 from engram3.data import PreferenceDataset
 from engram3.features.visualization import FeatureMetricsVisualizer
+from engram3.features.extraction import extract_bigram_features
 
 logger = logging.getLogger(__name__)
 
 class PreferenceModel:
 
-# Inside PreferenceModel.__init__
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}
         self.model = None
         self.fit = None
         self.feature_names = None
-        self.visualizer = FeatureVisualization(config) if config else None
         self.selected_features = []
+        self.dataset = None  # Add dataset attribute
+        
+        # Initialize output directory from config
+        if config and 'data' in config and 'output_dir' in config['data']:
+            self.output_dir = Path(config['data']['output_dir'])
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.output_dir = Path('output')
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            
+        # Initialize visualizer with proper output directory
+        self.visualizer = FeatureMetricsVisualizer(str(self.output_dir)) if config else None
         
         try:
-            # Load Stan model
+            # Keep original Stan initialization that was working
             model_path = Path(__file__).parent / "models" / "preference_model.stan"
             if not model_path.exists():
                 raise FileNotFoundError(f"Stan model file not found: {model_path}")
             
             logger.info(f"Loading Stan model from {model_path}")
             
-            # Check directory permissions
-            model_dir = model_path.parent
-            logger.info(f"Model directory permissions: {oct(model_dir.stat().st_mode)}")
-            
-            # Initialize model with compatible parameters
             self.model = cmdstanpy.CmdStanModel(
                 stan_file=str(model_path),
                 cpp_options={'STAN_THREADS': True},
                 stanc_options={'warn-pedantic': True}
             )
             
-            # Ensure compiled model has correct permissions
+            # Set permissions if needed
             if hasattr(self.model, 'exe_file'):
                 exe_path = Path(self.model.exe_file)
                 if exe_path.exists():
-                    logger.info(f"Setting executable permissions for {exe_path}")
                     exe_path.chmod(0o755)
-                    logger.info(f"New permissions: {oct(exe_path.stat().st_mode)}")
                     
         except Exception as e:
             logger.error(f"Error initializing model: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                                
+
+    def _extract_features(self, bigram: str) -> Dict[str, float]:
+        """
+        Extract features for a bigram using dataset's feature extraction configuration.
+        """
+        if not self.dataset:
+            raise ValueError("Dataset not initialized. Call fit_model first.")
+            
+        if len(bigram) != 2:
+            raise ValueError(f"Bigram must be exactly 2 characters, got {bigram}")
+        
+        try:
+            # Use dataset's precomputed features if available
+            if hasattr(self.dataset, 'all_bigram_features') and bigram in self.dataset.all_bigram_features:
+                return self.dataset.all_bigram_features[bigram]
+                    
+            # Extract individual characters as strings
+            char1, char2 = str(bigram[0]), str(bigram[1])
+            
+            # Special handling for same-character bigrams
+            if char1 == char2:
+                logger.debug(f"Processing same-character bigram: {bigram}")
+                
+            # Ensure we have the necessary maps
+            required_maps = ['column_map', 'row_map', 'finger_map', 
+                            'engram_position_values', 'row_position_values']
+            for map_name in required_maps:
+                if not hasattr(self.dataset, map_name):
+                    raise ValueError(f"Dataset missing required map: {map_name}")
+            
+            features = extract_bigram_features(
+                char1, char2,
+                self.dataset.column_map,
+                self.dataset.row_map,
+                self.dataset.finger_map,
+                self.dataset.engram_position_values,
+                self.dataset.row_position_values
+            )
+            
+            # Validate features
+            if not features:
+                raise ValueError(f"No features extracted for bigram {bigram}")
+                
+            return features
+                
+        except Exception as e:
+            logger.error(f"Error extracting features for bigram {bigram}: {str(e)}")
+            # Return empty features rather than raising to avoid breaking visualization
+            # Use selected_features if available, otherwise return empty dict
+            if hasattr(self, 'selected_features') and self.selected_features:
+                return {feature: 0.0 for feature in self.selected_features}
+            return {}
+            
+    def fit_model(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
+        """Fit the model to data."""
+        try:
+            # Store dataset reference
+            self.dataset = dataset
+            
+            # Rest of the existing fit_model code...
+            stan_data = self.prepare_data(dataset, features)
+            
+            logger.info(f"Preparing Stan data:")
+            logger.info(f"N (preferences): {stan_data['N']}")
+            logger.info(f"P (participants): {stan_data['P']}")
+            logger.info(f"F (features): {stan_data['F']}")
+            logger.info(f"Selected features: {self.feature_names}")
+            
+            self.fit = self.model.sample(
+                data=stan_data,
+                chains=self.config.get('model', {}).get('chains', 4),
+                iter_warmup=self.config.get('model', {}).get('warmup', 1000),
+                iter_sampling=self.config.get('model', {}).get('samples', 1000),
+                show_progress=True,
+                refresh=50,
+                adapt_delta=0.9,
+                max_treedepth=12,
+                show_console=True
+            )
+            
+            # Check MCMC diagnostics
+            self._check_diagnostics()
+
+            self.feature_weights = {}
+            beta = self.fit.stan_variable('beta')
+            for i, feature in enumerate(self.feature_names):
+                self.feature_weights[feature] = (
+                    float(np.mean(beta[:, i])),  # mean
+                    float(np.std(beta[:, i]))    # std
+                )
+                
+        except Exception as e:
+            logger.error(f"Error fitting model: {str(e)}")
+            raise
+
+    def select_features(self, dataset: PreferenceDataset, 
+                        initial_features: Optional[List[str]] = None) -> List[str]:
+        """Select features with visualization support."""
+        # Store dataset reference
+        self.dataset = dataset
+        
+        logger.info("Starting feature selection...")
+        
+        # Initialize with base features
+        self.selected_features = initial_features or self.config['features']['base_features']
+        logger.info(f"Initial features: {self.selected_features}")
+                
+        # Initialize feature metrics visualizer
+        metrics_history = []
+
+        # Get all possible features from dataset
+        all_features = dataset.get_feature_names()
+        
+        iteration = 0
+        while iteration < self.config.get('feature_selection', {}).get('n_iterations', 10):
+            # Fit model with current features
+            self.fit_model(dataset, self.selected_features)
+            
+            # Get current model performance metrics
+            base_metrics = self._compute_model_metrics()
+            
+            # Evaluate each potential new feature
+            feature_scores = {}
+            feature_metrics = {}
+            for feature in all_features:
+                if feature not in self.selected_features:
+                    # Calculate feature importance metrics
+                    metrics = self.calculate_feature_metrics(dataset, feature)
+                    feature_metrics[feature] = metrics
+                    
+                    importance = self._evaluate_feature_importance(
+                        dataset, feature, self.selected_features)
+                    
+                    feature_scores[feature] = importance
+                    logger.debug(f"Feature {feature} importance: {importance:.3f}")
+            
+            # Generate visualization of current feature metrics
+            if feature_metrics:  # Only if we have features to evaluate
+                fig = visualizer.plot_feature_metrics(feature_metrics)
+                fig.savefig(self.output_dir / f'feature_metrics_iter_{iteration}.png')
+                plt.close(fig)
+            
+            if not feature_scores:
+                logger.info("No more features to evaluate")
+                break
+                    
+            # Select best feature if it meets threshold
+            best_feature, best_score = max(feature_scores.items(), 
+                                        key=lambda x: x[1])
+            
+            threshold = self.config.get('feature_selection', {}).get(
+                'importance_threshold', 0.1)
+            
+            if best_score < threshold:
+                logger.info("No remaining features meet importance threshold")
+                break
+                    
+            self.selected_features.append(best_feature)
+            logger.info(f"Added feature: {best_feature} (score: {best_score:.3f})")
+            
+            # Store metrics for history
+            metrics_history.append({
+                'iteration': iteration,
+                'feature': best_feature,
+                'score': best_score,
+                **base_metrics,
+                **feature_metrics[best_feature]
+            })
+            
+            # Check if we should add interaction with existing features
+            self._add_interactions(dataset, self.selected_features, best_feature)
+        
+            # Add visualization
+            if self.visualizer:
+                metrics = {
+                    'n_features': len(self.selected_features),
+                    'accuracy': base_metrics['accuracy'],
+                    'transitivity_score': base_metrics['transitivity'],
+                    'feature_score': best_score,
+                    'n_interactions': len([f for f in self.selected_features if '_x_' in f])
+                }
+                self.visualizer.save_iteration(iteration, self, dataset, metrics)
+            
+            iteration += 1
+        
+        # Generate final evolution plot
+        if metrics_history:
+            fig = visualizer.plot_feature_evolution(metrics_history)
+            fig.savefig(self.output_dir / 'feature_evolution.png')
+            plt.close(fig)
+            
+        logger.info(f"Feature selection completed with {len(self.selected_features)} features")
+        return self.selected_features
+ 
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
         """Prepare data for Stan model with proper validation and cleaning."""
         # Get feature names
@@ -167,57 +364,7 @@ class PreferenceModel:
         }
         
         return stan_data
-        
-    def fit_model(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
-        """Fit the model to data."""
-        try:
-            # Prepare data
-            stan_data = self.prepare_data(dataset, features)
-            
-            # Log data dimensions and summary
-            logger.info(f"Preparing Stan data:")
-            logger.info(f"N (preferences): {stan_data['N']}")
-            logger.info(f"P (participants): {stan_data['P']}")
-            logger.info(f"F (features): {stan_data['F']}")
-            logger.info(f"Selected features: {self.feature_names}")
-            
-            # Ensure model executable has correct permissions
-            if hasattr(self.model, 'exe_file'):
-                exe_path = Path(self.model.exe_file)
-                if exe_path.exists():
-                    logger.info(f"Setting executable permissions for {exe_path}")
-                    exe_path.chmod(0o755)  # Set executable permissions
-                    logger.info(f"New permissions: {oct(exe_path.stat().st_mode)}")
-            
-            # Sample from the model with more diagnostic output
-            logger.info("Sampling from Stan model...")
-            self.fit = self.model.sample(
-                data=stan_data,
-                chains=self.config.get('model', {}).get('chains', 4),
-                iter_warmup=self.config.get('model', {}).get('warmup', 1000),
-                iter_sampling=self.config.get('model', {}).get('samples', 1000),
-                show_progress=True,
-                refresh=50,
-                adapt_delta=0.9,
-                max_treedepth=12,
-                show_console=True  # Add this to see Stan output
-            )
-            
-            # Check MCMC diagnostics
-            self._check_diagnostics()
-
-            self.feature_weights = {}
-            beta = self.fit.stan_variable('beta')
-            for i, feature in enumerate(self.feature_names):
-                self.feature_weights[feature] = (
-                    float(np.mean(beta[:, i])),  # mean
-                    float(np.std(beta[:, i]))    # std
-                )
                 
-        except Exception as e:
-            logger.error(f"Error fitting model: {str(e)}")
-            raise
-
     def calculate_feature_metrics(self, 
                                 dataset: PreferenceDataset,
                                 feature: str) -> Dict[str, float]:
@@ -545,17 +692,29 @@ class PreferenceModel:
     def predict_preference(self, bigram1: str, bigram2: str) -> Tuple[float, float]:
         """
         Predict preference probability and uncertainty for a bigram pair.
-        
-        Returns:
-            Tuple of (mean probability, standard deviation)
         """
         try:
+            # Validate inputs
+            if not isinstance(bigram1, str) or not isinstance(bigram2, str):
+                raise ValueError(f"Bigrams must be strings, got {type(bigram1)} and {type(bigram2)}")
+                
+            if len(bigram1) != 2 or len(bigram2) != 2:
+                raise ValueError(f"Bigrams must be exactly 2 characters, got '{bigram1}' and '{bigram2}'")
+                
             # Get comfort scores for both bigrams
             score1, unc1 = self.get_bigram_comfort_scores(bigram1)
             score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
+            # Safely get number of samples
+            if not hasattr(self.fit, 'chains') or not hasattr(self.fit, 'draws'):
+                n_samples = 1000  # Default fallback
+            else:
+                try:
+                    n_samples = self.fit.chains * self.fit.draws
+                except TypeError:
+                    n_samples = 1000  # Fallback if multiplication fails
+            
             # Get samples from posterior
-            n_samples = len(self.fit.chains) * len(self.fit.draws)
             samples = np.random.normal(
                 loc=score1 - score2,
                 scale=np.sqrt(unc1**2 + unc2**2),
@@ -570,7 +729,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error predicting preference: {str(e)}")
             return 0.5, 1.0
-
+                
     def get_bigram_comfort_scores(self, bigram: str) -> Tuple[float, float]:
         """
         Get comfort score and uncertainty for a single bigram.
@@ -602,104 +761,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
-        
-    def select_features(self, dataset: PreferenceDataset, 
-                        initial_features: Optional[List[str]] = None) -> List[str]:
-        """Select features with visualization support."""
-        logger.info("Starting feature selection...")
-        
-        # Initialize with base features
-        self.selected_features = initial_features or self.config['features']['base_features']
-        logger.info(f"Initial features: {self.selected_features}")
-        
-        # Initialize feature metrics visualizer
-        visualizer = FeatureMetricsVisualizer(self.config['data']['visualization']['output_dir'])
-        metrics_history = []
-        
-        # Get all possible features from dataset
-        all_features = dataset.get_feature_names()
-        
-        iteration = 0
-        while iteration < self.config.get('feature_selection', {}).get('n_iterations', 10):
-            # Fit model with current features
-            self.fit_model(dataset, self.selected_features)
-            
-            # Get current model performance metrics
-            base_metrics = self._compute_model_metrics()
-            
-            # Evaluate each potential new feature
-            feature_scores = {}
-            feature_metrics = {}
-            for feature in all_features:
-                if feature not in self.selected_features:
-                    # Calculate feature importance metrics
-                    metrics = self.calculate_feature_metrics(dataset, feature)
-                    feature_metrics[feature] = metrics
-                    
-                    importance = self._evaluate_feature_importance(
-                        dataset, feature, self.selected_features)
-                    
-                    feature_scores[feature] = importance
-                    logger.debug(f"Feature {feature} importance: {importance:.3f}")
-            
-            # Generate visualization of current feature metrics
-            if feature_metrics:  # Only if we have features to evaluate
-                fig = visualizer.plot_feature_metrics(feature_metrics)
-                fig.savefig(self.output_dir / f'feature_metrics_iter_{iteration}.png')
-                plt.close(fig)
-            
-            if not feature_scores:
-                logger.info("No more features to evaluate")
-                break
-                    
-            # Select best feature if it meets threshold
-            best_feature, best_score = max(feature_scores.items(), 
-                                        key=lambda x: x[1])
-            
-            threshold = self.config.get('feature_selection', {}).get(
-                'importance_threshold', 0.1)
-            
-            if best_score < threshold:
-                logger.info("No remaining features meet importance threshold")
-                break
-                    
-            self.selected_features.append(best_feature)
-            logger.info(f"Added feature: {best_feature} (score: {best_score:.3f})")
-            
-            # Store metrics for history
-            metrics_history.append({
-                'iteration': iteration,
-                'feature': best_feature,
-                'score': best_score,
-                **base_metrics,
-                **feature_metrics[best_feature]
-            })
-            
-            # Check if we should add interaction with existing features
-            self._add_interactions(dataset, self.selected_features, best_feature)
-        
-            # Add visualization
-            if self.visualizer:
-                metrics = {
-                    'n_features': len(self.selected_features),
-                    'accuracy': base_metrics['accuracy'],
-                    'transitivity_score': base_metrics['transitivity'],
-                    'feature_score': best_score,
-                    'n_interactions': len([f for f in self.selected_features if '_x_' in f])
-                }
-                self.visualizer.save_iteration(iteration, self, dataset, metrics)
-            
-            iteration += 1
-        
-        # Generate final evolution plot
-        if metrics_history:
-            fig = visualizer.plot_feature_evolution(metrics_history)
-            fig.savefig(self.output_dir / 'feature_evolution.png')
-            plt.close(fig)
-            
-        logger.info(f"Feature selection completed with {len(self.selected_features)} features")
-        return self.selected_features
-       
+              
     def _evaluate_feature_importance(self, dataset: PreferenceDataset,
                                 candidate_feature: str,
                                 current_features: List[str]) -> float:

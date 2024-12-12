@@ -6,7 +6,6 @@ Handles command-line interface and orchestrates the three main workflows:
 2. Bigram recommendations - suggests new bigram pairs for preference collection
 3. Model training - trains the final preference model using selected features
 """
-import cmdstanpy
 import argparse
 import yaml
 import numpy as np
@@ -14,6 +13,7 @@ import pandas as pd
 from typing import Dict, Any, Tuple
 from pathlib import Path
 import matplotlib.pyplot as plt
+from datetime import datetime
 import logging
 
 from engram3.data import PreferenceDataset
@@ -28,9 +28,17 @@ from engram3.features.keymaps import (
 logger = logging.getLogger(__name__)
 
 def setup_logging(config):
-    # Create log directory if it doesn't exist
-    log_file = Path(config['logging']['output_file'])
+    # Create timestamp string
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+    # Create log directory if it doesn't exist
+    log_base = Path(config['logging']['output_file']).parent
+    log_base.mkdir(parents=True, exist_ok=True)
+    
+    # Add timestamp to filename
+    log_filename = f"debug_{timestamp}.log"
+    log_file = log_base / log_filename
+
     # Clear any existing handlers
     root_logger = logging.getLogger()
     root_logger.handlers = []
@@ -101,6 +109,65 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
     
     return train_data, test_data
 
+def load_or_create_split(dataset: PreferenceDataset, 
+                            config: Dict) -> Tuple[PreferenceDataset, PreferenceDataset]:
+    """Load existing split or create and save new one."""
+    split_file = Path(config['data']['splits']['split_data_file'])
+    
+    try:
+        if split_file.exists():
+            logger.info("Loading existing train/test split...")
+            split_data = np.load(split_file)
+            train_indices = split_data['train_indices']
+            test_indices = split_data['test_indices']
+            
+            # Add validation
+            if len(train_indices) + len(test_indices) > len(dataset.preferences):
+                raise ValueError(f"Split indices ({len(train_indices)} train + {len(test_indices)} test) "
+                            f"exceed total preferences ({len(dataset.preferences)})")
+                            
+            logger.info(f"Loaded split: {len(train_indices)} train, {len(test_indices)} test indices")
+            
+        else:
+            logger.info("Creating new train/test split...")
+            
+            # Get all indices
+            indices = np.arange(len(dataset.preferences))
+            
+            # Get test size from config
+            test_ratio = config['data']['splits']['test_ratio']
+            test_size = int(len(indices) * test_ratio)
+            
+            # Set random seed for reproducibility
+            np.random.seed(config['data']['splits']['random_seed'])
+            
+            # Randomly select test indices
+            test_indices = np.random.choice(indices, size=test_size, replace=False)
+            train_indices = np.array([i for i in indices if i not in test_indices])
+            
+            # Save split
+            split_file.parent.mkdir(parents=True, exist_ok=True)
+            np.savez(split_file, train_indices=train_indices, test_indices=test_indices)
+            
+            logger.info(f"Created and saved new split: {len(train_indices)} train, "
+                    f"{len(test_indices)} test indices")
+        
+        # Create datasets with validation
+        train_data = dataset._create_subset_dataset(train_indices)
+        test_data = dataset._create_subset_dataset(test_indices)
+        
+        logger.info(f"Created datasets: {len(train_data.preferences)} train, "
+                f"{len(test_data.preferences)} test preferences")
+        
+        return train_data, test_data
+        
+    except Exception as e:
+        logger.error(f"Error in split creation/loading: {str(e)}")
+        logger.error(f"Dataset preferences: {len(dataset.preferences)}")
+        if split_file.exists():
+            logger.error(f"Split file exists at: {split_file}")
+        raise
+    
 def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
