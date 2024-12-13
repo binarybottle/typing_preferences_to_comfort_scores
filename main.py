@@ -216,7 +216,6 @@ def main():
         # Select features
         #---------------------------------
         if args.mode == 'select_features':
-            # Run feature selection
             logger.info("Starting feature selection...")
 
             # Get train/test split
@@ -226,19 +225,21 @@ def main():
             
             # Initialize model
             model = PreferenceModel(config=config)
-            initial_features = config['features']['base_features']
+            
+            # First select features
             selected_features = model.select_features(train_data)
             
-            # Generate final visualizations
+            # Then fit model with selected features
+            model.fit_model(train_data, selected_features)
+            
+            # Now get feature weights
+            feature_weights = model.get_feature_weights()
+            
+            # Generate visualizations
             if model.visualizer:
-                fig = model.visualizer.plot_feature_space(model, train_data, 
-                                                        "Final Feature Space")
+                fig = model.visualizer.plot_feature_space(model, train_data, "Feature Space")
                 fig.savefig(Path(config['data']['output_dir']) / 'final_feature_space.png')
                 plt.close()
-
-            # Save feature selection results
-            metrics_file = Path(config['feature_evaluation']['metrics_file'])
-            feature_weights = model.get_feature_weights()
             
             # Create results DataFrame
             results = []
@@ -250,18 +251,17 @@ def main():
                     'weight_std': std
                 })
             
+            # Save feature selection results
+            metrics_file = Path(config['feature_evaluation']['metrics_file'])
             pd.DataFrame(results).to_csv(metrics_file, index=False)
             logger.info(f"Saved feature metrics to {metrics_file}")
             
             # Print summary
-            logger.info("\nSelected Features:")
+            logger.info(f"Selected features: {selected_features}")
             for feature in selected_features:
                 weight, std = feature_weights[feature]
                 logger.info(f"{feature}: {weight:.3f} ± {std:.3f}")
                 
-                logger.info(f"Selected features: {selected_features}")
-                logger.info(f"Performance: {performance_metrics}")
-
         #---------------------------------
         # Recommend bigram pairs
         #---------------------------------

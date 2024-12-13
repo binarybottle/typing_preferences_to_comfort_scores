@@ -228,34 +228,28 @@ class PreferenceDataset:
             print(f"Error loading CSV: {str(e)}")
             raise
 
-    def _create_subset_dataset(self, indices: List[int]) -> 'PreferenceDataset':
+    def _create_subset_dataset(self, indices: Union[List[int], np.ndarray]) -> 'PreferenceDataset':
         """Create a new dataset containing only the specified preferences."""
         try:
-            # Add validation
+            # Convert indices to numpy array if not already
+            indices = np.array(indices)
+            
+            # Validate indices
             if len(indices) == 0:
                 raise ValueError("Empty indices list provided")
                 
-            # Convert indices to numpy array if not already
-            indices = np.array(indices)
-                
-            # Add debug logging
-            logger.debug(f"Creating subset dataset:")
-            logger.debug(f"Total preferences: {len(self.preferences)}")
-            logger.debug(f"Number of indices: {len(indices)}")
-            logger.debug(f"Max index: {indices.max()}")
-            logger.debug(f"Min index: {indices.min()}")
+            # Remove any indices that are out of bounds
+            valid_indices = indices[indices < len(self.preferences)]
+            if len(valid_indices) < len(indices):
+                logger.warning(f"Removed {len(indices) - len(valid_indices)} out-of-bounds indices")
             
-            # Validate indices are within bounds
-            if indices.max() >= len(self.preferences):
-                raise ValueError(f"Index {indices.max()} out of range for preferences list of length {len(self.preferences)}")
-            
-            if indices.min() < 0:
-                raise ValueError(f"Negative index {indices.min()} is invalid")
+            if len(valid_indices) == 0:
+                raise ValueError("No valid indices after bounds checking")
 
             subset = PreferenceDataset.__new__(PreferenceDataset)
             
             # Create subset preferences list with validation
-            subset.preferences = [self.preferences[i] for i in indices]
+            subset.preferences = [self.preferences[i] for i in valid_indices]
             
             # Copy needed attributes
             subset.file_path = self.file_path
@@ -273,14 +267,14 @@ class PreferenceDataset:
                 subset.feature_names = self.feature_names
                 
             return subset
-            
+                
         except Exception as e:
             logger.error(f"Error creating subset dataset: {str(e)}")
             logger.error(f"Preferences length: {len(self.preferences)}")
-            logger.error(f"Indices length: {len(indices) if isinstance(indices, (list, np.ndarray)) else 'unknown'}")
-            logger.error(f"Sample of indices: {indices[:10] if isinstance(indices, (list, np.ndarray)) else indices}")
+            logger.error(f"Indices length: {len(indices)}")
+            logger.error(f"Sample of indices: {indices[:10]}")
             raise
-        
+                
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
         bigram1 = (row['bigram1'][0], row['bigram1'][1])

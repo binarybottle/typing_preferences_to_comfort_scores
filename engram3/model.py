@@ -20,11 +20,11 @@ import numpy as np
 import cmdstanpy 
 from scipy.stats import spearmanr
 from sklearn.metrics import mutual_info_score
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import accuracy_score, roc_auc_score
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
@@ -47,7 +47,8 @@ class PreferenceModel:
         self.feature_names = None
         self.selected_features = []
         self.dataset = None  # Add dataset attribute
-        
+        self.feature_weights = None
+
         # Initialize output directory from config
         if config and 'data' in config and 'output_dir' in config['data']:
             self.output_dir = Path(config['data']['output_dir'])
@@ -84,6 +85,55 @@ class PreferenceModel:
             logger.error("Traceback:", exc_info=True)
             raise
 
+    def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
+        """Evaluate model performance on a dataset."""
+        try:
+            if not hasattr(self, 'fit') or self.fit is None:
+                raise RuntimeError("Model must be fit before evaluation")
+                
+            predictions = []
+            actuals = []
+            
+            for pref in dataset.preferences:
+                try:
+                    # Get prediction probability
+                    pred_mean, _ = self.predict_preference(pref.bigram1, pref.bigram2)
+                    if not np.isnan(pred_mean):
+                        predictions.append(pred_mean)
+                        actuals.append(1.0 if pref.preferred else 0.0)
+                except Exception as e:
+                    logger.debug(f"Skipping preference in evaluation due to: {str(e)}")
+                    continue
+                    
+            if not predictions:
+                logger.warning("No valid predictions for evaluation")
+                return {
+                    'accuracy': 0.0,
+                    'auc': 0.5,
+                    'n_evaluated': 0
+                }
+                
+            predictions = np.array(predictions)
+            actuals = np.array(actuals)
+            
+            # Calculate metrics
+            accuracy = np.mean((predictions > 0.5) == actuals)
+            auc = roc_auc_score(actuals, predictions)
+            
+            return {
+                'accuracy': float(accuracy),
+                'auc': float(auc),
+                'n_evaluated': len(predictions)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in model evaluation: {str(e)}")
+            return {
+                'accuracy': 0.0,
+                'auc': 0.5,
+                'n_evaluated': 0
+            }
+            
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using dataset's feature extraction configuration.
@@ -139,33 +189,25 @@ class PreferenceModel:
     def fit_model(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
         """Fit the model to data."""
         try:
-            # Store dataset reference
             self.dataset = dataset
-            
-            # Rest of the existing fit_model code...
             stan_data = self.prepare_data(dataset, features)
             
-            logger.info(f"Preparing Stan data:")
-            logger.info(f"N (preferences): {stan_data['N']}")
-            logger.info(f"P (participants): {stan_data['P']}")
-            logger.info(f"F (features): {stan_data['F']}")
-            logger.info(f"Selected features: {self.feature_names}")
-            
+            logger.info("Starting Stan sampling...")
             self.fit = self.model.sample(
                 data=stan_data,
-                chains=self.config.get('model', {}).get('chains', 4),
-                iter_warmup=self.config.get('model', {}).get('warmup', 1000),
-                iter_sampling=self.config.get('model', {}).get('samples', 1000),
+                chains=self.config['model']['chains'],
+                iter_warmup=self.config['model']['warmup'],
+                iter_sampling=self.config['model']['samples'],
+                adapt_delta=self.config['model'].get('adapt_delta', 0.95),
+                max_treedepth=self.config['model'].get('max_treedepth', 12),
                 show_progress=True,
-                refresh=50,
-                adapt_delta=0.9,
-                max_treedepth=12,
-                show_console=True
+                refresh=50
             )
             
-            # Check MCMC diagnostics
+            # Check diagnostics
             self._check_diagnostics()
-
+            
+            # Update feature weights
             self.feature_weights = {}
             beta = self.fit.stan_variable('beta')
             for i, feature in enumerate(self.feature_names):
@@ -177,106 +219,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error fitting model: {str(e)}")
             raise
-
-    def select_features(self, dataset: PreferenceDataset, 
-                        initial_features: Optional[List[str]] = None) -> List[str]:
-        """Select features with visualization support."""
-        # Store dataset reference
-        self.dataset = dataset
         
-        logger.info("Starting feature selection...")
-        
-        # Initialize with base features
-        self.selected_features = initial_features or self.config['features']['base_features']
-        logger.info(f"Initial features: {self.selected_features}")
-                
-        # Initialize feature metrics visualizer
-        metrics_history = []
-
-        # Get all possible features from dataset
-        all_features = dataset.get_feature_names()
-        
-        iteration = 0
-        while iteration < self.config.get('feature_selection', {}).get('n_iterations', 10):
-            # Fit model with current features
-            self.fit_model(dataset, self.selected_features)
-            
-            # Get current model performance metrics
-            base_metrics = self._compute_model_metrics()
-            
-            # Evaluate each potential new feature
-            feature_scores = {}
-            feature_metrics = {}
-            for feature in all_features:
-                if feature not in self.selected_features:
-                    # Calculate feature importance metrics
-                    metrics = self.calculate_feature_metrics(dataset, feature)
-                    feature_metrics[feature] = metrics
-                    
-                    importance = self._evaluate_feature_importance(
-                        dataset, feature, self.selected_features)
-                    
-                    feature_scores[feature] = importance
-                    logger.debug(f"Feature {feature} importance: {importance:.3f}")
-            
-            # Generate visualization of current feature metrics
-            if feature_metrics:  # Only if we have features to evaluate
-                fig = self.visualizer.plot_feature_metrics(feature_metrics)
-                fig.savefig(self.output_dir / f'feature_metrics_iter_{iteration}.png')
-                plt.close(fig)
-            
-            if not feature_scores:
-                logger.info("No more features to evaluate")
-                break
-                    
-            # Select best feature if it meets threshold
-            best_feature, best_score = max(feature_scores.items(), 
-                                        key=lambda x: x[1])
-            
-            threshold = self.config.get('feature_selection', {}).get(
-                'importance_threshold', 0.1)
-            
-            if best_score < threshold:
-                logger.info("No remaining features meet importance threshold")
-                break
-                    
-            self.selected_features.append(best_feature)
-            logger.info(f"Added feature: {best_feature} (score: {best_score:.3f})")
-            
-            # Store metrics for history
-            metrics_history.append({
-                'iteration': iteration,
-                'feature': best_feature,
-                'score': best_score,
-                **base_metrics,
-                **feature_metrics[best_feature]
-            })
-            
-            # Check if we should add interaction with existing features
-            self._add_interactions(dataset, self.selected_features, best_feature)
-        
-            # Add visualization
-            if self.visualizer:
-                metrics = {
-                    'n_features': len(self.selected_features),
-                    'accuracy': base_metrics['accuracy'],
-                    'transitivity_score': base_metrics['transitivity'],
-                    'feature_score': best_score,
-                    'n_interactions': len([f for f in self.selected_features if '_x_' in f])
-                }
-                self.visualizer.save_iteration(iteration, self, dataset, metrics)
-            
-            iteration += 1
-        
-        # Generate final evolution plot
-        if metrics_history:
-            fig = visualizer.plot_feature_evolution(metrics_history)
-            fig.savefig(self.output_dir / 'feature_evolution.png')
-            plt.close(fig)
-            
-        logger.info(f"Feature selection completed with {len(self.selected_features)} features")
-        return self.selected_features
- 
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
         """Prepare data for Stan model with proper validation and cleaning."""
         # Get feature names
@@ -428,65 +371,117 @@ class PreferenceModel:
                 'combined_score': 0.0
             }
 
-    def _calculate_correlation(self, 
-                            feature_diffs: np.ndarray, 
-                            preferences: np.ndarray) -> float:
-        """
-        Calculate Spearman correlation between feature differences and preferences.
-        Uses Spearman's rho as it captures monotonic relationships and is robust
-        to outliers.
-        """
+    def _select_features_bayesian(self, importance_metrics, stability_metrics):
+        # Add multiple testing correction
+        n_tests = len(importance_metrics)
+        adjusted_threshold = self.config['feature_selection']['importance_threshold'] / n_tests  # Bonferroni correction
+        
+        # Add adaptive thresholding
+        importance_values = [m['combined_score'] for m in importance_metrics.values()]
+        adaptive_threshold = self._calculate_adaptive_threshold(importance_values)
+        
+        final_threshold = min(adjusted_threshold, adaptive_threshold)
+
+    def _calculate_correlation(self, feature: Union[str, np.ndarray], dataset: Optional[PreferenceDataset] = None) -> float:
+        """Calculate correlation between feature and preferences."""
         try:
-            # Remove any pairs with NaN values
-            mask = ~(np.isnan(feature_diffs) | np.isnan(preferences))
-            if not np.any(mask):
-                return 0.0
-                
-            feature_diffs = feature_diffs[mask]
-            preferences = preferences[mask]
+            dataset = dataset or self.dataset
             
-            if len(feature_diffs) < 2:  # Need at least 2 points for correlation
+            # Convert feature differences to numpy array
+            if isinstance(feature, (np.ndarray, list)):
+                feature_diffs = np.asarray(feature, dtype=np.float64)
+            else:
+                feature_diffs = np.array([
+                    pref.features1.get(feature, 0.0) - pref.features2.get(feature, 0.0)
+                    for pref in dataset.preferences
+                ], dtype=np.float64)
+            
+            # Convert preferences to numpy array
+            preferences = np.array([
+                1.0 if pref.preferred else -1.0 
+                for pref in dataset.preferences
+            ], dtype=np.float64)
+            
+            # Create mask for valid values
+            nan_mask = np.isnan(feature_diffs) | np.isnan(preferences)
+            inf_mask = np.isinf(feature_diffs) | np.isinf(preferences)
+            valid_mask = ~(nan_mask | inf_mask)
+            
+            valid_count = valid_mask.sum()
+            
+            # Check if we have enough valid points
+            if valid_count < 2:
                 return 0.0
-                
-            correlation, _ = spearmanr(feature_diffs, preferences)
+            
+            # Filter arrays using mask
+            feature_diffs_valid = feature_diffs[valid_mask]
+            preferences_valid = preferences[valid_mask]
+            
+            # Calculate correlation
+            correlation, _ = spearmanr(feature_diffs_valid, preferences_valid)
             return float(correlation) if not np.isnan(correlation) else 0.0
             
         except Exception as e:
             logger.warning(f"Error calculating correlation: {str(e)}")
             return 0.0
 
-    def _calculate_mutual_information(self,
-                                    feature_diffs: np.ndarray,
-                                    preferences: np.ndarray,
-                                    n_bins: int = 20) -> float:
-        """
-        Calculate mutual information between feature differences and preferences.
-        Discretizes continuous feature differences using binning.
-        """
+    def _calculate_mutual_information(self, feature: Union[str, np.ndarray], dataset: Optional[PreferenceDataset] = None, n_bins: int = 20) -> float:
+        """Calculate mutual information between feature and preferences."""
         try:
-            # Remove any pairs with NaN values
-            mask = ~(np.isnan(feature_diffs) | np.isnan(preferences))
-            if not np.any(mask):
+            dataset = dataset or self.dataset
+            
+            # Convert feature differences to numpy array
+            if isinstance(feature, (np.ndarray, list)):
+                feature_diffs = np.asarray(feature, dtype=np.float64)
+            else:
+                feature_diffs = np.array([
+                    pref.features1.get(feature, 0.0) - pref.features2.get(feature, 0.0)
+                    for pref in dataset.preferences
+                ], dtype=np.float64)
+            
+            # Convert preferences to numpy array
+            preferences = np.array([
+                1.0 if pref.preferred else -1.0 
+                for pref in dataset.preferences
+            ], dtype=np.float64)
+            
+            # Create mask for valid values
+            nan_mask = np.isnan(feature_diffs) | np.isnan(preferences)
+            inf_mask = np.isinf(feature_diffs) | np.isinf(preferences)
+            valid_mask = ~(nan_mask | inf_mask)
+            
+            valid_count = valid_mask.sum()
+            
+            # Check if we have enough valid points
+            if valid_count < 2:
+                return 0.0
+            
+            # Filter arrays using mask
+            feature_diffs_valid = feature_diffs[valid_mask]
+            preferences_valid = preferences[valid_mask]
+            
+            # Check if all values are the same
+            if np.all(feature_diffs_valid == feature_diffs_valid[0]):
+                return 0.0
+            
+            # Calculate MI
+            try:
+                bins = np.linspace(
+                    np.min(feature_diffs_valid),
+                    np.max(feature_diffs_valid),
+                    min(n_bins, valid_count)
+                )
+                binned_diffs = np.digitize(feature_diffs_valid, bins)
+                mi = mutual_info_score(binned_diffs, preferences_valid)
+                return float(mi)
+            except Exception as e:
+                logger.warning(f"Error in MI calculation: {str(e)}")
                 return 0.0
                 
-            feature_diffs = feature_diffs[mask]
-            preferences = preferences[mask]
-            
-            if len(feature_diffs) < 2:  # Need at least 2 points
-                return 0.0
-                
-            # Discretize feature differences
-            bins = np.linspace(np.min(feature_diffs), np.max(feature_diffs), n_bins)
-            binned_diffs = np.digitize(feature_diffs, bins)
-            
-            # Calculate mutual information
-            mi = mutual_info_score(binned_diffs, preferences)
-            return float(mi)
-            
         except Exception as e:
             logger.warning(f"Error calculating mutual information: {str(e)}")
             return 0.0
-
+                                                    
     def _calculate_combined_score(self,
                                 correlation: float,
                                 mutual_info: float,
@@ -523,49 +518,31 @@ class PreferenceModel:
     def _check_diagnostics(self) -> None:
         """Check MCMC diagnostics with proper type handling."""
         try:
-            # Get summary dataframe
-            summary_df = self.fit.summary()
+            if hasattr(self.fit, 'diagnose'):
+                diagnostic_info = self.fit.diagnose()
+                logger.info("Diagnostic Information:")
+                logger.info(diagnostic_info)
             
-            # Log column names for debugging
-            logger.debug(f"Available columns in summary: {list(summary_df.columns)}")
+            summary = self.fit.summary()
+            rhat_col = next((col for col in summary.columns 
+                            if any(x in col.lower() 
+                                for x in ['r_hat', 'rhat', 'r-hat'])), None)
             
-            # Check R-hat (should be close to 1)
-            rhat_col = next((col for col in summary_df.columns if 'rhat' in col.lower()), None)
             if rhat_col:
-                rhat = summary_df[rhat_col]
-                if np.any(rhat > 1.1):
-                    logger.warning("Some parameters have R-hat > 1.1, indicating potential convergence issues")
-                    problematic = summary_df[rhat > 1.1].index
-                    logger.warning(f"Parameters with high R-hat: {problematic}")
-            
-            # Check effective sample size
-            ess_col = next((col for col in summary_df.columns if 'ess' in col.lower()), None)
-            if ess_col:
-                n_eff = summary_df[ess_col]
-                if np.any(n_eff < 100):
-                    logger.warning("Some parameters have low effective sample size")
-                    problematic = summary_df[n_eff < 100].index
-                    logger.warning(f"Parameters with low ESS: {problematic}")
-            
-            # Add additional diagnostics
-            logger.info("\nSampling diagnostics:")
-            logger.info(f"Number of chains: {self.fit.chains}")
-            # Properly get number of draws
-            n_draws = self.fit.draws_pd().shape[0] if hasattr(self.fit, 'draws_pd') else None
-            logger.info(f"Samples per chain: {n_draws // self.fit.chains if n_draws else 'Unknown'}")
-            logger.info(f"Total samples: {n_draws if n_draws else 'Unknown'}")
-            
-            if hasattr(self.fit, 'time'):
-                logger.info("\nTiming information:")
-                timing = self.fit.time()
-                if isinstance(timing, dict):
-                    logger.info(f"Warmup time: {timing.get('warmup', 0):.1f} seconds")
-                    logger.info(f"Sampling time: {timing.get('sampling', 0):.1f} seconds")
-                
+                rhat = summary[rhat_col].astype(float)
+                if (rhat > 1.1).any():
+                    logger.warning("Some parameters have high R-hat (>1.1)")
+                    high_rhat_params = summary.index[rhat > 1.1]
+                    logger.warning(f"Parameters with high R-hat: {high_rhat_params}")
+                    
+                    # Call diagnose() when there are convergence issues
+                    if hasattr(self.fit, 'diagnose'):
+                        logger.info("Running detailed diagnostics...")
+                        self.fit.diagnose()
+                        
         except Exception as e:
-            logger.warning(f"Error checking diagnostics: {str(e)}")
-            logger.warning("Continuing without full diagnostic checks")
-
+            logger.warning(f"Error in diagnostics: {str(e)}")
+                            
     def _calculate_predictive_impact(self, dataset: PreferenceDataset,
                                 candidate_feature: str) -> float:
         """
@@ -604,12 +581,28 @@ class PreferenceModel:
             logger.warning(f"Error calculating predictive impact: {str(e)}")
             return 0.0
             
-    def get_feature_weights(self) -> Dict[str, Tuple[float, float]]:
-        """Get posterior means and standard deviations of feature weights."""
-        if not hasattr(self, 'feature_weights'):
-            raise RuntimeError("Model must be fit before getting weights")
-        return self.feature_weights
-    
+    def get_feature_weights(self) -> Dict[str, float]:
+        """Get the learned feature weights including interactions."""
+        if not hasattr(self, 'feature_weights') or self.feature_weights is None:
+            if self.fit is None:
+                raise RuntimeError("Model must be fit before getting weights")
+            
+            # Extract weights from fitted model
+            try:
+                summary = self.fit.summary()
+                self.feature_weights = {}
+                for feature in self.selected_features:
+                    if feature in summary.index:
+                        self.feature_weights[feature] = (
+                            float(summary.loc[feature, 'mean']),
+                            float(summary.loc[feature, 'sd'])
+                        )
+            except Exception as e:
+                logger.error(f"Error extracting feature weights: {str(e)}")
+                return {}
+                
+        return self.feature_weights.copy()
+        
     def _compute_model_metrics(self) -> Dict[str, float]:
         """
         Compute comprehensive model performance metrics.
@@ -762,61 +755,58 @@ class PreferenceModel:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
               
-    def _evaluate_feature_importance(self, dataset: PreferenceDataset,
-                                candidate_feature: str,
-                                current_features: List[str]) -> float:
-        """
-        Enhanced feature importance evaluation incorporating all metrics.
-        """
+    def _evaluate_feature_importance(self, 
+                                dataset: PreferenceDataset, 
+                                feature: str,
+                                selected_features: List[str] = None,
+                                is_interaction: bool = False) -> float:
+        """Comprehensive feature evaluation using all metrics."""
         try:
-            # Get comprehensive metrics
-            metrics = self.calculate_feature_metrics(dataset, candidate_feature)
-            
             # Get weights from config
-            weights = self.config.get('feature_selection', {}).get('metric_weights', {
-                'correlation': 0.2,
-                'mutual_information': 0.2,
-                'model_effect': 0.4,
-                'stability': 0.2
-            })
+            weights = self.config['feature_selection']['metric_weights']
             
-            # Calculate normalized scores
-            correlation_score = abs(metrics['correlation'])
-            mi_score = metrics['mutual_information']
+            # Calculate all metrics
+            if not is_interaction:
+                # Base feature metrics
+                inclusion_prob = self.calculate_inclusion_probability(feature)
+                effect_mag = self.calculate_effect_magnitude(feature)
+                effect_cons = self.calculate_effect_consistency(feature)
+                pred_impact = self.calculate_predictive_impact(feature)
+                correlation = self._calculate_correlation(feature, dataset)
+                mutual_info = self._calculate_mutual_information(feature, dataset)
+            else:
+                # Simplified metrics for interaction terms
+                correlation = self._calculate_correlation(feature, dataset)
+                mutual_info = self._calculate_mutual_information(feature, dataset)
+                # Use default values for other metrics for interactions
+                inclusion_prob = 0.5
+                effect_mag = 0.0
+                effect_cons = 1.0
+                pred_impact = 0.0
             
-            # Model effect score (normalized by uncertainty)
-            effect_score = abs(metrics['model_effect_mean']) / (metrics['model_effect_std'] + 1e-10)
+            # Initialize total score
+            total_score = 0.0
             
-            # Calculate stability score
-            stability_metrics = self._calculate_stability_metrics(dataset, candidate_feature)
-            stability_score = (
-                (1.0 - stability_metrics['effect_cv']) +  # Lower CV is better
-                stability_metrics['sign_consistency'] +    # Higher consistency is better
-                (1.0 - stability_metrics['relative_range'])  # Lower range is better
-            ) / 3.0
+            # Add weighted components
+            if 'inclusion_probability' in weights:
+                total_score += weights['inclusion_probability'] * inclusion_prob
+            if 'effect_magnitude' in weights:
+                total_score += weights['effect_magnitude'] * effect_mag
+            if 'effect_consistency' in weights:
+                total_score += weights['effect_consistency'] * (1 - effect_cons)
+            if 'predictive_impact' in weights:
+                total_score += weights['predictive_impact'] * pred_impact
+            if 'correlation' in weights:
+                total_score += weights['correlation'] * abs(correlation)
+            if 'mutual_information' in weights:
+                total_score += weights['mutual_information'] * mutual_info
             
-            # Combine scores
-            importance_score = (
-                weights['correlation'] * correlation_score +
-                weights['mutual_information'] * mi_score +
-                weights['model_effect'] * effect_score +
-                weights['stability'] * stability_score
-            )
-            
-            # Log detailed scores
-            logger.debug(f"\nDetailed scores for {candidate_feature}:")
-            logger.debug(f"Correlation score: {correlation_score:.3f}")
-            logger.debug(f"Mutual information score: {mi_score:.3f}")
-            logger.debug(f"Effect score: {effect_score:.3f}")
-            logger.debug(f"Stability score: {stability_score:.3f}")
-            logger.debug(f"Final importance score: {importance_score:.3f}")
-            
-            return float(importance_score)
+            return total_score
             
         except Exception as e:
-            logger.error(f"Error evaluating feature importance: {str(e)}")
+            logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return 0.0
-        
+                        
     def _add_interactions(self, dataset: PreferenceDataset,
                         selected_features: List[str],
                         new_feature: str) -> None:
@@ -832,7 +822,11 @@ class PreferenceModel:
             
             # Evaluate interaction importance
             importance = self._evaluate_feature_importance(
-                dataset, interaction, selected_features)
+                dataset, 
+                interaction, 
+                selected_features=selected_features,
+                is_interaction=True
+            )
             
             # Add if meets threshold
             threshold = self.config.get('feature_selection', {}).get(
@@ -885,13 +879,7 @@ class PreferenceModel:
                 chains=self.config.get('model', {}).get('chains', 4),
                 target_accept=self.config.get('model', {}).get('target_accept', 0.8)
             )
-    
-    def get_feature_weights(self) -> Dict[str, float]:
-        """Get the learned feature weights including interactions."""
-        if self.feature_weights is None:
-            raise RuntimeError("Model must be fit before getting weights")
-        return self.feature_weights.copy()
-  
+      
     def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None):
         """Perform cross-validation with multiple validation strategies."""
         feature_names = dataset.get_feature_names()
@@ -1069,26 +1057,6 @@ class PreferenceModel:
                 f.write(','.join(values) + '\n')
             
             logger.info(f"Saved feature metrics to {csv_file}")
-
-    def _create_subset_dataset(
-        self, 
-        dataset: PreferenceDataset,
-        indices: np.ndarray,
-        X1: np.ndarray,
-        X2: np.ndarray,
-        y: np.ndarray,
-        participants: np.ndarray
-    ) -> PreferenceDataset:
-        """Create a new dataset from a subset of indices."""
-        subset = PreferenceDataset.__new__(PreferenceDataset)
-        subset.preferences = [dataset.preferences[i] for i in indices]
-        subset.participants = set(participants[indices])
-        subset.feature_names = dataset.get_feature_names()
-        # Copy over needed attributes from original dataset
-        subset.file_path = dataset.file_path
-        subset.all_bigrams = dataset.all_bigrams
-        subset.all_bigram_features = dataset.all_bigram_features
-        return subset
     
     def _calculate_stability_metrics(self, dataset: PreferenceDataset,
                                 feature: str) -> Dict[str, float]:
@@ -1165,6 +1133,299 @@ class PreferenceModel:
         cv = GroupKFold(n_splits=n_splits)
         return cv.split(np.zeros(len(participant_ids)), groups=participant_ids)
 
+    def _calculate_adaptive_threshold(self, importance_values: np.ndarray) -> float:
+        """Calculate adaptive threshold using elbow method with proper array handling."""
+        try:
+            # Check if we have any values
+            if len(importance_values) == 0:
+                logger.warning("No importance values provided for threshold calculation")
+                return self.config['feature_selection']['thresholds']['importance']
+                
+            # Ensure we have at least 2 points for meaningful elbow calculation
+            if len(importance_values) < 2:
+                logger.warning("Not enough points for elbow calculation, using single value")
+                return float(importance_values[0])
+                
+            # Sort values in descending order
+            sorted_values = np.sort(importance_values)[::-1]
+            
+            # Create coordinate arrays for elbow calculation
+            npoints = len(sorted_values)
+            allCoord = np.vstack((range(npoints), sorted_values)).T
+            
+            # Find elbow using maximum distance from line
+            first_point = allCoord[0]
+            last_point = allCoord[-1]
+            line_vec = last_point - first_point
+            line_vec_norm = line_vec / np.sqrt(np.sum(line_vec**2))
+            vec_from_first = allCoord - first_point
+            scalar_proj = np.dot(vec_from_first, line_vec_norm)
+            vec_from_line = vec_from_first - np.outer(scalar_proj, line_vec_norm)
+            dist_from_line = np.sqrt(np.sum(vec_from_line**2, axis=1))
+            
+            # Get elbow point
+            elbow_idx = np.argmax(dist_from_line)
+            threshold = sorted_values[elbow_idx]
+            
+            logger.debug(f"Calculated adaptive threshold: {threshold:.4f}")
+            return float(threshold)
+            
+        except Exception as e:
+            logger.warning(f"Error in threshold calculation: {str(e)}")
+            return self.config['feature_selection']['thresholds']['importance']
+        
+    def _fdr_correct(self, p_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+        """Apply Benjamini-Hochberg FDR correction"""
+        sorted_p_idx = np.argsort(p_values)
+        sorted_p_values = p_values[sorted_p_idx]
+        n_tests = len(p_values)
+        
+        threshold_line = np.arange(1, n_tests + 1) * alpha / n_tests
+        above_threshold = sorted_p_values <= threshold_line
+        if not np.any(above_threshold):
+            return np.zeros_like(p_values, dtype=bool)
+        
+        last_true = np.where(above_threshold)[0][-1]
+        significant = np.zeros_like(p_values, dtype=bool)
+        significant[sorted_p_idx[:last_true + 1]] = True
+        return significant
+
+    def select_features(self, dataset: PreferenceDataset) -> List[str]:
+        """Enhanced feature selection with statistical controls"""
+        self.dataset = dataset
+        logger.info("Starting feature selection with statistical controls...")
+        
+        # Initialize with base features
+        self.selected_features = self.config['features']['base_features']
+        metrics_history = []
+        all_features = dataset.get_feature_names()
+        
+        # Get multiple testing parameters
+        mt_config = self.config['feature_selection']['multiple_testing']
+        alpha = mt_config.get('alpha', 0.05)
+        mt_method = mt_config.get('method', 'fdr')
+        
+        iteration = 0
+        while iteration < self.config['feature_selection']['n_iterations']:
+            # Fit model with current features
+            self.fit_model(dataset, self.selected_features)
+            base_metrics = self._compute_model_metrics()
+            
+            # Evaluate each potential feature
+            feature_scores = {}
+            feature_metrics = {}
+            p_values = []
+            features_to_test = []
+            
+            # Collect features to evaluate
+            remaining_features = [f for f in all_features if f not in self.selected_features]
+            if not remaining_features:
+                logger.info("No more features to evaluate")
+                break
+                
+            for feature in remaining_features:
+                try:
+                    metrics = self.calculate_feature_metrics(dataset, feature)
+                    feature_metrics[feature] = metrics
+                    importance = self._evaluate_feature_importance(
+                        dataset, 
+                        feature, 
+                        selected_features=self.selected_features
+                    )
+
+                    if importance is not None:  # Only include valid importance scores
+                        feature_scores[feature] = importance
+                        p_values.append(metrics.get('p_value', 1.0))
+                        features_to_test.append(feature)
+                except Exception as e:
+                    logger.warning(f"Error evaluating feature {feature}: {str(e)}")
+                    continue
+            
+            # Apply multiple testing correction
+            p_values = np.array(p_values)
+            if mt_method == 'fdr':
+                significant = self._fdr_correct(p_values, alpha)
+            else:  # bonferroni
+                significant = p_values < (alpha / len(p_values))
+            
+            # Calculate adaptive threshold
+            importance_values = np.array([score for score in feature_scores.values()])
+            adaptive_threshold = self._calculate_adaptive_threshold(importance_values)
+            
+            # Select features that pass both significance and importance threshold
+            passing_features = []
+            for i, feature in enumerate(features_to_test):
+                if (significant[i] and 
+                    feature_scores[feature] >= adaptive_threshold):
+                    passing_features.append((feature, feature_scores[feature]))
+            
+            if not passing_features:
+                logger.info("No more features meet selection criteria")
+                break
+                
+            # Add best passing feature
+            best_feature, best_score = max(passing_features, key=lambda x: x[1])
+            self.selected_features.append(best_feature)
+            logger.info(f"Added feature: {best_feature} (score: {best_score:.3f})")
+            
+            # Update metrics history
+            metrics_history.append({
+                'iteration': iteration,
+                'feature': best_feature,
+                'score': best_score,
+                **base_metrics,
+                **feature_metrics[best_feature]
+            })
+            
+            # Check for interactions if enabled
+            if self.config['feature_selection']['interaction_testing']['hierarchical']:
+                self._evaluate_interactions(dataset, best_feature)
+                
+            iteration += 1
+            
+        return self.selected_features
+
+    def _evaluate_interactions(self, dataset: PreferenceDataset, new_feature: str):
+        """Evaluate potential interactions with new feature"""
+        interaction_config = self.config['feature_selection']['interaction_testing']
+        min_effect_size = interaction_config['minimum_effect_size']
+        
+        for existing_feature in self.selected_features[:-1]:  # Exclude newly added feature
+            # Test interaction significance
+            interaction = self._test_interaction_significance(
+                dataset, existing_feature, new_feature)
+            
+            if (interaction['p_value'] < self.config['feature_selection']['multiple_testing']['alpha'] and 
+                abs(interaction['effect_size']) >= min_effect_size):
+                interaction_name = f"{existing_feature}_x_{new_feature}"
+                self.selected_features.append(interaction_name)
+                logger.info(f"Added interaction: {interaction_name}")
+
+    def calculate_inclusion_probability(self, feature: str, n_bootstrap: int = 100) -> float:
+        """Calculate probability of feature being selected across bootstrap samples."""
+        try:
+            if not hasattr(self, 'dataset') or self.dataset is None:
+                logger.warning("No dataset available for inclusion probability calculation")
+                return 0.0
+
+            n_samples = len(self.dataset.preferences)
+            inclusion_count = 0
+            
+            for _ in range(n_bootstrap):
+                try:
+                    # Generate bootstrap sample with valid indices
+                    bootstrap_indices = np.random.choice(
+                        n_samples,
+                        size=n_samples,
+                        replace=True
+                    )
+                    
+                    # Use dataset's method to create subset
+                    bootstrap_data = self.dataset._create_subset_dataset(bootstrap_indices)
+                    
+                    # Calculate feature importance for this bootstrap sample
+                    importance = self._calculate_single_feature_importance(bootstrap_data, feature)
+                    threshold = self.config['feature_selection']['thresholds']['importance']
+                    
+                    if importance > threshold:
+                        inclusion_count += 1
+                        
+                except Exception as e:
+                    logger.warning(f"Error in bootstrap iteration: {str(e)}")
+                    continue
+                    
+            return inclusion_count / n_bootstrap
+            
+        except Exception as e:
+            logger.warning(f"Error calculating inclusion probability for {feature}: {str(e)}")
+            return 0.0
+
+    def _calculate_single_feature_importance(self, dataset: PreferenceDataset, feature: str) -> float:
+        """Calculate basic feature importance without bootstrapping to avoid recursion."""
+        try:
+            # Calculate basic metrics
+            correlation = self._calculate_correlation(feature)
+            mutual_info = self._calculate_mutual_information(feature)
+            
+            # Use simpler scoring for bootstrap samples
+            weights = self.config['feature_selection']['metric_weights']
+            score = (
+                weights['correlation'] * abs(correlation) +
+                weights['mutual_information'] * mutual_info
+            )
+            
+            return score
+            
+        except Exception as e:
+            logger.warning(f"Error in basic feature importance calculation: {str(e)}")
+            return 0.0
+    
+    def calculate_effect_magnitude(self, feature: str) -> float:
+        """Calculate absolute magnitude of feature effect"""
+        if hasattr(self, 'fit') and self.fit is not None:
+            weights = self.get_feature_weights()
+            if feature in weights:
+                effect_mean, _ = weights[feature]
+                return abs(effect_mean)
+        return 0.0
+
+    def calculate_effect_consistency(self, feature: str, dataset: Optional[PreferenceDataset] = None) -> float:
+        """Calculate consistency of feature effect across cross-validation."""
+        try:
+            dataset = dataset or self.dataset
+            n_samples = len(dataset.preferences)
+            
+            # Adjust n_splits based on sample size
+            n_splits = min(5, max(2, n_samples // 2))  # At least 2 splits, at most 5, or n_samples//2
+            
+            effects = []
+            kf = KFold(n_splits=n_splits, shuffle=True)
+            
+            for train_idx, _ in kf.split(range(n_samples)):
+                try:
+                    train_data = dataset._create_subset_dataset(train_idx)
+                    self.fit_model(train_data, [feature])
+                    effect = self.get_feature_weights().get(feature, (0.0, 0.0))[0]
+                    effects.append(effect)
+                except Exception as e:
+                    logger.warning(f"Error in CV fold for feature {feature}: {str(e)}")
+                    continue
+                    
+            if not effects:
+                return 1.0  # Return maximum inconsistency if no effects could be calculated
+                
+            return np.std(effects) if len(effects) > 1 else 0.0
+            
+        except Exception as e:
+            logger.warning(f"Error calculating effect consistency for {feature}: {str(e)}")
+            return 1.0  # Return maximum inconsistency on error
+        
+    def calculate_predictive_impact(self, feature: str) -> float:
+        """Calculate feature's impact on model predictions"""
+        try:
+            if not hasattr(self, 'selected_features'):
+                return 0.0
+                
+            # Make a copy of selected features to avoid modifying the original
+            features = self.selected_features.copy()
+            
+            # Only try to remove if feature exists in list
+            if feature in features:
+                features.remove(feature)
+            
+            # Get base performance with all features
+            base_performance = self.evaluate(self.dataset)['accuracy']
+            
+            # Train model without this feature
+            self.fit_model(self.dataset, features)
+            reduced_performance = self.evaluate(self.dataset)['accuracy']
+            
+            return base_performance - reduced_performance
+            
+        except Exception as e:
+            logger.warning(f"Error calculating predictive impact for {feature}: {str(e)}")
+            return 0.0
+        
 
 class FeatureVisualization:
     """Handles visualization and tracking of feature selection process."""
@@ -1202,44 +1463,6 @@ class FeatureVisualization:
         
         for key, value in metrics.items():
             self.iteration_metrics[key].append(value)
-
-    def plot_feature_space(self, model: 'PreferenceModel', 
-                          dataset: PreferenceDataset,
-                          title: str = "Feature Space"):
-        """Plot 2D PCA of feature space with comfort scores."""
-        feature_vectors = []
-        comfort_scores = []
-        uncertainties = []
-        
-        for pref in dataset.preferences:
-            feat1 = [pref.features1[f] for f in model.selected_features]
-            feat2 = [pref.features2[f] for f in model.selected_features]
-            
-            score1, unc1 = model.get_bigram_comfort_scores(pref.bigram1)
-            score2, unc2 = model.get_bigram_comfort_scores(pref.bigram2)
-            
-            feature_vectors.extend([feat1, feat2])
-            comfort_scores.extend([score1, score2])
-            uncertainties.extend([unc1, unc2])
-            
-        X = StandardScaler().fit_transform(feature_vectors)
-        pca = PCA(n_components=2)
-        X_2d = pca.fit_transform(X)
-        
-        fig, ax = plt.subplots(figsize=(10, 8))
-        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1],
-                           c=comfort_scores,
-                           s=np.array(uncertainties) * 500,
-                           alpha=0.6,
-                           cmap='RdYlBu')
-        
-        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
-        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
-        plt.colorbar(scatter, label='Comfort Score')
-        plt.title(title)
-        plt.tight_layout()
-        
-        return fig
 
     def plot_feature_impacts(self, model: 'PreferenceModel'):
         """Plot feature weights and their interactions."""

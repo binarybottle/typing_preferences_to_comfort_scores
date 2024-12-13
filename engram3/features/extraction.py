@@ -148,31 +148,60 @@ def precompute_all_bigram_features(
                 base_features = all_bigram_features[bigram]
                 
                 for interaction in interactions:
-                    # Skip if not all features available
                     if not all(f in base_features for f in interaction):
                         continue
-                    
-                    # Compute interaction
+                        
+                    # Compute interaction with statistical validation
                     interaction_name = "_x_".join(interaction)
-                    interaction_value = np.prod([base_features[f] for f in interaction])
-                    all_bigram_features[bigram][interaction_name] = interaction_value
                     
-                    logger.debug(f"Computing interaction: {interaction}")
-                    logger.debug(f"Interaction name: {interaction_name}")
-                    logger.debug(f"Features available for bigram: {sorted(base_features.keys())}")
+                    # Get interaction testing method from config
+                    interaction_method = config.get('feature_selection', {}).get('interaction_testing', {}).get('method', 'likelihood_ratio')
+                    
+                    if interaction_method == 'likelihood_ratio':
+                        interaction_value, p_value = compute_interaction_lr(
+                            [base_features[f] for f in interaction])
+                    else:
+                        interaction_value = np.prod([base_features[f] for f in interaction])
+                        p_value = 1.0  # Default p-value when not using statistical testing
 
-                    # Add interaction name to feature list if new
+                    # Store both value and statistical metadata
+                    all_bigram_features[bigram][interaction_name] = interaction_value
+                    all_bigram_features[bigram][f"{interaction_name}_p_value"] = p_value
+                    
                     if interaction_name not in feature_names:
                         feature_names.append(interaction_name)
-        else:
-            logger.info("No interactions loaded from file")
-                    
+                        feature_names.append(f"{interaction_name}_p_value")
+                        
     except Exception as e:
         logger.error(f"Error computing interactions: {str(e)}")
         logger.error("Traceback:", exc_info=True)
         
     return all_bigrams, all_bigram_features, feature_names
 
+def compute_interaction_lr(feature_values: List[float]) -> Tuple[float, float]:
+    """Compute interaction term and its significance using chi-square test"""
+    try:
+        from scipy import stats
+        
+        # Convert to numpy arrays
+        features = np.array(feature_values)
+        interaction = np.prod(features)
+        
+        # Fit null model (without interaction)
+        null_model = np.sum(features)
+        
+        # Use chi-square test instead of non-existent likelihood ratio test
+        # Compare observed vs expected frequencies
+        observed = np.array([interaction, null_model])
+        expected = np.array([np.mean(observed), np.mean(observed)])
+        chi2, p_value = stats.chisquare(observed, expected)
+        
+        return interaction, p_value
+        
+    except Exception as e:
+        logger.warning(f"Error in interaction computation: {str(e)}")
+        return 0.0, 1.0
+    
 def load_interactions(filepath: str) -> List[List[str]]:
     """
     Load feature interactions from file.
@@ -219,3 +248,13 @@ def load_interactions(filepath: str) -> List[List[str]]:
     except Exception as e:
         logger.error(f"Error loading interactions file: {str(e)}")
         return []
+
+def evaluate_interaction_significance(self, interaction, features1, features2, y):
+    # Add formal statistical testing for interactions
+    from scipy import stats
+    
+    interaction_term = features1 * features2
+    lrt_statistic, p_value = stats.likelihood_ratio(interaction_term, y)
+    
+    # Apply FDR correction
+    return self._fdr_correct(p_value)

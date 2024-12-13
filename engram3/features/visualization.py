@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import logging
 
+from engram3.data import PreferenceDataset
+
 class FeatureMetricsVisualizer:
     """Handles visualization and analysis of feature metrics."""
     
@@ -45,7 +47,45 @@ class FeatureMetricsVisualizer:
         
         plt.tight_layout()
         return fig
+    
+    def plot_feature_space(self, model: 'PreferenceModel', 
+                          dataset: 'PreferenceDataset',
+                          title: str = "Feature Space"):
+        """Plot 2D PCA of feature space with comfort scores."""
+        feature_vectors = []
+        comfort_scores = []
+        uncertainties = []
         
+        for pref in dataset.preferences:
+            feat1 = [pref.features1[f] for f in model.selected_features]
+            feat2 = [pref.features2[f] for f in model.selected_features]
+            
+            score1, unc1 = model.get_bigram_comfort_scores(pref.bigram1)
+            score2, unc2 = model.get_bigram_comfort_scores(pref.bigram2)
+            
+            feature_vectors.extend([feat1, feat2])
+            comfort_scores.extend([score1, score2])
+            uncertainties.extend([unc1, unc2])
+            
+        X = StandardScaler().fit_transform(feature_vectors)
+        pca = PCA(n_components=2)
+        X_2d = pca.fit_transform(X)
+        
+        fig, ax = plt.subplots(figsize=(10, 8))
+        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1],
+                           c=comfort_scores,
+                           s=np.array(uncertainties) * 500,
+                           alpha=0.6,
+                           cmap='RdYlBu')
+        
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
+        plt.colorbar(scatter, label='Comfort Score')
+        plt.title(title)
+        plt.tight_layout()
+        
+        return fig
+    
     def _plot_correlation_mi_scatter(self, df: pd.DataFrame, ax: plt.Axes):
         """Plot correlation vs mutual information scatter plot."""
         scatter = ax.scatter(df['correlation'].abs(), 
