@@ -1,25 +1,63 @@
+# engram3/features/feature_visualization.py
+"""
+Visualization module for feature metrics and model analysis.
+
+Provides comprehensive visualization capabilities including:
+  - Feature importance metrics visualization
+  - PCA-based feature space exploration
+  - Feature selection process tracking
+  - Model performance monitoring
+  - Feature correlation analysis
+  - Effect size visualization
+  - Uncertainty quantification plots
+  - Detailed metric reports generation
+
+Supports analysis workflow through:
+  - Interactive plotting interfaces
+  - Configurable output formats
+  - Multiple visualization perspectives
+  - Temporal evolution tracking
+  - Component-wise breakdowns
+  - Statistical summaries
+  - Export functionality for reports
+"""
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List
 from pathlib import Path
-import logging
+from collections import defaultdict
 
 from engram3.data import PreferenceDataset
+from engram3.model import PreferenceModel
+from engram3.utils.visualization import PlottingUtils
 
 class FeatureMetricsVisualizer:
-    """Handles visualization and analysis of feature metrics."""
+    """Handles all feature-related visualization and tracking."""
     
-    def __init__(self, output_dir: str):
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.metrics_history = []
+    def __init__(self, config: Dict):
+        self.output_dir = Path(config['data']['visualization']['output_dir'])
+        self.plotting = PlottingUtils(self.output_dir)
         
+        # Create subdirectories
+        self.dirs = {
+            'iterations': self.output_dir / 'iterations',
+            'features': self.output_dir / 'features',
+            'performance': self.output_dir / 'performance',
+            'space': self.output_dir / 'feature_space'
+        }
+        for d in self.dirs.values():
+            d.mkdir(parents=True, exist_ok=True)
+            
+        self.iteration_metrics = defaultdict(list)
+    
     def plot_feature_metrics(self, metrics_dict: Dict[str, Dict[str, float]]):
         """Plot comprehensive feature metrics visualization."""
+        fig, axes = self.plotting.create_figure(figsize=(15, 10))
+        self.plotting.setup_axis(axes, title="Feature Metrics")
+
         # Convert metrics to DataFrame
         metrics_df = pd.DataFrame([
             {
@@ -49,8 +87,8 @@ class FeatureMetricsVisualizer:
         return fig
     
     def plot_feature_space(self, model: 'PreferenceModel', 
-                          dataset: 'PreferenceDataset',
-                          title: str = "Feature Space"):
+                        dataset: 'PreferenceDataset',
+                        title: str = "Feature Space"):
         """Plot 2D PCA of feature space with comfort scores."""
         feature_vectors = []
         comfort_scores = []
@@ -204,3 +242,73 @@ class FeatureMetricsVisualizer:
         
         # Save to CSV
         report_df.to_csv(self.output_dir / output_file, index=False)
+
+    def save_iteration(self, iteration: int, model: 'PreferenceModel',
+                      dataset: PreferenceDataset, metrics: Dict[str, float]):
+        """Save metrics and generate visualizations for current iteration."""
+        self._save_metrics(iteration, metrics)
+        self._plot_feature_space(iteration, model, dataset)
+        self._plot_feature_impacts(iteration, model)
+        self._plot_performance_tracking()
+        self._update_tracking_plots()
+
+    def _save_metrics(self, iteration: int, metrics: Dict[str, float]):
+        metrics['iteration'] = iteration
+        df = pd.DataFrame([metrics])
+        file_path = self.dirs['iterations'] / f'iteration_{iteration}_metrics.csv'
+        df.to_csv(file_path, index=False)
+        
+        for key, value in metrics.items():
+            self.iteration_metrics[key].append(value)
+
+    def plot_feature_impacts(self, model: 'PreferenceModel'):
+        """Plot feature weights and their interactions."""
+        weights = model.get_feature_weights()
+        
+        # Feature weights plot
+        fig1 = plt.figure(figsize=(12, 6))
+        sns.barplot(x=list(weights.keys()), y=list(weights.values()))
+        plt.xticks(rotation=45, ha='right')
+        plt.title('Feature Weights')
+        plt.tight_layout()
+        
+        # Interaction heatmap
+        interaction_features = [f for f in model.selected_features if '_x_' in f]
+        if interaction_features:
+            fig2 = plt.figure(figsize=(10, 8))
+            interaction_matrix = np.zeros((len(model.selected_features), 
+                                        len(model.selected_features)))
+            for i, f1 in enumerate(model.selected_features):
+                for j, f2 in enumerate(model.selected_features):
+                    interaction = f"{f1}_x_{f2}"
+                    if interaction in weights:
+                        interaction_matrix[i, j] = abs(weights[interaction])
+            
+            sns.heatmap(interaction_matrix, 
+                       xticklabels=model.selected_features,
+                       yticklabels=model.selected_features,
+                       cmap='YlOrRd')
+            plt.title('Feature Interactions')
+            plt.tight_layout()
+            return fig1, fig2
+        
+        return fig1, None
+
+    def plot_performance_history(self):
+        """Plot performance metrics over iterations."""
+        metrics_df = pd.DataFrame(self.iteration_metrics)
+        
+        fig = plt.figure(figsize=(12, 6))
+        for col in metrics_df.columns:
+            if col != 'iteration':
+                plt.plot(metrics_df['iteration'], metrics_df[col], 
+                        label=col, marker='o')
+        
+        plt.xlabel('Iteration')
+        plt.ylabel('Metric Value')
+        plt.title('Performance Metrics History')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        return fig

@@ -15,8 +15,8 @@ import pandas as pd
 import numpy as np
 
 from engram3.features.keymaps import *
-from engram3.features.extraction import extract_bigram_features, extract_same_letter_features
-
+from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
+from engram3.utils.logging import LoggingManager
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -57,35 +57,45 @@ class PreferenceDataset:
     }
 
     def __init__(self, 
-                 file_path: Union[str, Path],
-                 column_map: Dict[str, int],
-                 row_map: Dict[str, int],
-                 finger_map: Dict[str, int],
-                 engram_position_values: Dict[str, float],
-                 row_position_values: Dict[str, float],
-                 precomputed_features: Optional[Dict] = None):
-        """Initialize dataset from CSV file."""
+                file_path: Union[str, Path],
+                feature_extractor: Optional['FeatureExtractor'] = None,
+                config: Optional[Dict] = None,
+                precomputed_features: Optional[Dict] = None):
+        """
+        Initialize dataset from CSV file.
+        
+        Args:
+            file_path: Path to dataset CSV file
+            feature_extractor: FeatureExtractor instance for computing features
+            config: Optional configuration dictionary
+            precomputed_features: Optional dict of precomputed features
+        """
+        self.logging_manager = LoggingManager(config) if config else None
         self.file_path = Path(file_path)
         self.preferences: List[Preference] = []
         self.participants: Set[str] = set()
         
-        # Store layout maps
-        self.column_map = column_map
-        self.row_map = row_map
-        self.finger_map = finger_map
-        self.engram_position_values = engram_position_values
-        self.row_position_values = row_position_values
+        # Store feature extraction components
+        self.feature_extractor = feature_extractor
         
-        # Store precomputed features
+        # Get maps from feature_extractor's config
+        if feature_extractor and feature_extractor.config:
+            self.column_map = feature_extractor.config.column_map
+            self.row_map = feature_extractor.config.row_map
+            self.finger_map = feature_extractor.config.finger_map
+            self.engram_position_values = feature_extractor.config.engram_position_values
+            self.row_position_values = feature_extractor.config.row_position_values
+        
+        # Store precomputed features if provided
         if precomputed_features:
             self.all_bigrams = precomputed_features['all_bigrams']
             self.all_bigram_features = precomputed_features['all_bigram_features']
             self.feature_names = precomputed_features['feature_names']
         
         # Load and process data
-        print(f"Loading data from {self.file_path}")
-        self._load_csv()  
-
+        logger.info(f"Loading data from {self.file_path}")
+        self._load_csv()
+        
     def get_feature_names(self) -> List[str]:
         """Get list of all feature names including interactions."""
         if hasattr(self, 'feature_names'):

@@ -20,6 +20,17 @@ engram3/                            # Root project directory
     ├── recommendations.py          # BigramRecommender class for generating bigram pair recommendations
     └── config.yaml                 # Configuration settings
 
+engram3/
+├── utils/
+│   ├── __init__.py
+│   ├── visualization.py      # Add PlottingUtils class
+│   └── logging_utils.py      # Add LoggingManager class
+├── features/
+│   ├── __init__.py
+│   ├── feature_extraction.py # (Already created)
+│   ├── importance.py        # Add FeatureImportanceCalculator class
+│   └── ...
+
 ## Usage
 
 The system operates in four main modes:

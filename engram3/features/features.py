@@ -8,12 +8,11 @@ Implements specific metrics like:
 Used by feature extraction system.
 """
 from math import atan2, degrees, sqrt
-import logging
 
 from engram3.features.keymaps import *
 from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
-
-logger = logging.getLogger(__name__)
+from engram3.utils.logging import LoggingManager
+logger = LoggingManager.getLogger(__name__)
 
 #-----------------------------------#
 # Angles and distances between keys #

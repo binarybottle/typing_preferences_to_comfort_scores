@@ -1,3 +1,20 @@
+# engram3/config.yaml
+# Configuration file for the keyboard preference learning system.
+#
+# Controls settings for:
+#   - Data input/output paths and processing
+#   - Model hyperparameters and training settings
+#   - Feature extraction and selection parameters
+#   - Recommendation system configuration
+#   - Logging and visualization preferences
+#
+# File Structure:
+#   - data: Data handling configuration
+#   - features: Feature selection settings
+#   - model: Bayesian model parameters
+#   - logging: System logging configuration
+#   - recommendations: Bigram recommendation settings
+
 # Data settings
 data:
   #input_file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
@@ -17,7 +34,6 @@ data:
 
   visualization:
     output_dir: "output/plots"
-    save_plots: true
     dpi: 300
 
 # Feature settings
@@ -73,14 +89,13 @@ recommendations:
   n_recommendations: 20
   max_candidates: 1000
   recommendations_file: "output/recommended_bigram_pairs.csv"
-  save_plots: true
 
 model:
   chains: 1        # number of parallel chains
-  warmup: 100     # warmup/adaptation samples per chain
-  samples: 100    # post-warmup samples per chain
-  adapt_delta: 0.95     # - helps with divergent transitions
-  max_treedepth: 12     # - helps with convergence
+  warmup: 10     # warmup/adaptation samples per chain
+  samples: 10    # post-warmup samples per chain
+  adapt_delta: 0.7 #0.95     # - helps with divergent transitions
+  max_treedepth: 3 #12     # - helps with convergence
   feature_scale: 2.0    # prior scale for feature weights
   participant_scale: 1.0 # prior scale for participant effects
 
