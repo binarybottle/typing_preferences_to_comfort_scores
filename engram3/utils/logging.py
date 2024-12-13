@@ -21,6 +21,19 @@ class LoggingManager:
         self.config = config
         self.logger = logging.getLogger(__name__)
         
+    @classmethod
+    def getLogger(cls, name: str) -> logging.Logger:
+        """
+        Get a logger with the given name.
+        
+        Args:
+            name: Name for the logger (typically __name__)
+            
+        Returns:
+            Configured logger instance
+        """
+        return logging.getLogger(name)
+
     def setup_logging(self) -> None:
         """Configure logging with consistent formatting and handlers."""
         # Create timestamp string

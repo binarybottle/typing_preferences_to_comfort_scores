@@ -38,8 +38,6 @@ from typing import (
     runtime_checkable, Iterator, Union, NamedTuple
 )
 import pandas as pd
-import aesara.tensor as at  # For PyMC3's dot product
-import pymc3 as pm
 from pydantic import BaseModel, validator
 from dataclasses import dataclass
 import time  # Needed for computation_time in predict_preference
@@ -236,7 +234,7 @@ class PreferenceModel:
 
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
         """
-        Fit the model to data using either Stan or PyMC3 backend.
+        Fit the model to data using Stan backend.
         
         Args:
             dataset: PreferenceDataset containing preferences
@@ -249,13 +247,8 @@ class PreferenceModel:
             # Prepare data
             stan_data = self.prepare_data(dataset, features)
             
-            # Determine which backend to use
-            use_pymc = self.config.get('model', {}).get('backend', 'stan') == 'pymc'
-            
-            if use_pymc:
-                self._fit_pymc(stan_data)
-            else:
-                self._fit_stan(stan_data)
+            # Fit using Stan
+            self._fit_stan(stan_data)
                 
             # Check diagnostics
             self._check_diagnostics()
@@ -280,40 +273,6 @@ class PreferenceModel:
             show_progress=True,
             refresh=50
         )
-
-    def _fit_pymc(self, stan_data: Dict) -> None:
-        """Fit model using PyMC3 backend."""
-        with pm.Model() as self.model:
-            # Global feature weights
-            feature_weights = pm.Normal('feature_weights', 
-                                    mu=0, sigma=1, 
-                                    shape=stan_data['F'])
-            
-            # Participant-level random effects
-            participant_effects = pm.Normal('participant_effects',
-                                        mu=0, sigma=1,
-                                        shape=stan_data['P'])
-            
-            # Compute latent comfort scores
-            comfort_score1 = at.dot(stan_data['X1'], feature_weights)
-            comfort_score2 = at.dot(stan_data['X2'], feature_weights)
-            
-            # Add participant effects
-            comfort_score1 = comfort_score1 + participant_effects[stan_data['participant']]
-            comfort_score2 = comfort_score2 + participant_effects[stan_data['participant']]
-            
-            # Bradley-Terry probability
-            p = pm.math.sigmoid(comfort_score1 - comfort_score2)
-            
-            # Likelihood
-            pm.Bernoulli('likelihood', p=p, observed=stan_data['y'])
-            
-            # Sample
-            self.trace = pm.sample(
-                draws=self.config.get('model', {}).get('n_samples', 1000),
-                chains=self.config.get('model', {}).get('chains', 4),
-                target_accept=self.config.get('model', {}).get('target_accept', 0.8)
-            )
 
     def _update_feature_weights(self) -> None:
         """Update feature weights from fitted model."""

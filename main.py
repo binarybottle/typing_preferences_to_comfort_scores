@@ -30,41 +30,10 @@ from engram3.features.keymaps import (
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
-def setup_logging(config):
-    # Create timestamp string
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Create log directory if it doesn't exist
-    log_base = Path(config['logging']['output_file']).parent
-    log_base.mkdir(parents=True, exist_ok=True)
-    
-    # Add timestamp to filename
-    log_filename = f"debug_{timestamp}.log"
-    log_file = log_base / log_filename
-
-    # Clear any existing handlers
-    root_logger = LoggingManager.getLogger(__name__)
-
-    root_logger.handlers = []
-    
-    # Configure console handler with INFO level
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(message)s')  # Simple format for console
-    console_handler.setFormatter(console_formatter)
-    
-    # Configure file handler with DEBUG level
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter(config['logging']['format'])
-    file_handler.setFormatter(file_formatter)
-    
-    # Set root logger to DEBUG to capture all messages
-    root_logger.setLevel(logging.DEBUG)
-    
-    # Add both handlers
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
+def setup_logging(config: Dict) -> None:
+    """Initialize and configure logging."""
+    logging_manager = LoggingManager(config)
+    logging_manager.setup_logging()
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -160,8 +129,8 @@ def main():
     try:
         # Load configuration and setup
         config = load_config(args.config)
-        logging_manager = LoggingManager(config)
-        logging_manager.setup_logging()
+        setup_logging(config)
+        logger = LoggingManager.getLogger(__name__)
         
         # Add plotting utils
         plotting_utils = PlottingUtils(config['data']['visualization']['output_dir'])
