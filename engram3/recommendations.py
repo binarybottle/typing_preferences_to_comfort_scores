@@ -145,7 +145,7 @@ class BigramRecommender:
 
     def _load_feature_metrics(self) -> pd.DataFrame:
         """Load and validate feature metrics from file."""
-        metrics_file = Path(self.config.feature_evaluation.metrics_file)
+        metrics_file = Path(self.config.feature_selection.metrics_file)
         
         if not metrics_file.exists():
             raise FileNotFoundError(

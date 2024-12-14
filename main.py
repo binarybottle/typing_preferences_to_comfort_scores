@@ -210,7 +210,7 @@ def main():
                 })
             
             # Save feature selection results
-            metrics_file = Path(config.feature_evaluation.metrics_file)
+            metrics_file = Path(config.feature_selection.metrics_file)
             pd.DataFrame(results).to_csv(metrics_file, index=False)
             logger.info(f"Saved feature metrics to {metrics_file}")
             
@@ -226,7 +226,7 @@ def main():
         elif args.mode == 'recommend_bigram_pairs':
 
             # Load feature metrics from previous feature selection
-            metrics_file = Path(config.feature_evaluation.metrics_file)
+            metrics_file = Path(config.feature_selection.metrics_file)
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
@@ -269,7 +269,7 @@ def main():
             train_data, test_data = load_or_create_split(dataset, config)
             
             # Load selected features
-            metrics_file = config.feature_evaluation.metrics_file
+            metrics_file = config.feature_selection.metrics_file
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
@@ -298,7 +298,7 @@ def main():
         #---------------------------------
         elif args.mode == 'predict_bigram_scores':
             # Load feature metrics and selected features
-            metrics_file = Path(config.feature_evaluation.metrics_file)
+            metrics_file = Path(config.feature_selection.metrics_file)
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
                     

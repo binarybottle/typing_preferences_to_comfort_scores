@@ -116,7 +116,7 @@ class PreferenceModel:
         self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
         self.plotting = PlottingUtils(self.config.data.visualization.output_dir)
         self.feature_visualizer = FeatureMetricsVisualizer(self.config)  # Pass self.config, not config
-        
+
     # Property decorators
     @property
     def interaction_threshold(self) -> float:
@@ -390,7 +390,7 @@ class PreferenceModel:
                     **importance_metrics.get(feature, {}),
                     **stability_metrics.get(feature, {})
                 } for feature in feature_names},
-                output_file=self.config.feature_evaluation.metrics_file
+                output_file=self.config.feature_selection.metrics_file
             )
         
         return {
