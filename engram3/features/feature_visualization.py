@@ -35,7 +35,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from pydantic import BaseModel
 
-from engram3.utils.config import VisualizationSettings
+from engram3.utils.config import Config, VisualizationSettings
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from engram3.model import PreferenceModel
@@ -52,15 +52,32 @@ class FeatureMetricsVisualizer:
     DEFAULT_ALPHA = 0.6
     MI_BINS = 20  # For mutual information calculation
 
-    def __init__(self, config: Dict):
-        self.settings = VisualizationSettings(
-            output_dir=Path(config.data.visualization.output_dir),
-            save_plots=True,
-            dpi = getattr(self.config.visualization, 'dpi', 300)
-        )    
-    
-    def plot_feature_metrics(self, model: 'PreferenceModel',
-                            metrics_dict: Dict[str, Dict[str, float]]) -> plt.Figure:
+    def __init__(self, config: Union[Dict, Config]):
+        """
+        Initialize visualizer with configuration.
+        
+        Args:
+            config: Configuration dictionary or Config object
+        """
+        # Handle both dict and Config inputs
+        if isinstance(config, dict):
+            self.config = Config(**config)
+        elif isinstance(config, Config):
+            self.config = config
+        else:
+            raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
+
+        # Get visualization settings with defaults
+        self.dpi = self.config.data.visualization.dpi
+        self.output_dir = Path(self.config.data.visualization.output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set other visualization parameters
+        self.figure_size = self.DEFAULT_FIGURE_SIZE
+        self.alpha = self.DEFAULT_ALPHA
+        self.color_map = 'viridis'
+
+    def plot_feature_metrics(self, model: 'PreferenceModel', metrics_dict: Dict[str, Dict[str, float]]) -> Figure:
         """
         Plot comprehensive feature metrics visualization.
         
@@ -126,41 +143,113 @@ class FeatureMetricsVisualizer:
         
         return fig
     
-    def plot_feature_space(self, model: 'PreferenceModel', 
-                        dataset: 'PreferenceDataset',
-                        title: str = "Feature Space") -> Figure:
+    def plot_feature_space(self, model: 'PreferenceModel', dataset: 'PreferenceDataset', title: str = "Feature Space") -> Figure:
         """Plot 2D PCA of feature space with comfort scores."""
         feature_vectors = []
-        comfort_scores = []
-        uncertainties = []
+        bigram_labels = []
+        valid_indices = []
         
-        for pref in dataset.preferences:
-            feat1 = [pref.features1[f] for f in model.selected_features]
-            feat2 = [pref.features2[f] for f in model.selected_features]
-            
-            score1, unc1 = model.get_bigram_comfort_scores(pref.bigram1)
-            score2, unc2 = model.get_bigram_comfort_scores(pref.bigram2)
-            
-            feature_vectors.extend([feat1, feat2])
-            comfort_scores.extend([score1, score2])
-            uncertainties.extend([unc1, unc2])
-            
-        X = StandardScaler().fit_transform(feature_vectors)
+        # Extract features and handle NaN values
+        for i, pref in enumerate(dataset.preferences):
+            try:
+                # Get feature vectors and handle NaN values
+                feat1 = [pref.features1.get(f, 0.0) for f in model.selected_features]
+                feat2 = [pref.features2.get(f, 0.0) for f in model.selected_features]
+                
+                # Check for NaN values
+                if any(pd.isna(v) for v in feat1) or any(pd.isna(v) for v in feat2):
+                    continue
+                    
+                feature_vectors.extend([feat1, feat2])
+                bigram_labels.extend([pref.bigram1, pref.bigram2])
+                valid_indices.append(i)
+                
+            except Exception as e:
+                logger.warning(f"Skipping preference due to feature error: {e}")
+                continue
+
+        if not feature_vectors:
+            raise ValueError("No valid feature vectors after filtering")
+
+        # Convert to numpy array and standardize features
+        X = np.array(feature_vectors)
+        
+        # Additional NaN check
+        if np.any(np.isnan(X)):
+            logger.warning(f"Found {np.sum(np.isnan(X))} NaN values after conversion")
+            # Replace NaN with 0
+            X = np.nan_to_num(X, nan=0.0)
+        
+        # Standardize features
+        scaler = StandardScaler()
+        X = scaler.fit_transform(X)
+        
+        # Fit PCA
         pca = PCA(n_components=2)
         X_2d = pca.fit_transform(X)
         
-        fig, ax = plt.subplots(figsize=(10, 8))
-        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1],
-                           c=comfort_scores,
-                           s=np.array(uncertainties) * 500,
-                           alpha=0.6,
-                           cmap='RdYlBu')
+        # Calculate explained variance
+        var1 = pca.explained_variance_ratio_[0] * 100
+        var2 = pca.explained_variance_ratio_[1] * 100
         
-        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
-        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
-        plt.colorbar(scatter, label='Comfort Score')
-        plt.title(title)
+        # Create figure
+        fig, ax = plt.subplots(figsize=self.figure_size)
+        
+        # Plot points
+        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1], 
+                            c='lightblue', s=100, alpha=self.alpha,
+                            edgecolor='darkblue')
+        
+        # Add labels with offset
+        for i, label in enumerate(bigram_labels):
+            offset = 0.02 * (max(X_2d[:, 0]) - min(X_2d[:, 0]))
+            ax.annotate(label, 
+                    (X_2d[i, 0] + offset, X_2d[i, 1] + offset),
+                    fontsize=8,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+        
+        # Add edges for paired bigrams
+        for i in range(0, len(bigram_labels), 2):
+            # Create curved line between points
+            mid_point = [(X_2d[i, 0] + X_2d[i+1, 0])/2,
+                        (X_2d[i, 1] + X_2d[i+1, 1])/2]
+            # Add some curvature
+            mid_point[1] += 0.05 * (max(X_2d[:, 1]) - min(X_2d[:, 1]))
+            
+            curve = plt.matplotlib.patches.ConnectionPatch(
+                xyA=(X_2d[i, 0], X_2d[i, 1]),
+                xyB=(X_2d[i+1, 0], X_2d[i+1, 1]),
+                coordsA="data", coordsB="data",
+                axesA=ax, axesB=ax,
+                color='gray', alpha=0.3,
+                connectionstyle="arc3,rad=0.2")
+            ax.add_patch(curve)
+        
+        # Set labels and title
+        ax.set_xlabel(f'PC1 ({var1:.1f}% variance)')
+        ax.set_ylabel(f'PC2 ({var2:.1f}% variance)')
+        ax.set_title(title)
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+        
+        # Add some padding to the limits
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        padding = 0.1
+        ax.set_xlim(xlim[0] - padding * (xlim[1] - xlim[0]),
+                    xlim[1] + padding * (xlim[1] - xlim[0]))
+        ax.set_ylim(ylim[0] - padding * (ylim[1] - ylim[0]),
+                    ylim[1] + padding * (ylim[1] - ylim[0]))
+        
         plt.tight_layout()
+        
+        # Log summary
+        logger.info(f"\nFeature space visualization:")
+        logger.info(f"  Total preferences: {len(dataset.preferences)}")
+        logger.info(f"  Valid preferences: {len(valid_indices)}")
+        logger.info(f"  Features used: {len(model.selected_features)}")
+        logger.info(f"  Variance explained: {var1 + var2:.1f}%")
         
         return fig
 

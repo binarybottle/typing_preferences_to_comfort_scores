@@ -194,8 +194,8 @@ def main():
             feature_weights = model.get_feature_weights()
             
             # Generate visualizations
-            if model.visualizer:
-                fig = model.visualizer.plot_feature_space(model, train_data, "Feature Space")
+            if model.feature_visualizer:
+                fig = model.feature_visualizer.plot_feature_space(model, train_data, "Feature Space")
                 fig.savefig(Path(config.data.output_dir) / 'final_feature_space.png')
                 plt.close()
             

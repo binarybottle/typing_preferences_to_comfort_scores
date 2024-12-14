@@ -112,10 +112,11 @@ class PreferenceModel:
         
         # Initialize components that need config
         self.importance_calculator = FeatureImportanceCalculator(self.config)
-        self.plotting = PlottingUtils(self.config.data.visualization.output_dir)
         self.feature_cache: CacheManager[str, Dict[str, float]] = CacheManager()
         self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
-
+        self.plotting = PlottingUtils(self.config.data.visualization.output_dir)
+        self.feature_visualizer = FeatureMetricsVisualizer(self.config)  # Pass self.config, not config
+        
     # Property decorators
     @property
     def interaction_threshold(self) -> float:
