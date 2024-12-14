@@ -9,23 +9,17 @@ Provides standardized logging setup with:
   - Centralized error handling
 """
 from pathlib import Path
-import logging
 from typing import Union, Dict, Optional
 from pydantic import BaseModel
-from datetime import datetime
 import traceback
+from datetime import datetime
+import logging
+
+from engram3.utils.config import Config
 
 class LoggingManager:
-    """Centralized logging configuration and error handling."""
-
-    _instance = None  # For singleton pattern
-    
-    def __init__(self, config: Union[Dict, BaseModel]):
+    def __init__(self, config: Union[Dict, Config]):
         self.config = config
-
-    @classmethod
-    def getLogger(cls, name: str) -> logging.Logger:
-        return logging.getLogger(name)
 
     def setup_logging(self) -> None:
         """Initialize and configure logging system."""
@@ -36,8 +30,14 @@ class LoggingManager:
             else:
                 logging_config = self.config.get('logging', {})
             
-            # Create log directory
-            log_dir = Path(logging_config.output_file).parent
+            # Create timestamp for filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Create log directory and file path
+            log_dir = self.config.paths.logs_dir
+            log_file = log_dir / f"debug_{timestamp}.log"
+            
+            # Create directory if it doesn't exist
             log_dir.mkdir(parents=True, exist_ok=True)
 
             # Configure root logger
@@ -48,7 +48,7 @@ class LoggingManager:
             root_logger.handlers.clear()
 
             # File handler - captures everything
-            file_handler = logging.FileHandler(logging_config.output_file)
+            file_handler = logging.FileHandler(log_file)
             file_handler.setLevel(getattr(logging, logging_config.file_level))
             file_handler.setFormatter(logging.Formatter(logging_config.format))
             root_logger.addHandler(file_handler)
@@ -60,8 +60,8 @@ class LoggingManager:
             root_logger.addHandler(console_handler)
 
             logger = logging.getLogger(__name__)
-            logger.info("Logging initialized")
-            logger.debug("Debug logging enabled")  # This should only go to file
+            logger.info(f"Logging initialized - writing to {log_file}")
+            logger.debug("Debug logging enabled")
 
         except Exception as e:
             # Fallback to basic configuration if there's an error
@@ -71,6 +71,10 @@ class LoggingManager:
             )
             logger = logging.getLogger(__name__)
             logger.error(f"Error setting up logging: {str(e)}")
+
+    @classmethod
+    def getLogger(cls, name: str) -> logging.Logger:
+        return logging.getLogger(name)
                 
     def _create_console_handler(self) -> logging.Handler:
         """Create console handler with standard formatting."""
