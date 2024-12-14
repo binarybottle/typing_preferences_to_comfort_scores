@@ -89,7 +89,6 @@ class FeatureSelectionConfig(BaseModel):
     thresholds: Dict[str, float]
     multiple_testing: MultipleTestingConfig
     interaction_testing: InteractionTestingConfig
-    # Make statistical_testing optional with default values
     statistical_testing: StatisticalTestingConfig = Field(
         default_factory=lambda: StatisticalTestingConfig(
             mi_bins=50,

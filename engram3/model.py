@@ -801,32 +801,6 @@ class PreferenceModel:
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------          
-    def calculate_predictive_impact(self, feature: str) -> float:
-        """Calculate feature's impact on model predictions"""
-        try:
-            if not hasattr(self, 'selected_features'):
-                return 0.0
-                
-            # Make a copy of selected features to avoid modifying the original
-            features = self.selected_features.copy()
-            
-            # Only try to remove if feature exists in list
-            if feature in features:
-                features.remove(feature)
-            
-            # Get base performance with all features
-            base_performance = self.evaluate(self.dataset)['accuracy']
-            
-            # Train model without this feature
-            self.fit_result(self.dataset, features)
-            reduced_performance = self.evaluate(self.dataset)['accuracy']
-            
-            return base_performance - reduced_performance
-            
-        except Exception as e:
-            logger.warning(f"Error calculating predictive impact for {feature}: {str(e)}")
-            return 0.0
-
     def _calculate_stability_metrics(self, dataset: PreferenceDataset,
                                 feature: str) -> StabilityMetrics:
         """

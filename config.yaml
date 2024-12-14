@@ -15,103 +15,98 @@
 #   - logging: System logging configuration
 #   - recommendations: Bigram recommendation settings
 
-paths:  # New section for all path-related settings
-  root_dir: "output"
-  metrics_dir: "output/data"
-  plots_dir: "output/plots"
-  logs_dir: "output/logs"
+paths:                                  # Directory structure for outputs
+  root_dir: "output"                    # Base directory for all outputs
+  metrics_dir: "output/data"            # Directory for storing computed metrics
+  plots_dir: "output/plots"             # Directory for saving visualizations
+  logs_dir: "output/logs"               # Directory for log files
   
-# Data settings
-data:
+data:                                   # Path to processed preference data
   #input_file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #input_file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #input_file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
   input_file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
 
   splits:
-    test_ratio: 0.2
-    random_seed: 42
-    split_data_file: "data/split_train_test_indices.npz"
+    test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
+    random_seed: 42                     # Seed for reproducible train/test splits
+    split_data_file: "data/split_train_test_indices.npz"  # File to store train/test indices
   
   # Keyboard layout
   layout:
-    chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
+    chars: ['q', 'w', 'e', 'r', 't',    # Characters in keyboard layout (half-QWERTY)
+            'a', 's', 'd', 'f', 'g',    # Only left-hand side used
+            'z', 'x', 'c', 'v', 'b']    # for symmetric analysis
 
 visualization:
-  dpi: 300
+  dpi: 300                              # Resolution of saved plots (dots per inch)
 
-# Feature settings
 features:
-  base_features:
-    - typing_time
-    - same_finger
-    - sum_finger_values
-    - adj_finger_diff_row
-    - rows_apart
-    - angle_apart
-    - outward_roll
-    - middle_column
-    - sum_engram_position_values
-    - sum_row_position_values
-  interactions_file: "data/feature_interactions.txt"
+  base_features:                        # Core features for analysis
+    - typing_time                       # Time taken to type bigram
+    - same_finger                       # Whether bigram uses same finger
+    - sum_finger_values                 # Combined finger load values
+    - adj_finger_diff_row               # Adjacent fingers in different rows
+    - rows_apart                        # Number of rows between keys
+    - angle_apart                       # Angular distance between keys
+    - outward_roll                      # Whether movement rolls outward
+    - middle_column                     # Keys in middle column (outside home columns)
+    - sum_engram_position_values        # Combined Engram position values
+    - sum_row_position_values           # Combined row position values
+  interactions_file: "data/feature_interactions.txt"  # File defining feature interactions
 
-# Feature evaluation/selection settings
 feature_selection:
-  n_iterations: 1
+  n_iterations: 5                       # Number of feature selection iterations
   thresholds:
-    importance: 0.1  # Single consolidated threshold
-    stability: 0.7
+    importance: 0.05                    # Minimum importance score for feature selection
+    stability: 0.8                      # Minimum stability score across iterations
   multiple_testing:
-    method: "fdr"  # or "bonferroni"
-    alpha: 0.05
+    method: "fdr"                       # Multiple comparison correction (fdr = False Discovery Rate)
+    alpha: 0.01                         # Significance level for hypothesis tests (lower is more strict)
   interaction_testing:
-    method: "likelihood_ratio"
-    minimum_effect_size: 0.1
-    hierarchical: true
+    method: "likelihood_ratio"          # Method to test feature interactions
+    minimum_effect_size: 0.05           # Minimum interaction effect to consider
+    hierarchical: true                  # Whether to test interactions hierarchically
   statistical_testing: 
-    mi_bins: 50 # bins for mutual information calculation (sqrt(n_samples) but <= 50)
-    n_permutations: 10000 # permutations for significance test (1000 minimum, 10000 for more precise p-values)
-    n_bootstrap: 1000 # bootstrap samples (1000 for more stable feature importance estimates)
-  metric_weights:  # sum = 1
-    model_effect: 0.25
-    correlation: 0.15
-    mutual_information: 0.15
-    inclusion_probability: 0.15
-    effect_magnitude: 0.1
-    effect_consistency: 0.1
-    predictive_impact: 0.1
-  metrics_file: "output/data/feature_metrics.csv"
-  model_file: "output/data/feature_selection_model.pkl"
+    mi_bins: 50                         # Bins for mutual information calculation (sqrt(n_samples) but <= 50)
+    n_permutations: 100000              # Permutations for significance test (1000 minimum, 10000 for more precise p-values)
+    n_bootstrap: 10000                  # Bootstrap samples (1000 for more stable feature importance estimates)
+  metric_weights:                       # Weights for combining different metrics (must sum to 1)
+    model_effect: 0.3                   # Weight for feature's effect in model (most direct measure)
+    correlation: 0.15                   # Weight for correlation with preferences (robust linear relationship)
+    mutual_information: 0.15            # Weight for mutual information with preferences (captures nonlinear relationships)
+    inclusion_probability: 0.2          # Weight for likelihood of feature selection (selection stability)
+    effect_magnitude: 0.1               # Weight for absolute size of feature effect (absolute impact)
+    effect_consistency: 0.1             # Weight for consistency of effect across splits (cross-validation stability)
+  metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
+  model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
 recommendations:
-  # Scoring weights for different components
-  weights:  # sum to 1
-    prediction_uncertainty: 0.25
-    comfort_uncertainty: 0.15
-    feature_space: 0.15
-    correlation: 0.075
-    mutual_information: 0.075
-    stability: 0.1
-    interaction_testing: 0.1
-    transitivity: 0.1
-  n_recommendations: 20
-  max_candidates: 1000
-  recommendations_file: "output/data/recommended_bigram_pairs.csv"
+  weights:                              # Weights for recommendation scoring (must sum to 1)
+    prediction_uncertainty: 0.3         # Weight for model prediction uncertainty (prioritize pairs where model is uncertain)
+    comfort_uncertainty: 0.2            # Weight for comfort score uncertainty (focus on uncertain comfort predictions)
+    feature_space: 0.2                  # Weight for coverage of feature space (ensure good coverage of feature space)
+    correlation: 0.05                   # Weight for correlation-based importance (less emphasis on linear relationships)
+    mutual_information: 0.05            # Weight for information-based importance (less emphasis on nonlinear relationships)
+    stability: 0.1                      # Weight for feature stability
+    interaction_testing: 0.05           # Weight for interaction effects (secondary to main uncertainties)
+    transitivity: 0.05                  # Weight for transitivity validation (secondary to main uncertainties)
+  n_recommendations: 50                 # Number of bigram pairs to recommend
+  max_candidates: 5000                  # Maximum number of candidate pairs to evaluate
+  recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
-model:
-  chains: 2        # number of parallel chains
-  warmup: 100     # warmup/adaptation samples per chain
-  samples: 100    # post-warmup samples per chain
-  adapt_delta: 0.95     # - helps with divergent transitions
-  max_treedepth: 12     # - helps with convergence
-  feature_scale: 2.0    # prior scale for feature weights
-  participant_scale: 1.0 # prior scale for participant effects
-  predictions_file: "output/data/estimated_bigram_scores.csv"
-  model_file: "output/data/bigram_score_prediction_model.pkl"
+model:                                  # Bayesian model parameters (Stan)
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  samples: 7000                         # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
+  participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
+  predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
+  model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
 
-# Logging settings
-logging:
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  output_file: "output/debug.log"
-  console_level: "INFO"
-  file_level: "DEBUG"
+logging:                                # Logging configuration
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Standard Python logging format
+  console_level: "INFO"                 # Show INFO and above messages in console
+  file_level: "DEBUG"                   # Store DEBUG and above messages in log file
