@@ -24,18 +24,10 @@ from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import yaml
+
+from engram3.utils.config import FeatureConfig
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
-
-@dataclass
-class FeatureConfig:
-    """Configuration for feature extraction"""
-    column_map: Dict[str, int]
-    row_map: Dict[str, int]
-    finger_map: Dict[str, int]
-    engram_position_values: Dict[str, float]
-    row_position_values: Dict[str, float]
-    key_metrics: Dict[str, Dict[str, float]]
 
 class FeatureExtractor:
     """Centralized feature extraction functionality"""

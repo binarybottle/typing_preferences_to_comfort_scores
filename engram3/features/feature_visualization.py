@@ -21,43 +21,56 @@ Supports analysis workflow through:
   - Statistical summaries
   - Export functionality for reports
 """
+from typing import Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import numpy as np
 import pandas as pd
-from typing import Dict, List
 from pathlib import Path
 from collections import defaultdict
+import seaborn as sns
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from pydantic import BaseModel
 
+from engram3.utils.config import VisualizationSettings
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from engram3.model import PreferenceModel
 from engram3.data import PreferenceDataset
-from engram3.model import PreferenceModel
 from engram3.utils.visualization import PlottingUtils
+from engram3.utils.logging import LoggingManager
+logger = LoggingManager.getLogger(__name__)
 
 class FeatureMetricsVisualizer:
     """Handles all feature-related visualization and tracking."""
     
-    def __init__(self, config: Dict):
-        self.output_dir = Path(config['data']['visualization']['output_dir'])
-        self.plotting = PlottingUtils(self.output_dir)
-        
-        # Create subdirectories
-        self.dirs = {
-            'iterations': self.output_dir / 'iterations',
-            'features': self.output_dir / 'features',
-            'performance': self.output_dir / 'performance',
-            'space': self.output_dir / 'feature_space'
-        }
-        for d in self.dirs.values():
-            d.mkdir(parents=True, exist_ok=True)
-            
-        self.iteration_metrics = defaultdict(list)
-    
-    def plot_feature_metrics(self, metrics_dict: Dict[str, Dict[str, float]]):
-        """Plot comprehensive feature metrics visualization."""
-        fig, axes = self.plotting.create_figure(figsize=(15, 10))
-        self.plotting.setup_axis(axes, title="Feature Metrics")
+    DEFAULT_FIGURE_SIZE = (12, 8)
+    DEFAULT_DPI = 300
+    DEFAULT_ALPHA = 0.6
+    MI_BINS = 20  # For mutual information calculation
 
+    def __init__(self, config: Dict):
+        self.settings = VisualizationSettings(
+            output_dir=Path(config.data.visualization.output_dir),
+            save_plots=True,
+            dpi = getattr(self.config.visualization, 'dpi', 300)
+        )    
+    
+    def plot_feature_metrics(self, model: 'PreferenceModel',
+                            metrics_dict: Dict[str, Dict[str, float]]) -> plt.Figure:
+        """
+        Plot comprehensive feature metrics visualization.
+        
+        Args:
+            model: PreferenceModel instance
+            metrics_dict: Dictionary of feature metrics
+            
+        Returns:
+            matplotlib Figure object
+        """
         # Convert metrics to DataFrame
         metrics_df = pd.DataFrame([
             {
@@ -67,28 +80,55 @@ class FeatureMetricsVisualizer:
             for feature, metrics in metrics_dict.items()
         ])
         
-        # Create figure with multiple subplots
+        # Create figure with GridSpec
         fig = plt.figure(figsize=(15, 10))
         gs = plt.GridSpec(2, 2)
         
         # 1. Correlation vs Mutual Information scatter
         ax1 = fig.add_subplot(gs[0, 0])
+        self.plotting.setup_axis(
+            ax1,
+            title="Feature Correlations and Mutual Information",
+            xlabel="Absolute Correlation",
+            ylabel="Mutual Information"
+        )
         self._plot_correlation_mi_scatter(metrics_df, ax1)
         
         # 2. Model Effect with uncertainties
         ax2 = fig.add_subplot(gs[0, 1])
+        self.plotting.setup_axis(
+            ax2,
+            title="Feature Effects and Uncertainties",
+            xlabel="Effect Size",
+            ylabel="Features"
+        )
         self._plot_model_effects(metrics_df, ax2)
         
         # 3. Combined Score comparison
         ax3 = fig.add_subplot(gs[1, :])
+        self.plotting.setup_axis(
+            ax3,
+            title="Combined Feature Scores",
+            xlabel="Score",
+            ylabel="Features"
+        )
         self._plot_combined_scores(metrics_df, ax3)
         
         plt.tight_layout()
+        
+        # Save if configured
+        if getattr(self.config, 'visualization', {}).get('save_plots', False):
+            self.plotting.save_figure(
+                fig,
+                "feature_metrics.png",
+                dpi=getattr(self.config, 'visualization', {}).get('dpi', 300)
+            )
+        
         return fig
     
     def plot_feature_space(self, model: 'PreferenceModel', 
                         dataset: 'PreferenceDataset',
-                        title: str = "Feature Space"):
+                        title: str = "Feature Space") -> Figure:
         """Plot 2D PCA of feature space with comfort scores."""
         feature_vectors = []
         comfort_scores = []
@@ -123,8 +163,25 @@ class FeatureMetricsVisualizer:
         plt.tight_layout()
         
         return fig
-    
-    def _plot_correlation_mi_scatter(self, df: pd.DataFrame, ax: plt.Axes):
+
+    def _plot_feature_space(self, iteration: int, model: 'PreferenceModel', 
+                        dataset: PreferenceDataset) -> None:
+        """Plot feature space for current iteration."""
+        fig = self.plot_feature_space(model, dataset)
+        self.plotting.save_figure(
+            fig,
+            f"feature_space_iteration_{iteration}.png"
+        )
+
+    def _plot_performance_tracking(self) -> None:
+        """Plot performance tracking metrics."""
+        fig = self.plot_performance_history()
+        self.plotting.save_figure(
+            fig,
+            "performance_tracking.png"
+        )
+
+    def _plot_correlation_mi_scatter(self, df: pd.DataFrame, ax: plt.Axes) -> None:
         """Plot correlation vs mutual information scatter plot."""
         scatter = ax.scatter(df['correlation'].abs(), 
                            df['mutual_information'],
@@ -145,7 +202,7 @@ class FeatureMetricsVisualizer:
         ax.set_title('Feature Relationship Measures')
         plt.colorbar(scatter, ax=ax, label='Combined Score')
         
-    def _plot_model_effects(self, df: pd.DataFrame, ax: plt.Axes):
+    def _plot_model_effects(self, df: pd.DataFrame, ax: plt.Axes) -> None:
         """Plot model effects with error bars."""
         # Sort by absolute effect size
         df['abs_effect'] = abs(df['model_effect_mean'])
@@ -164,7 +221,7 @@ class FeatureMetricsVisualizer:
         ax.set_xlabel('Model Effect')
         ax.set_title('Feature Effects with Uncertainty')
         
-    def _plot_combined_scores(self, df: pd.DataFrame, ax: plt.Axes):
+    def _plot_combined_scores(self, df: pd.DataFrame, ax: plt.Axes) -> None:
         """Plot combined scores with component breakdown."""
         # Sort by combined score
         df_sorted = df.sort_values('combined_score', ascending=True)
@@ -261,40 +318,61 @@ class FeatureMetricsVisualizer:
         for key, value in metrics.items():
             self.iteration_metrics[key].append(value)
 
-    def plot_feature_impacts(self, model: 'PreferenceModel'):
+    def plot_feature_impacts(self, model: 'PreferenceModel') -> Tuple[Figure, Optional[Figure]]:
         """Plot feature weights and their interactions."""
-        weights = model.get_feature_weights()
-        
-        # Feature weights plot
-        fig1 = plt.figure(figsize=(12, 6))
-        sns.barplot(x=list(weights.keys()), y=list(weights.values()))
-        plt.xticks(rotation=45, ha='right')
-        plt.title('Feature Weights')
-        plt.tight_layout()
-        
-        # Interaction heatmap
-        interaction_features = [f for f in model.selected_features if '_x_' in f]
-        if interaction_features:
-            fig2 = plt.figure(figsize=(10, 8))
-            interaction_matrix = np.zeros((len(model.selected_features), 
-                                        len(model.selected_features)))
-            for i, f1 in enumerate(model.selected_features):
-                for j, f2 in enumerate(model.selected_features):
-                    interaction = f"{f1}_x_{f2}"
-                    if interaction in weights:
-                        interaction_matrix[i, j] = abs(weights[interaction])
+        try:
+            weights = model.get_feature_weights()
+            if not weights:
+                logger.warning("No feature weights available")
+                return plt.figure(), None
             
-            sns.heatmap(interaction_matrix, 
-                       xticklabels=model.selected_features,
-                       yticklabels=model.selected_features,
-                       cmap='YlOrRd')
-            plt.title('Feature Interactions')
+            # Feature weights plot
+            fig1 = plt.figure(figsize=(12, 6))
+            sns.barplot(x=list(weights.keys()), y=list(weights.values()))
+            plt.xticks(rotation=45, ha='right')
+            plt.title('Feature Weights')
             plt.tight_layout()
-            return fig1, fig2
+            
+            # Interaction heatmap
+            interaction_features = [f for f in model.selected_features if '_x_' in f]
+            if interaction_features:
+                fig2 = plt.figure(figsize=(10, 8))
+                interaction_matrix = np.zeros((len(model.selected_features), 
+                                            len(model.selected_features)))
+                for i, f1 in enumerate(model.selected_features):
+                    for j, f2 in enumerate(model.selected_features):
+                        interaction = f"{f1}_x_{f2}"
+                        if interaction in weights:
+                            interaction_matrix[i, j] = abs(weights[interaction])
+                
+                sns.heatmap(interaction_matrix, 
+                        xticklabels=model.selected_features,
+                        yticklabels=model.selected_features,
+                        cmap='YlOrRd')
+                plt.title('Feature Interactions')
+                plt.tight_layout()
+                return fig1, fig2
+            
+            return fig1, None
         
-        return fig1, None
+        except Exception as e:
+                logger.error(f"Error plotting feature impacts: {str(e)}")
+                return plt.figure(), None
 
-    def plot_performance_history(self):
+    def _plot_feature_impacts(self, iteration: int, model: 'PreferenceModel') -> None:
+        """Plot feature impacts for current iteration."""
+        fig1, fig2 = self.plot_feature_impacts(model)
+        self.plotting.save_figure(
+            fig1,
+            f"feature_weights_iteration_{iteration}.png"
+        )
+        if fig2 is not None:
+            self.plotting.save_figure(
+                fig2,
+                f"feature_interactions_iteration_{iteration}.png"
+            )
+
+    def plot_performance_history(self) -> Figure:
         """Plot performance metrics over iterations."""
         metrics_df = pd.DataFrame(self.iteration_metrics)
         

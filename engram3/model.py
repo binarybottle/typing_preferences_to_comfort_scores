@@ -42,100 +42,18 @@ from pydantic import BaseModel, validator
 from dataclasses import dataclass
 import time  # Needed for computation_time in predict_preference
 
+from engram3.utils.config import (
+    Config, NotFittedError, FeatureError,
+    ModelPrediction, StabilityMetrics
+)
 from engram3.data import PreferenceDataset
-from engram3.features.feature_extraction import extract_bigram_features
+from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
 from engram3.features.feature_visualization import FeatureMetricsVisualizer
-from engram3.features.feature_importance import FeatureImportanceCalculator, compute_interaction_lr
+from engram3.features.feature_importance import FeatureImportanceCalculator
 from engram3.utils.visualization import PlottingUtils
-from engram3.utils.error_handling import ModelError, NotFittedError, FeatureError
-from engram3.utils.caching import CacheManager, CacheValue
+from engram3.utils.caching import CacheManager
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
-
-class ModelError(Exception):
-    """Base exception for model-related errors."""
-    pass
-
-class NotFittedError(ModelError):
-    """Raised when trying to use model that hasn't been fit."""
-    pass
-
-class FeatureError(ModelError):
-    """Raised for feature-related errors."""
-    pass
-
-@runtime_checkable
-class FeatureExtractor(Protocol):
-    """Protocol for feature extractors."""
-    def extract_bigram_features(self, char1: str, char2: str) -> Dict[str, float]:
-        ...
-
-class FeatureMetrics(TypedDict):
-    """Type definition for feature metrics."""
-    importance_score: float
-    correlation: float
-    mutual_information: float
-    effect_size: float
-    p_value: float
-
-@dataclass
-class ModelPrediction:
-    """Structured prediction output."""
-    probability: float
-    uncertainty: float
-    features_used: List[str]
-    computation_time: float
-
-class ModelSettings(BaseModel):
-    """Model configuration with validation."""
-    chains: int
-    warmup: int
-    samples: int
-    adapt_delta: float
-    max_treedepth: int
-    feature_scale: float
-    participant_scale: float
-    
-    @validator('chains', 'warmup', 'samples')
-    def positive_int(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("Must be positive")
-        return v
-        
-    @validator('adapt_delta')
-    def valid_probability(cls, v: float) -> float:
-        if not 0 < v < 1:
-            raise ValueError("Must be between 0 and 1")
-        return v
-
-class FeatureSelectionSettings(BaseModel):
-    """Feature selection configuration."""
-    n_iterations: int
-    importance_threshold: float
-    stability_threshold: float
-    
-class FeatureEffect(NamedTuple):
-    """Feature effect statistics."""
-    mean: float
-    std: float
-    values: np.ndarray
-
-class StabilityMetrics(TypedDict):
-    """Stability metric results."""
-    effect_cv: float
-    sign_consistency: float
-    relative_range: float
-
-class Config(BaseModel):
-    """Complete configuration with nested validation."""
-    model: ModelSettings
-    feature_selection: FeatureSelectionSettings
-    data: Dict[str, Any]
-    visualization: Dict[str, Any]
-    output_dir: Path
-    
-    class Config:
-        arbitrary_types_allowed = True
 
 class PreferenceModel:
     # Class variable for cache storage
@@ -144,44 +62,28 @@ class PreferenceModel:
     #--------------------------------------------
     # Core model methods
     #--------------------------------------------
-    def __init__(self, config: Optional[Dict] = None):
-
-        if not isinstance(config, dict):
-            raise ValueError(f"Config must be a dictionary, got {type(config)}")
-
-        self.config = Config(**config)
-        self.model = None
-        self.fit = None
-        self.feature_names = None
-        self.selected_features = []
-        self.interaction_metadata = {}
-        self.dataset = None
-        self.feature_weights = None
-        self.feature_extractor = None  # Will be set when dataset is provided
-        self.importance_calculator = FeatureImportanceCalculator(config)
-        self.plotting = PlottingUtils(self.config['data']['visualization']['output_dir'])
-        self.feature_cache: CacheManager[str, Dict[str, float]] = CacheManager()
-        self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
-        self.feature_values_cache: CacheManager[str, np.ndarray] = CacheManager()
-
-        # Initialize output directory from config
-        if config and 'data' in config and 'output_dir' in config['data']:
-            self.output_dir = Path(config['data']['output_dir'])
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            self.visualizer = FeatureMetricsVisualizer(config)
+    def __init__(self, config: Union[Dict, Config] = None):
+        """Initialize PreferenceModel."""
+        # First, validate and set config
+        if config is None:
+            raise ValueError("Config is required")
+        
+        if isinstance(config, dict):
+            self.config = Config(**config)
+        elif isinstance(config, Config):
+            self.config = config
         else:
-            self.output_dir = Path('output')
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            self.visualizer = None
-            
+            raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
+
         try:
-            # Keep original Stan initialization that was working
+            # Initialize Stan model
             model_path = Path(__file__).parent / "models" / "preference_model.stan"
             if not model_path.exists():
                 raise FileNotFoundError(f"Stan model file not found: {model_path}")
             
             logger.info(f"Loading Stan model from {model_path}")
             
+            import cmdstanpy
             self.model = cmdstanpy.CmdStanModel(
                 stan_file=str(model_path),
                 cpp_options={'STAN_THREADS': True},
@@ -198,6 +100,21 @@ class PreferenceModel:
             logger.error(f"Error initializing model: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
+
+        # Initialize other attributes after config is set
+        self.fit_result = None
+        self.feature_names = None
+        self.selected_features = []
+        self.interaction_metadata = {}
+        self.dataset = None
+        self.feature_weights = None
+        self.feature_extractor = None
+        
+        # Initialize components that need config
+        self.importance_calculator = FeatureImportanceCalculator(self.config)
+        self.plotting = PlottingUtils(self.config.data.visualization.output_dir)
+        self.feature_cache: CacheManager[str, Dict[str, float]] = CacheManager()
+        self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
 
     # Property decorators
     @property
@@ -248,8 +165,15 @@ class PreferenceModel:
             stan_data = self.prepare_data(dataset, features)
             
             # Fit using Stan
-            self._fit_stan(stan_data)
-                
+            self.fit_result = self.model.sample(  # Update this line
+                data=stan_data,
+                chains=self.config.model.chains,
+                iter_warmup=self.config.model.warmup,
+                iter_sampling=self.config.model.samples,
+                adapt_delta=self.config.model.adapt_delta,
+                max_treedepth=self.config.model.max_treedepth
+            )
+            
             # Check diagnostics
             self._check_diagnostics()
             
@@ -263,13 +187,13 @@ class PreferenceModel:
     def _fit_stan(self, stan_data: Dict) -> None:
         """Fit model using Stan backend."""
         logger.info("Starting Stan sampling...")
-        self.fit = self.model.sample(
+        self.fit_result = self.model.sample(
             data=stan_data,
-            chains=self.config['model']['chains'],
-            iter_warmup=self.config['model']['warmup'],
-            iter_sampling=self.config['model']['samples'],
-            adapt_delta=self.config['model'].get('adapt_delta', 0.95),
-            max_treedepth=self.config['model'].get('max_treedepth', 12),
+            chains=self.config.model.chains,
+            iter_warmup=self.config.model.warmup,
+            iter_sampling=self.config.model.samples,
+            adapt_delta=getattr(self.config.model, 'adapt_delta', 0.95),
+            max_treedepth=getattr(self.config.model, 'max_treedepth', 12),
             show_progress=True,
             refresh=50
         )
@@ -280,7 +204,7 @@ class PreferenceModel:
             self.feature_weights = {}
             
             if hasattr(self, 'fit'):  # Stan backend
-                beta = self.fit.stan_variable('beta')
+                beta = self.fit_result.stan_variable('beta')
                 for i, feature in enumerate(self.feature_names):
                     self.feature_weights[feature] = (
                         float(np.mean(beta[:, i])),
@@ -300,7 +224,7 @@ class PreferenceModel:
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         try:
-            if not hasattr(self, 'fit') or self.fit is None:
+            if not hasattr(self, 'fit') or self.fit_result is None:
                 raise RuntimeError("Model must be fit before evaluation")
                 
             predictions = []
@@ -370,7 +294,7 @@ class PreferenceModel:
                     continue
                 
                 # Fit Bayesian model on training data
-                self.fit(train_data)
+                self.fit_result(train_data)
                 
                 # Get predictions with uncertainty on validation set
                 val_predictions = []
@@ -465,7 +389,7 @@ class PreferenceModel:
                     **importance_metrics.get(feature, {}),
                     **stability_metrics.get(feature, {})
                 } for feature in feature_names},
-                output_file=self.config['feature_evaluation']['metrics_file']
+                output_file=self.config.feature_evaluation.metrics_file
             )
         
         return {
@@ -481,13 +405,14 @@ class PreferenceModel:
         """Select features using centralized importance calculator."""
         self.dataset = dataset
         logger.info("Starting feature selection...")
-        
-        self.selected_features = self.config['features'].get('base_features', [])
+
+        self.selected_features = self.config.features.base_features
+
         metrics_history = []
         all_features = dataset.get_feature_names()
         
         iteration = 0
-        while iteration < self.config['feature_selection']['n_iterations']:
+        while iteration < self.config.feature_selection.n_iterations:
             # Evaluate remaining features
             feature_metrics = {}
             for feature in [f for f in all_features if f not in self.selected_features]:
@@ -503,7 +428,7 @@ class PreferenceModel:
             p_values = [m.get('p_value', 1.0) for m in feature_metrics.values()]
             significant = self.importance_calculator.fdr_correct(
                 np.array(p_values),
-                self.config['feature_selection']['multiple_testing']['alpha']
+                self.config.feature_selection.multiple_testing.alpha
             )
             
             # Get importance scores and threshold
@@ -527,7 +452,7 @@ class PreferenceModel:
             
             # Update history and check interactions
             metrics_history.append(feature_metrics[best_feature])
-            if self.config['feature_selection']['interaction_testing']['hierarchical']:
+            if self.config.feature_selection.interaction_testing.hierarchical:
                 self._evaluate_interactions(dataset, best_feature)
                 
             iteration += 1
@@ -618,93 +543,123 @@ class PreferenceModel:
         cache[key] = value
     
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
-        """Prepare data for Stan model with proper validation and cleaning."""
-        # Get feature names
-        self.feature_names = features if features is not None else dataset.get_feature_names()
+        """
+        Prepare data for Stan model with proper validation and cleaning.
         
-        # Log feature information
-        logger.info(f"Preparing data with {len(self.feature_names)} features:")
-        for f in self.feature_names:
-            logger.info(f"  - {f}")
-        
-        # Create participant ID mapping
-        participant_ids = sorted(list(dataset.participants))
-        participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
-        
-        # Prepare data matrices
-        X1 = []  # features for first bigram
-        X2 = []  # features for second bigram
-        y = []   # preferences (1 if first bigram preferred)
-        participant = []  # participant IDs
-        
-        skipped_count = 0
-        for pref in dataset.preferences:
-            try:
-                # Extract feature vectors
-                feat1 = [pref.features1.get(f, 0.0) for f in self.feature_names]
-                feat2 = [pref.features2.get(f, 0.0) for f in self.feature_names]
-                
-                # Check for null/nan values
-                if any(pd.isna(x) for x in feat1) or any(pd.isna(x) for x in feat2):
+        Args:
+            dataset: PreferenceDataset containing preferences
+            features: Optional list of features to use. If None, uses all features.
+            
+        Returns:
+            Dictionary containing data formatted for Stan model
+            
+        Raises:
+            ValueError: If feature dimensions don't match or data is invalid
+        """
+        try:
+            # Get feature names
+            self.feature_names = features if features is not None else dataset.get_feature_names()
+            
+            # Log feature information
+            logger.info(f"Preparing data with {len(self.feature_names)} features:")
+            for f in self.feature_names:
+                logger.info(f"  - {f}")
+            
+            # Create participant ID mapping
+            participant_ids = sorted(list(dataset.participants))
+            participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
+            
+            # Initialize arrays
+            X1 = []  # Features for first bigram in each preference
+            X2 = []  # Features for second bigram in each preference
+            participant = []  # Participant IDs
+            y = []  # Preference outcomes (1 if first bigram preferred, 0 otherwise)
+            
+            skipped_count = 0
+            # Extract feature values and preferences
+            for pref in dataset.preferences:
+                try:
+                    # Get features for both bigrams
+                    features1 = []
+                    features2 = []
+                    for feature in self.feature_names:
+                        feat1 = pref.features1.get(feature, 0.0)
+                        feat2 = pref.features2.get(feature, 0.0)
+                        
+                        # Check for invalid values
+                        if pd.isna(feat1) or pd.isna(feat2):
+                            raise ValueError(f"Invalid feature value for {feature}")
+                        
+                        features1.append(feat1)
+                        features2.append(feat2)
+                    
+                    X1.append(features1)
+                    X2.append(features2)
+                    participant.append(participant_map[pref.participant_id])
+                    y.append(1 if pref.preferred else 0)  # Integer values for Stan
+                    
+                except Exception as e:
+                    logger.warning(f"Skipping preference due to error: {str(e)}")
                     skipped_count += 1
                     continue
-                    
-                X1.append(feat1)
-                X2.append(feat2)
-                y.append(1 if pref.preferred else 0)
-                participant.append(participant_map[pref.participant_id])
-                
-            except KeyError as e:
-                logger.warning(f"Missing feature in preference: {e}")
-                skipped_count += 1
-                continue
-        
-        if skipped_count > 0:
-            logger.warning(f"Skipped {skipped_count} preferences due to missing or invalid features")
-        
-        # Convert to numpy arrays
-        X1 = np.array(X1, dtype=np.float64)
-        X2 = np.array(X2, dtype=np.float64)
-        y = np.array(y, dtype=np.int32)
-        participant = np.array(participant, dtype=np.int32)
-        
-        # Validate arrays
-        if X1.size == 0 or X2.size == 0:
-            raise ValueError("No valid data points after cleaning")
             
-        if np.any(np.isnan(X1)) or np.any(np.isnan(X2)):
-            raise ValueError("NaN values found in feature matrices after cleaning")
-        
-        # Log data dimensions
-        logger.info(f"Data dimensions:")
-        logger.info(f"  N (preferences): {len(y)}")
-        logger.info(f"  P (participants): {len(participant_ids)}")
-        logger.info(f"  F (features): {len(self.feature_names)}")
-        logger.info(f"  X1 shape: {X1.shape}")
-        logger.info(f"  X2 shape: {X2.shape}")
-        
-        # Log summary statistics
-        logger.info("\nFeature summary statistics:")
-        for i, feature in enumerate(self.feature_names):
-            logger.info(f"{feature}:")
-            logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
-            logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
-        
-        # Prepare Stan data
-        stan_data = {
-            'N': len(y),
-            'P': len(participant_ids),
-            'F': len(self.feature_names),
-            'X1': X1,
-            'X2': X2,
-            'participant': participant,
-            'y': y,
-            'feature_scale': self.config.get('model', {}).get('feature_scale', 2.0),
-            'participant_scale': self.config.get('model', {}).get('participant_scale', 1.0)
-        }
-        
-        return stan_data
-
+            if skipped_count > 0:
+                logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
+            
+            if not X1:
+                raise ValueError("No valid preferences after data preparation")
+            
+            # Convert to numpy arrays
+            X1 = np.array(X1, dtype=np.float64)
+            X2 = np.array(X2, dtype=np.float64)
+            participant = np.array(participant, dtype=np.int32)
+            y = np.array(y, dtype=np.int32)
+            
+            # Validate dimensions and types
+            if X1.shape[1] != len(self.feature_names):
+                raise ValueError(f"Feature dimension mismatch: {X1.shape[1]} != {len(self.feature_names)}")
+            
+            if not np.issubdtype(y.dtype, np.integer):
+                raise ValueError(f"y must be integer type, got {y.dtype}")
+            
+            # Check for NaN values
+            if np.any(np.isnan(X1)) or np.any(np.isnan(X2)):
+                raise ValueError("NaN values found in feature matrices")
+            
+            # Log data dimensions
+            logger.info(f"Data dimensions:")
+            logger.info(f"  N (preferences): {len(y)}")
+            logger.info(f"  P (participants): {len(participant_ids)}")
+            logger.info(f"  F (features): {len(self.feature_names)}")
+            logger.info(f"  X1 shape: {X1.shape}")
+            logger.info(f"  X2 shape: {X2.shape}")
+            
+            # Prepare Stan data
+            stan_data = {
+                'N': len(y),
+                'P': len(participant_ids),
+                'F': len(self.feature_names),
+                'X1': X1,
+                'X2': X2,
+                'participant': participant,
+                'y': y,
+                'feature_scale': self.config.model.feature_scale,
+                'participant_scale': self.config.model.participant_scale
+            }
+            
+            # Log summary statistics
+            logger.info("\nFeature summary statistics:")
+            for i, feature in enumerate(self.feature_names):
+                logger.info(f"{feature}:")
+                logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
+                logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
+            
+            return stan_data
+            
+        except Exception as e:
+            logger.error(f"Error preparing data: {str(e)}")
+            raise
+                
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -809,7 +764,7 @@ class PreferenceModel:
             NotFittedError: If model hasn't been fit yet
             FeatureError: If error occurs extracting weights
         """
-        if not self.fit:
+        if not self.fit_result:
             raise NotFittedError("Model must be fit before getting weights")
             
         # Use cached weights if available
@@ -817,7 +772,7 @@ class PreferenceModel:
             return self.feature_weights.copy()
             
         try:
-            summary = self.fit.summary()
+            summary = self.fit_result.summary()
             weights: Dict[str, Tuple[float, float]] = {}
             
             for feature in self.selected_features:
@@ -861,7 +816,7 @@ class PreferenceModel:
             base_performance = self.evaluate(self.dataset)['accuracy']
             
             # Train model without this feature
-            self.fit(self.dataset, features)
+            self.fit_result(self.dataset, features)
             reduced_performance = self.evaluate(self.dataset)['accuracy']
             
             return base_performance - reduced_performance
@@ -887,7 +842,7 @@ class PreferenceModel:
         """
         try:
             # Get n_splits from config or use default
-            n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
+            n_splits = getattr(self.config, 'model', {}).get('cross_validation', {}).get('n_splits', 5)
             
             # Perform cross-validation using shared splitting method
             cv_effects = []
@@ -898,7 +853,7 @@ class PreferenceModel:
                 train_data = dataset._create_subset_dataset(train_idx)
                 
                 # Fit model on training data
-                self.fit(train_data, self.selected_features + [feature])
+                self.fit_result(train_data, self.selected_features + [feature])
                 
                 # Get feature effect
                 weights = self.get_feature_weights()
@@ -936,7 +891,7 @@ class PreferenceModel:
                 return 0.0
                 
             # Count weights above threshold
-            threshold = self.config.get('model', {}).get('sparsity_threshold', 0.1)
+            threshold = getattr(self.config, 'model', {}).get('sparsity_threshold', 0.1)
             significant_weights = sum(1 for w, _ in weights.values() if abs(w) > threshold)
             
             return significant_weights / len(weights)
@@ -1010,7 +965,7 @@ class PreferenceModel:
             NotFittedError: If model hasn't been fit
             ValueError: If bigrams are invalid
         """
-        if not self.fit:
+        if not self.fit_result:
             raise NotFittedError("Model must be fit before making predictions")
             
         try:
@@ -1065,12 +1020,12 @@ class PreferenceModel:
     def _check_diagnostics(self) -> None:
         """Check MCMC diagnostics with proper type handling."""
         try:
-            if hasattr(self.fit, 'diagnose'):
-                diagnostic_info = self.fit.diagnose()
+            if hasattr(self.fit_result, 'diagnose'):
+                diagnostic_info = self.fit_result.diagnose()
                 logger.info("Diagnostic Information:")
                 logger.info(diagnostic_info)
             
-            summary = self.fit.summary()
+            summary = self.fit_result.summary()
             rhat_col = next((col for col in summary.columns 
                             if any(x in col.lower() 
                                 for x in ['r_hat', 'rhat', 'r-hat'])), None)
@@ -1083,9 +1038,9 @@ class PreferenceModel:
                     logger.warning(f"Parameters with high R-hat: {high_rhat_params}")
                     
                     # Call diagnose() when there are convergence issues
-                    if hasattr(self.fit, 'diagnose'):
+                    if hasattr(self.fit_result, 'diagnose'):
                         logger.info("Running detailed diagnostics...")
-                        self.fit.diagnose()
+                        self.fit_result.diagnose()
                         
         except Exception as e:
             logger.warning(f"Error in diagnostics: {str(e)}")
@@ -1177,7 +1132,7 @@ class PreferenceModel:
             Iterator of train/validation indices from GroupKFold
         """
         if n_splits is None:
-            n_splits = self.config.get('model', {}).get('cross_validation', {}).get('n_splits', 5)
+            n_splits = getattr(self.config, 'model', {}).get('cross_validation', {}).get('n_splits', 5)
         
         participant_ids = np.array([p.participant_id for p in dataset.preferences])
         cv = GroupKFold(n_splits=n_splits)
@@ -1201,10 +1156,10 @@ class PreferenceModel:
             ValueError: If feature values cannot be extracted
         """
         # Get configuration parameters
-        interaction_config = self.config['feature_selection']['interaction_testing']
-        min_effect_size = interaction_config['minimum_effect_size']
-        alpha = self.config['feature_selection']['multiple_testing']['alpha']
-        threshold = self.config.get('feature_selection', {}).get('interaction_threshold', 0.15)
+        interaction_config = self.config.feature_selection.interaction_testing
+        min_effect_size = interaction_config.minimum_effect_size
+        alpha = self.config.feature_selection.multiple_testing.alpha
+        threshold = getattr(self.config.feature_selection, 'interaction_threshold', 0.15)
         
         # Only consider interactions with base features
         base_features = [f for f in self.selected_features[:-1] 
@@ -1221,7 +1176,7 @@ class PreferenceModel:
                                     for pref in dataset.preferences])
                 
                 # Test interaction significance
-                interaction_value, p_value = compute_interaction_lr(
+                interaction_value, p_value = self.importance_calculator.compute_interaction_lr(
                     [existing_feature_values, new_feature_values],
                     responses,
                     min_effect_size

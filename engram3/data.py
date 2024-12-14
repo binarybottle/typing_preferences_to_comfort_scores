@@ -14,33 +14,11 @@ import logging
 import pandas as pd
 import numpy as np
 
+from engram3.utils.config import Preference
 from engram3.features.keymaps import *
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
 from engram3.utils.logging import LoggingManager
 logger = logging.getLogger(__name__)
-
-@dataclass
-class Preference:
-    """Single preference instance with all needed data."""
-    bigram1: str
-    bigram2: str
-    participant_id: str
-    preferred: bool
-    features1: Dict[str, float]
-    features2: Dict[str, float]
-    confidence: Optional[float] = None
-    typing_time1: Optional[float] = None
-    typing_time2: Optional[float] = None
-
-    def __str__(self) -> str:
-        """Return human-readable preference."""
-        preferred_bigram = self.bigram1 if self.preferred else self.bigram2
-        other_bigram = self.bigram2 if self.preferred else self.bigram1
-        return f"'{preferred_bigram}' preferred over '{other_bigram}'"
-
-    def __repr__(self) -> str:
-        """Return detailed string representation."""
-        return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
     
 class PreferenceDataset:
 
@@ -70,32 +48,48 @@ class PreferenceDataset:
             config: Optional configuration dictionary
             precomputed_features: Optional dict of precomputed features
         """
-        self.logging_manager = LoggingManager(config) if config else None
         self.file_path = Path(file_path)
         self.preferences: List[Preference] = []
         self.participants: Set[str] = set()
         
-        # Store feature extraction components
-        self.feature_extractor = feature_extractor
+        # Initialize logging
+        if config:
+            self.logging_manager = LoggingManager(config)
+            logger.info(f"Loading data from {self.file_path}")
         
-        # Get maps from feature_extractor's config
-        if feature_extractor and feature_extractor.config:
-            self.column_map = feature_extractor.config.column_map
-            self.row_map = feature_extractor.config.row_map
-            self.finger_map = feature_extractor.config.finger_map
-            self.engram_position_values = feature_extractor.config.engram_position_values
-            self.row_position_values = feature_extractor.config.row_position_values
+        # Handle feature extraction setup
+        if feature_extractor:
+            # Use provided feature extractor
+            self.feature_extractor = feature_extractor
+            
+            # Get maps from feature_extractor's config
+            if feature_extractor.config:
+                self.column_map = feature_extractor.config.column_map
+                self.row_map = feature_extractor.config.row_map
+                self.finger_map = feature_extractor.config.finger_map
+                self.engram_position_values = feature_extractor.config.engram_position_values
+                self.row_position_values = feature_extractor.config.row_position_values
         
-        # Store precomputed features if provided
+        # Handle precomputed features
         if precomputed_features:
             self.all_bigrams = precomputed_features['all_bigrams']
             self.all_bigram_features = precomputed_features['all_bigram_features']
             self.feature_names = precomputed_features['feature_names']
+            
+            # Don't create new feature extractor if one was already provided
+            if not feature_extractor and config:
+                self.feature_config = FeatureConfig(
+                    column_map=self.column_map,
+                    row_map=self.row_map,
+                    finger_map=self.finger_map,
+                    engram_position_values=self.engram_position_values,
+                    row_position_values=self.row_position_values
+                )
+                self.feature_extractor = FeatureExtractor(self.feature_config)
         
         # Load and process data
-        logger.info(f"Loading data from {self.file_path}")
         self._load_csv()
-        
+                
     def get_feature_names(self) -> List[str]:
         """Get list of all feature names including interactions."""
         if hasattr(self, 'feature_names'):
@@ -238,6 +232,8 @@ class PreferenceDataset:
             print(f"Error loading CSV: {str(e)}")
             raise
 
+# In data.py
+
     def _create_subset_dataset(self, indices: Union[List[int], np.ndarray]) -> 'PreferenceDataset':
         """Create a new dataset containing only the specified preferences."""
         try:
@@ -270,6 +266,9 @@ class PreferenceDataset:
             subset.row_position_values = self.row_position_values
             subset.participants = {p.participant_id for p in subset.preferences}
             
+            # Copy feature extraction related attributes
+            subset.feature_extractor = self.feature_extractor  # Add this line
+            
             # Copy feature-related attributes if they exist
             if hasattr(self, 'all_bigrams'):
                 subset.all_bigrams = self.all_bigrams
@@ -284,7 +283,7 @@ class PreferenceDataset:
             logger.error(f"Indices length: {len(indices)}")
             logger.error(f"Sample of indices: {indices[:10]}")
             raise
-                
+                    
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
         bigram1 = (row['bigram1'][0], row['bigram1'][1])

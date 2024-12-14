@@ -64,14 +64,14 @@ feature_selection:
     method: "likelihood_ratio"
     minimum_effect_size: 0.1
     hierarchical: true
-  metric_weights:
-    model_effect: 0.4
-    correlation: 0.3
-    mutual_information: 0.3
-    inclusion_probability: 0.25
-    effect_magnitude: 0.25
-    effect_consistency: 0.25
-    predictive_impact: 0.25
+  metric_weights:  # sum = 1
+    model_effect: 0.25
+    correlation: 0.15
+    mutual_information: 0.15
+    inclusion_probability: 0.15
+    effect_magnitude: 0.1
+    effect_consistency: 0.1
+    predictive_impact: 0.1
   metrics_file: "output/feature_metrics.csv"
 
 recommendations:

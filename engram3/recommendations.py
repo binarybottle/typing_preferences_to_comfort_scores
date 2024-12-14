@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import random
 
+from engram3.utils.config import RecommendationsConfig
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
 from engram3.features.feature_extraction import FeatureExtractor
@@ -30,11 +31,11 @@ class BigramRecommender:
         self.model = model
         self.feature_extractor = model.feature_extractor
         self.selected_features = list(model.get_feature_weights().keys())
-        self.n_recommendations = config['recommendations']['n_recommendations']
+        self.n_recommendations = config.recommendations.n_recommendations
         self.importance_calculator = model.importance_calculator
-        self.plotting = PlottingUtils(config['data']['visualization']['output_dir'])
-        self.layout_chars = config['data']['layout']['chars']
-        self.output_dir = Path(config['data']['output_dir'])
+        self.plotting = PlottingUtils(config.data.visualization.output_dir)
+        self.layout_chars = config.data.layout['chars']
+        self.output_dir = Path(config.data.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def get_recommended_pairs(self) -> List[Tuple[str, str]]:
@@ -51,7 +52,7 @@ class BigramRecommender:
         """
         try:
             # Validate configuration
-            if not self.config.get('recommendations'):
+            if not getattr(self.config, 'recommendations'):
                 raise ValueError("Missing recommendations configuration")
                 
             # Get candidate pairs
@@ -92,7 +93,7 @@ class BigramRecommender:
             # Sort by score and get top recommendations
             scored_pairs.sort(key=lambda x: x[1], reverse=True)
             n_recommendations = min(
-                self.config['recommendations']['n_recommendations'],
+                self.config.recommendations.n_recommendations,
                 len(scored_pairs)
             )
             
@@ -124,7 +125,7 @@ class BigramRecommender:
 
     def _get_scoring_weights(self) -> Dict[str, float]:
         """Get and validate scoring weights from config."""
-        weights = self.config.get('recommendations', {}).get('weights', {
+        weights = getattr(self.config, 'recommendations', {}).get('weights', {
             'prediction_uncertainty': 0.25,
             'comfort_uncertainty': 0.15,
             'feature_space': 0.15,
@@ -144,7 +145,7 @@ class BigramRecommender:
 
     def _load_feature_metrics(self) -> pd.DataFrame:
         """Load and validate feature metrics from file."""
-        metrics_file = Path(self.config['feature_evaluation']['metrics_file'])
+        metrics_file = Path(self.config.feature_evaluation.metrics_file)
         
         if not metrics_file.exists():
             raise FileNotFoundError(
@@ -334,7 +335,7 @@ class BigramRecommender:
         plt.tight_layout()
         
         # Save plot
-        output_dir = Path(self.config['data']['output_dir']) / 'plots'
+        output_dir = Path(self.config.data.output_dir) / 'plots'
         output_dir.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
         logger.info(f"Saved plot to {output_dir / 'bigram_recommendations.png'}")
@@ -554,7 +555,7 @@ class BigramRecommender:
                 f"from {len(self.layout_chars)} characters")
         
         # Optionally limit number of candidates for computational efficiency
-        max_candidates = self.config.get('recommendations', {}).get('max_candidates', 1000)
+        max_candidates = getattr(self.config, 'recommendations', {}).get('max_candidates', 1000)
         if len(candidate_pairs) > max_candidates:
             logger.info(f"Randomly sampling {max_candidates} candidates")
             candidate_pairs = random.sample(candidate_pairs, max_candidates)
@@ -628,6 +629,6 @@ class BigramRecommender:
         pd.DataFrame([
             {'bigram1': pair[0], 'bigram2': pair[1]}
             for pair, _, _ in scored_pairs[:self.n_recommendations]
-        ]).to_csv(self.config['recommendations']['recommendations_file'], index=False)
+        ]).to_csv(self.config.recommendations['recommendations_file'], index=False)
 
     

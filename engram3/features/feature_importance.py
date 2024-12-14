@@ -19,68 +19,37 @@ Supports feature selection pipeline by:
 """
 import numpy as np
 from sklearn.model_selection import KFold
+from scipy import stats
 from scipy.stats import spearmanr
-from sklearn.feature_selection import mutual_info_score
+from sklearn.metrics import mutual_info_score
+from statsmodels.stats.multitest import fdrcorrection
 from pydantic import BaseModel, validator
-from typing import Dict, List, Optional, Tuple, Union, TypedDict
+from typing import Dict, List, Optional, Tuple, Union, TypedDict, TYPE_CHECKING
+from sklearn.linear_model import LogisticRegression
 
+from engram3.utils.config import (Config, FeatureSelectionConfig, MetricWeights)
+if TYPE_CHECKING:
+    from engram3.model import PreferenceModel
 from engram3.data import PreferenceDataset
-from engram3.model import PreferenceModel
 from engram3.utils.caching import CacheManager
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
-class FeatureSelectionConfig(BaseModel):
-    """Validate feature selection configuration."""
-    metric_weights: Dict[str, float]
-    thresholds: Dict[str, float]
-    n_bootstrap: int = 100
-    
-    @validator('metric_weights')
-    def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
-        total = sum(v.values())
-        if not np.isclose(total, 1.0, rtol=1e-5):
-            raise ValueError(f"Metric weights must sum to 1.0, got {total}")
-        return v
-    
-    @validator('thresholds')
-    def thresholds_must_be_positive(cls, v: Dict[str, float]) -> Dict[str, float]:
-        if any(t <= 0 for t in v.values()):
-            raise ValueError("All thresholds must be positive")
-        return v
-
-class FeatureSelectionMetricWeights(BaseModel):
-    """
-    Configuration for feature importance metric weights.
-    All weights should sum to 1.0.
-    """
-    correlation: float
-    mutual_information: float
-    effect_magnitude: float
-    effect_consistency: float
-    inclusion_probability: float
-
-class FeatureSelectionThresholds(BaseModel):
-    importance: float
-    stability: float
-
-class MetricWeights(TypedDict):
-    """Type definition for metric weights."""
-    correlation: float
-    mutual_information: float
-    effect_magnitude: float
-    effect_consistency: float
-    inclusion_probability: float
-
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
+
     MI_BINS: int = 20  # Number of bins for mutual information calculation
     N_PERMUTATIONS: int = 1000  # Number of permutations for significance test
     DEFAULT_BOOTSTRAP_SAMPLES: int = 100  # Default number of bootstrap samples
     
-    def __init__(self, config: Dict):
-        self.config = FeatureSelectionConfig(**config.get('feature_selection', {}))
-        self.metric_cache: CacheManager[str, Dict[str, float]] = CacheManager()
+    def __init__(self, config: Union[Dict, Config]):
+        if isinstance(config, dict):
+            feature_selection_config = config.get('feature_selection', {})
+        else:
+            # It's a Config object, access feature_selection directly
+            feature_selection_config = config.feature_selection.dict()
+
+        self.config = FeatureSelectionConfig(**feature_selection_config)
 
     def __del__(self):
         """Ensure cache is cleared on deletion."""
@@ -125,10 +94,148 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
-                                                
+
+    def calculate_adaptive_threshold(self, importance_scores: np.ndarray) -> float:
+            """
+            Calculate adaptive threshold for feature importance scores.
+            
+            Args:
+                importance_scores: Array of importance scores
+                
+            Returns:
+                float: Adaptive threshold value
+            """
+            try:
+                scores = np.array(importance_scores)
+                if len(scores) == 0:
+                    return 0.0
+                    
+                # Remove any invalid values
+                scores = scores[~np.isnan(scores)]
+                
+                # Use various statistical measures to determine threshold
+                mean = np.mean(scores)
+                std = np.std(scores)
+                median = np.median(scores)
+                
+                # Get threshold from config or use default
+                base_threshold = (
+                    self.config.thresholds.get('importance', 0.1) 
+                    if hasattr(self.config, 'thresholds') 
+                    else 0.1
+                )
+                
+                # Adaptive threshold based on distribution
+                if len(scores) > 1:
+                    # Use mean + std if distribution is well-behaved
+                    if std > 0:
+                        threshold = mean + base_threshold * std
+                    else:
+                        threshold = median
+                        
+                    # Ensure threshold is not too extreme
+                    min_threshold = np.percentile(scores, 25)  # 25th percentile
+                    max_threshold = np.percentile(scores, 75)  # 75th percentile
+                    threshold = np.clip(threshold, min_threshold, max_threshold)
+                else:
+                    threshold = base_threshold
+                    
+                logger.debug(f"Calculated adaptive threshold: {threshold:.3f}")
+                return float(threshold)
+                
+            except Exception as e:
+                logger.error(f"Error calculating adaptive threshold: {str(e)}")
+                # Fall back to base threshold from config
+                return (
+                    self.config.thresholds.get('importance', 0.1) 
+                    if hasattr(self.config, 'thresholds') 
+                    else 0.1
+                )
+            
+    def fdr_correct(self, p_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+        """
+        Perform False Discovery Rate (FDR) correction on p-values.
+        
+        Args:
+            p_values: Array of p-values to correct
+            alpha: Significance level
+            
+        Returns:
+            Boolean array indicating which tests are significant
+        """
+        try:
+            from statsmodels.stats.multitest import fdrcorrection
+            
+            # Ensure p-values are valid
+            p_values = np.array(p_values)
+            p_values[np.isnan(p_values)] = 1.0
+            p_values = np.clip(p_values, 0, 1)
+            
+            # Perform FDR correction
+            significant, _ = fdrcorrection(p_values, alpha=alpha)
+            return significant
+            
+        except Exception as e:
+                logger.error(f"Error in FDR correction: {str(e)}")
+                # Fall back to simple threshold
+                return p_values < alpha
+                                                                
+    @staticmethod
+    def compute_interaction_lr(feature_values: List[np.ndarray], 
+                             responses: np.ndarray,
+                             min_effect_size: float) -> Tuple[float, float]:
+        """
+        Compute interaction significance using likelihood ratio test.
+        
+        Args:
+            feature_values: List of feature value arrays [feature1_values, feature2_values]
+            responses: Binary response values (0/1)
+            min_effect_size: Minimum effect size threshold
+            
+        Returns:
+            Tuple of (interaction_value, p_value)
+        """
+        from sklearn.linear_model import LogisticRegression
+        from scipy import stats
+        
+        try:
+            # Create interaction term
+            X_main = np.column_stack(feature_values)
+            X_interaction = X_main[:, 0] * X_main[:, 1]
+            
+            # Fit model without interaction
+            model_main = LogisticRegression(random_state=42)
+            model_main.fit(X_main, responses)
+            ll_main = model_main.score(X_main, responses) * len(responses)
+            
+            # Fit model with interaction
+            X_full = np.column_stack([X_main, X_interaction])
+            model_full = LogisticRegression(random_state=42)
+            model_full.fit(X_full, responses)
+            ll_full = model_full.score(X_full, responses) * len(responses)
+            
+            # Calculate likelihood ratio statistic
+            lr_stat = 2 * (ll_full - ll_main)
+            
+            # Get p-value
+            p_value = 1 - stats.chi2.cdf(lr_stat, df=1)
+            
+            # Get interaction coefficient
+            interaction_value = model_full.coef_[0][-1]
+            
+            # Return zero effect if below minimum threshold
+            if abs(interaction_value) < min_effect_size:
+                return 0.0, 1.0
+                
+            return float(interaction_value), float(p_value)
+            
+        except Exception as e:
+            logger.error(f"Error in interaction calculation: {str(e)}")
+            return 0.0, 1.0
+                
     def _calculate_interaction_score(self, metrics: Dict[str, float]) -> float:
         """Calculate feature interaction score."""
-        weights = self.config['feature_selection']['metric_weights']
+        weights = self.config.feature_selection.metric_weights
         return (
             weights['correlation'] * abs(metrics['correlation']) +
             weights['mutual_information'] * metrics['mutual_information']
@@ -136,7 +243,7 @@ class FeatureImportanceCalculator:
         
     def _calculate_base_feature_score(self, metrics: Dict[str, float]) -> float:
         """Calculate base feature importance score."""
-        weights = self.config['feature_selection']['metric_weights']
+        weights = self.config.feature_selection['metric_weights']
         return (
             weights['inclusion_probability'] * metrics['inclusion_probability'] +
             weights['effect_magnitude'] * metrics['effect_magnitude'] +
@@ -165,7 +272,7 @@ class FeatureImportanceCalculator:
                     )
                     bootstrap_data = dataset._create_subset_dataset(bootstrap_indices)
                     importance = self._calculate_basic_importance(feature, bootstrap_data)
-                    threshold = self.config['feature_selection']['thresholds']['importance']
+                    threshold = self.config.feature_selection.thresholds['importance']
                     
                     if importance > threshold:
                         inclusion_count += 1
@@ -234,7 +341,7 @@ class FeatureImportanceCalculator:
             mutual_info = self._calculate_mutual_information(feature, dataset)
             
             # Use configured weights or defaults
-            weights = self.config.get('feature_selection', {}).get('metric_weights', {
+            weights = getattr(self.config, 'feature_selection', {}).get('metric_weights', {
                 'correlation': 0.5,
                 'mutual_information': 0.5
             })
@@ -251,7 +358,7 @@ class FeatureImportanceCalculator:
         try:
             required_weights = {'correlation', 'mutual_information', 'effect_magnitude', 
                             'effect_consistency', 'inclusion_probability'}
-            weights: MetricWeights = self.config['feature_selection']['metric_weights']
+            weights: MetricWeights = self.config.feature_selection.metric_weights
             
             # Validate all required weights are present
             missing = required_weights - set(weights.keys())

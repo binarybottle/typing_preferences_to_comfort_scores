@@ -15,11 +15,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import datetime
 
+from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
 from engram3.recommendations import BigramRecommender
-
-from engram3.utils.logging import LoggingManager
 from engram3.utils.visualization import PlottingUtils
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
 from engram3.features.features import key_metrics
@@ -29,11 +28,6 @@ from engram3.features.keymaps import (
 )
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
-
-def setup_logging(config: Dict) -> None:
-    """Initialize and configure logging."""
-    logging_manager = LoggingManager(config)
-    logging_manager.setup_logging()
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -45,7 +39,7 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
     """
     Load existing train/test split or create and save a new one.
     """
-    split_file = Path(config['data']['splits']['split_data_file'])
+    split_file = Path(config.data.splits['split_data_file'])
     
     # If split file exists, delete it to force new split creation
     if split_file.exists():
@@ -56,10 +50,10 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         logger.info("Creating new train/test split...")
         
         # Get test size from config
-        test_ratio = config['data']['splits']['test_ratio']
+        test_ratio = config.data.splits['test_ratio']
         
         # Set random seed for reproducibility
-        np.random.seed(config['data']['splits']['random_seed'])
+        np.random.seed(config.data.splits['random_seed'])
         
         # Get unique participant IDs and their corresponding preference indices
         participant_to_indices = {}
@@ -127,16 +121,20 @@ def main():
     args = parser.parse_args()
     
     try:
-        # Load configuration and setup
-        config = load_config(args.config)
-        setup_logging(config)
-        logger = LoggingManager.getLogger(__name__)
+        # Load configuration
+        config_dict = load_config(args.config)
+        
+        # Convert to Pydantic model
+        config = Config(**config_dict)
+        
+        # Setup logging using LoggingManager
+        LoggingManager(config).setup_logging()        
         
         # Add plotting utils
-        plotting_utils = PlottingUtils(config['data']['visualization']['output_dir'])
+        plotting_utils = PlottingUtils(config.data.visualization.output_dir)
         
         # Set random seed for all operations
-        np.random.seed(config['data']['splits']['random_seed'])
+        np.random.seed(config.data.splits['random_seed'])
         
         # Initialize feature extraction
         logger.info("Initializing feature extraction...")
@@ -153,7 +151,7 @@ def main():
         # Precompute features for all possible bigrams
         logger.info("Precomputing bigram features...")
         all_bigrams, all_bigram_features = feature_extractor.precompute_all_features(
-            config['data']['layout']['chars']
+            config.data.layout['chars']
         )
         
         # Get feature names from first computed features
@@ -162,9 +160,9 @@ def main():
         # Load dataset with precomputed features
         logger.info("Loading dataset...")
         dataset = PreferenceDataset(
-            Path(config['data']['input_file']),
-            feature_extractor=feature_extractor,
-            config=config,  # Add this line
+            Path(config.data.input_file),
+            feature_extractor=feature_extractor,  # Make sure this is passed
+            config=config,
             precomputed_features={
                 'all_bigrams': all_bigrams,
                 'all_bigram_features': all_bigram_features,
@@ -198,7 +196,7 @@ def main():
             # Generate visualizations
             if model.visualizer:
                 fig = model.visualizer.plot_feature_space(model, train_data, "Feature Space")
-                fig.savefig(Path(config['data']['output_dir']) / 'final_feature_space.png')
+                fig.savefig(Path(config.data.output_dir) / 'final_feature_space.png')
                 plt.close()
             
             # Create results DataFrame
@@ -212,7 +210,7 @@ def main():
                 })
             
             # Save feature selection results
-            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            metrics_file = Path(config.feature_evaluation.metrics_file)
             pd.DataFrame(results).to_csv(metrics_file, index=False)
             logger.info(f"Saved feature metrics to {metrics_file}")
             
@@ -228,7 +226,7 @@ def main():
         elif args.mode == 'recommend_bigram_pairs':
 
             # Load feature metrics from previous feature selection
-            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            metrics_file = Path(config.feature_evaluation.metrics_file)
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
@@ -253,7 +251,7 @@ def main():
             recommender.visualize_recommendations(recommended_pairs)
             
             # Save recommendations
-            output_file = Path(config['recommendations']['recommendations_file'])
+            output_file = Path(config.recommendations.recommendations_file)
             pd.DataFrame(recommended_pairs, columns=['bigram1', 'bigram2']).to_csv(
                 output_file, index=False)
             logger.info(f"Saved recommendations to {output_file}")
@@ -271,7 +269,7 @@ def main():
             train_data, test_data = load_or_create_split(dataset, config)
             
             # Load selected features
-            metrics_file = config['feature_evaluation']['metrics_file']
+            metrics_file = config.feature_evaluation.metrics_file
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
             
@@ -300,7 +298,7 @@ def main():
         #---------------------------------
         elif args.mode == 'predict_bigram_scores':
             # Load feature metrics and selected features
-            metrics_file = Path(config['feature_evaluation']['metrics_file'])
+            metrics_file = Path(config.feature_evaluation.metrics_file)
             if not metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
                     
@@ -313,7 +311,7 @@ def main():
             model.fit(dataset, features=selected_features)
 
             # Generate all possible bigrams
-            layout_chars = config['data']['layout']['chars']
+            layout_chars = config.data.layout['chars']
             all_bigrams = []
             for char1 in layout_chars:
                 for char2 in layout_chars:
@@ -332,7 +330,7 @@ def main():
                 })
 
             # Save results
-            output_file = Path(config['data']['output_dir']) / 'bigram_comfort_scores.csv'
+            output_file = Path(config.data.output_dir) / 'bigram_comfort_scores.csv'
             pd.DataFrame(results).to_csv(output_file, index=False)
             logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {output_file}")
 
