@@ -50,6 +50,10 @@ class FeatureImportanceCalculator:
             feature_selection_config = config.feature_selection.dict()
 
         self.config = FeatureSelectionConfig(**feature_selection_config)
+        
+        # Initialize metric cache
+        from engram3.utils.caching import CacheManager
+        self.metric_cache = CacheManager(max_size=10000)  # Adjust size as needed
 
     def __del__(self):
         """Ensure cache is cleared on deletion."""
@@ -287,31 +291,18 @@ class FeatureImportanceCalculator:
             logger.error(f"Error calculating inclusion probability: {str(e)}")
             return 0.0
         
-    def _calculate_correlation(self, 
-                             feature_diffs: Union[str, np.ndarray],
-                             preferences: Union[PreferenceDataset, np.ndarray]) -> float:
-        """
-        Calculate correlation between feature and preferences.
-        
-        Args:
-            feature_diffs: Either feature name or pre-computed differences
-            preferences: Either dataset or pre-computed preferences
-            
-        Returns:
-            Spearman correlation coefficient
-        """
+    def _calculate_correlation(self, feature_diffs: np.ndarray, preferences: np.ndarray) -> float:
+        """Calculate correlation handling constant inputs."""
         try:
-            # Handle different input types
-            if isinstance(feature_diffs, str) and isinstance(preferences, PreferenceDataset):
-                # Use consolidated extraction method
-                feature_diffs, preferences = self._extract_feature_differences(feature_diffs, preferences)
+            # Check for constant inputs
+            if len(set(feature_diffs)) <= 1 or len(set(preferences)) <= 1:
+                logger.debug(f"Constant input detected for correlation calculation")
+                return 0.0
                 
-            # Calculate correlation
             correlation, _ = spearmanr(feature_diffs, preferences)
             return float(correlation) if not np.isnan(correlation) else 0.0
-            
         except Exception as e:
-            logger.error(f"Error calculating correlation: {str(e)}")
+            logger.warning(f"Error calculating correlation: {str(e)}")
             return 0.0
         
     def _calculate_mutual_information(self, feature: str, dataset: 'PreferenceDataset') -> float:
@@ -356,21 +347,15 @@ class FeatureImportanceCalculator:
     def _calculate_combined_score(self, **metrics) -> float:
         """Calculate combined importance score using all metrics."""
         try:
-            required_weights = {'correlation', 'mutual_information', 'effect_magnitude', 
-                            'effect_consistency', 'inclusion_probability'}
-            weights: MetricWeights = self.config.feature_selection.metric_weights
+            weights = self.config.metric_weights  # Access directly from config
             
-            # Validate all required weights are present
-            missing = required_weights - set(weights.keys())
-            if missing:
-                raise ValueError(f"Missing required weights: {missing}")
-                
-            return (weights['correlation'] * abs(metrics['correlation']) +
-                    weights['mutual_information'] * metrics['mutual_information'] +
-                    weights['effect_magnitude'] * metrics['effect_magnitude'] +
-                    weights['effect_consistency'] * (1 - metrics['effect_consistency']) +
-                    weights['inclusion_probability'] * metrics['inclusion_probability'])
-                    
+            return (
+                weights['correlation'] * abs(metrics.get('correlation', 0.0)) +
+                weights['mutual_information'] * metrics.get('mutual_information', 0.0) +
+                weights['effect_magnitude'] * metrics.get('effect_magnitude', 0.0) +
+                weights['effect_consistency'] * (1.0 - metrics.get('effect_consistency', 0.0)) +
+                weights['inclusion_probability'] * metrics.get('inclusion_probability', 0.0)
+            )
         except Exception as e:
             logger.error(f"Error calculating combined score: {str(e)}")
             return 0.0
@@ -453,7 +438,10 @@ class FeatureImportanceCalculator:
             try:
                 value1 = pref.features1.get(feature, 0.0)
                 value2 = pref.features2.get(feature, 0.0)
-                feature_diffs.append(value1 - value2)
+                # Handle None values
+                if value1 is None or value2 is None:
+                    continue
+                feature_diffs.append(float(value1) - float(value2))
                 preferences.append(1.0 if pref.preferred else -1.0)
             except AttributeError as e:
                 logger.warning(f"Invalid preference format: {str(e)}")

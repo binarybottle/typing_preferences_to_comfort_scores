@@ -177,58 +177,229 @@ def main():
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
                     f"{len(holdout_data.preferences)} holdout preferences")
             
-            # Initialize feature selection model
-            feature_selection_model = PreferenceModel(config=config)
+            # Initialize and fit base model first
+            model = PreferenceModel(config=config)
+            model.fit(train_data, config.features.base_features)  # Fit with base features first
+            
+            # Get all possible features
+            all_features = dataset.get_feature_names()
+            logger.info(f"Evaluating {len(all_features)} total features...")
 
-            # First select features
-            selected_features = feature_selection_model.select_features(train_data)
-
-            # Then fit model with selected features 
-            feature_selection_model.fit(train_data, selected_features)
+            # Evaluate all features
+            feature_metrics = {}
+            for feature in all_features:
+                try:
+                    metrics = model.importance_calculator.evaluate_feature(
+                        feature=feature,
+                        dataset=train_data,
+                        model=model
+                    )
+                    feature_metrics[feature] = metrics
+                except Exception as e:
+                    logger.warning(f"Error evaluating feature {feature}: {str(e)}")
+                    feature_metrics[feature] = model.importance_calculator._get_default_metrics()
+                    
+            # Then select features
+            selected_features = model.select_features(train_data)
+            
+            # Fit model with selected features
+            model.fit(train_data, selected_features)
 
             # Save the trained model
-            selection_model_save_path = Path(config.feature_selection.model_file)
-            feature_selection_model.save(selection_model_save_path)
+            model_save_path = Path(config.feature_selection.model_file)
+            model.save(model_save_path)
+
+            # Get feature weights for selected features
+            feature_weights = model.get_feature_weights()
             
-            # Get feature weights
-            feature_weights = feature_selection_model.get_feature_weights()
-            
-            # Create results DataFrame
+            # Create comprehensive results DataFrame
             results = []
-            for feature, (weight, std) in feature_weights.items():
+            for feature in all_features:  # Loop through ALL features
+                metrics = feature_metrics[feature]
+                weight, std = feature_weights.get(feature, (0.0, 0.0))  # Default to 0 if not selected
+                
                 results.append({
                     'feature_name': feature,
                     'selected': 1 if feature in selected_features else 0,
+                    'importance_score': metrics.get('importance_score', 0.0),
+                    'correlation': metrics.get('correlation', 0.0),
+                    'mutual_information': metrics.get('mutual_information', 0.0),
+                    'effect_magnitude': metrics.get('effect_magnitude', 0.0),
+                    'effect_consistency': metrics.get('effect_consistency', 0.0),
+                    'inclusion_probability': metrics.get('inclusion_probability', 0.0),
+                    'p_value': metrics.get('p_value', 1.0),
                     'weight': weight,
                     'weight_std': std
                 })
             
-            # Save feature selection results
-            feature_metrics_file = Path(config.feature_selection.metrics_file)
-            pd.DataFrame(results).to_csv(feature_metrics_file, index=False)
-            logger.info(f"Saved feature metrics to {feature_metrics_file}")
+            # Save comprehensive feature metrics
+            metrics_file = Path(config.feature_selection.metrics_file)
+            pd.DataFrame(results).to_csv(metrics_file, index=False)
+            logger.info(f"Saved comprehensive metrics for {len(results)} features to {metrics_file}")
             
             # Print summary
-            logger.info(f"Selected features: {selected_features}")
+            logger.info(f"\nSelected {len(selected_features)} out of {len(all_features)} features:")
             for feature in selected_features:
                 weight, std = feature_weights[feature]
-                logger.info(f"{feature}: {weight:.3f} ± {std:.3f}")
+                metrics = feature_metrics[feature]
+                logger.info(f"\n{feature}:")
+                logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
+                logger.info(f"  Importance score: {metrics['importance_score']:.3f}")
+                logger.info(f"  Correlation: {metrics['correlation']:.3f}")
+                logger.info(f"  Mutual information: {metrics['mutual_information']:.3f}")
 
         #---------------------------------
         # Visualize feature space
         #---------------------------------
         if args.mode == 'visualize_feature_space':
-            logger.info("Visualize feature space...")
-    
+            logger.info("Generating feature analysis visualizations...")
+
             # Load feature selection model
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
-
-            # Generate visualizations
+            
+            # Initialize feature extraction
+            logger.info("Initializing feature extraction...")
+            feature_config = FeatureConfig(
+                column_map=column_map,
+                row_map=row_map,
+                finger_map=finger_map,
+                engram_position_values=engram_position_values,
+                row_position_values=row_position_values,
+                key_metrics=key_metrics
+            )
+            feature_extractor = FeatureExtractor(feature_config)
+            
+            # Precompute features for all possible bigrams
+            logger.info("Precomputing bigram features...")
+            all_bigrams, all_bigram_features = feature_extractor.precompute_all_features(
+                config.data.layout['chars']
+            )
+            
+            # Get feature names from first computed features
+            feature_names = list(next(iter(all_bigram_features.values())).keys())
+            
+            # Load dataset with precomputed features
+            logger.info("Loading dataset...")
+            dataset = PreferenceDataset(
+                Path(config.data.input_file),
+                feature_extractor=feature_extractor,
+                config=config,
+                precomputed_features={
+                    'all_bigrams': all_bigrams,
+                    'all_bigram_features': all_bigram_features,
+                    'feature_names': feature_names
+                }
+            )
+            
+            # Load saved feature metrics
+            metrics_file = Path(config.feature_selection.metrics_file)
+            if not metrics_file.exists():
+                raise FileNotFoundError(f"Feature metrics file not found: {metrics_file}")
+                        
+            # Load metrics and check available columns
+            metrics_df = pd.read_csv(metrics_file)
+            logger.info(f"Available columns in metrics file: {list(metrics_df.columns)}")
+            
+            # Convert metrics CSV to dictionary using actual column names
+            metrics_dict = {
+                row['feature_name']: {
+                    'weight': row['weight'],
+                    'weight_std': row['weight_std'],
+                    'selected': row['selected'] == 1
+                }
+                for _, row in metrics_df.iterrows()
+            }
+            
+            available_plots = []
+            
             if feature_selection_model.feature_visualizer:
-                fig = feature_selection_model.feature_visualizer.plot_feature_space(feature_selection_model, train_data, "Feature Space")
-                fig.savefig(Path(config.paths.plots_dir) / 'feature_space.png')
+                # 1. PCA Feature Space Plot
+                fig_pca = feature_selection_model.feature_visualizer.plot_feature_space(
+                    feature_selection_model, dataset, "Feature Space")
+                fig_pca.savefig(Path(config.paths.plots_dir) / 'feature_space_pca.png')
                 plt.close()
+                available_plots.append('feature_space_pca.png')
+
+                # 2. Feature Impacts Plot
+                fig_impacts = plt.figure(figsize=(12, 6))
+                ax = fig_impacts.add_subplot(111)
+
+                # Sort features by absolute weight value
+                sorted_features = sorted(
+                    [(name, d['weight'], d['weight_std'], d['selected']) 
+                    for name, d in metrics_dict.items()],
+                    key=lambda x: abs(x[1]),  # Sort by absolute weight
+                    reverse=True
+                )
+                
+                features = [f for f, _, _, _ in sorted_features]
+                weights = [w for _, w, _, _ in sorted_features]
+                stds = [s for _, _, s, _ in sorted_features]
+                selected = [s for _, _, _, s in sorted_features]
+                
+                # Plot horizontal bar chart with error bars
+                y_pos = np.arange(len(features))
+                bars = ax.barh(y_pos, weights, xerr=stds, 
+                            alpha=0.6, capsize=5,
+                            color=['blue' if s else 'lightgray' for s in selected])
+                
+                # Customize plot
+                ax.set_yticks(y_pos)
+                ax.set_yticklabels(features)
+                ax.set_xlabel('Feature Weight')
+                ax.set_title('Feature Impact Analysis\n(blue = selected features)')
+                ax.grid(True, alpha=0.3)
+                ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
+                
+                plt.tight_layout()
+                fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts.png')
+                plt.close()
+                available_plots.append('feature_impacts.png')
+                
+                # 3. Feature Impacts Plot
+                # Get feature weights from trained model
+                feature_weights = feature_selection_model.get_feature_weights()
+
+                if feature_weights:
+                    # Create figure for feature impacts
+                    fig_impacts = plt.figure(figsize=(12, 6))
+                    ax = fig_impacts.add_subplot(111)
+
+                    # Sort features by absolute weight value
+                    sorted_features = sorted(
+                        feature_weights.items(), 
+                        key=lambda x: abs(x[1][0]),  # Sort by absolute mean weight
+                        reverse=True
+                    )
+                    
+                    features = [f for f, _ in sorted_features]
+                    means = [w[0] for _, w in sorted_features]
+                    stds = [w[1] for _, w in sorted_features]
+                    
+                    # Plot horizontal bar chart with error bars
+                    y_pos = np.arange(len(features))
+                    ax.barh(y_pos, means, xerr=stds, 
+                            alpha=0.6, capsize=5,
+                            color=['blue' if m > 0 else 'red' for m in means])
+                    
+                    # Customize plot
+                    ax.set_yticks(y_pos)
+                    ax.set_yticklabels(features)
+                    ax.set_xlabel('Feature Weight')
+                    ax.set_title('Feature Impact Analysis')
+                    ax.grid(True, alpha=0.3)
+                    
+                    # Add vertical line at x=0 for reference
+                    ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
+                    
+                    # Adjust layout and save
+                    plt.tight_layout()
+                    fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts.png')
+                    plt.close()
+                    available_plots.append('feature_impacts.png')
+
+            logger.info(f"Generated the following plots: {', '.join(available_plots)}")
             
         #---------------------------------
         # Recommend bigram pairs

@@ -1024,8 +1024,8 @@ class PreferenceModel:
         try:
             if hasattr(self.fit_result, 'diagnose'):
                 diagnostic_info = self.fit_result.diagnose()
-                logger.info("Diagnostic Information:")
-                logger.info(diagnostic_info)
+                logger.debug("Diagnostic Information:")
+                logger.debug(diagnostic_info)
             
             summary = self.fit_result.summary()
             rhat_col = next((col for col in summary.columns 

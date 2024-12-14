@@ -1,4 +1,24 @@
 # engram3/config.py
+"""
+Configuration management and data structures for the keyboard preference system.
+
+Provides:
+  - Type-safe configuration validation using Pydantic
+  - Data structures for preferences and features
+  - Configuration classes for:
+    - Feature selection and weighting
+    - Model parameters and validation
+    - Data loading and processing
+    - Path management
+    - Logging settings
+
+All configuration classes include validation rules to ensure:
+  - Required fields are present
+  - Numeric ranges are valid
+  - Weights sum to 1.0
+  - Paths exist and are writable
+  - Proper data types and formats
+"""
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, TypedDict, NamedTuple
 from pathlib import Path
@@ -101,6 +121,8 @@ class ModelSettings(BaseModel):
     max_treedepth: int = Field(gt=0)
     feature_scale: float = Field(gt=0)
     participant_scale: float = Field(gt=0)
+    predictions_file: str
+    model_file: str
 
 #------------------------------------------------
 # feature_visualization.py
@@ -205,6 +227,7 @@ class FeatureSelectionSettings(BaseModel):
     interaction_testing: InteractionTestingConfig
     metric_weights: Dict[str, float]
     metrics_file: str
+    model_file: str
 
 class FeaturesConfig(BaseModel):
     """Features configuration."""

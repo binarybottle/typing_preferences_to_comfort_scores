@@ -1,25 +1,32 @@
 # engram3/features/feature_visualization.py
 """
-Visualization module for feature metrics and model analysis.
+Visualization module for analyzing feature selection and importance.
 
-Provides comprehensive visualization capabilities including:
-  - Feature importance metrics visualization
-  - PCA-based feature space exploration
-  - Feature selection process tracking
-  - Model performance monitoring
-  - Feature correlation analysis
-  - Effect size visualization
-  - Uncertainty quantification plots
-  - Detailed metric reports generation
+Provides visualizations focused on feature analysis:
+  - Feature comparison plots:
+    - Selected vs unselected features
+    - Feature importance scores
+    - Feature weight distributions
+    - Effect sizes with uncertainties
+    
+  - Feature relationship analysis:
+    - Correlation vs mutual information scatter
+    - Feature interaction heatmaps
+    - PCA-based feature space projection
+    - Hierarchical clustering of features
+    
+  - Selection process insights:
+    - Feature stability across iterations
+    - Cumulative importance curves
+    - Selection threshold adaptation
+    - Cross-validation performance
 
-Supports analysis workflow through:
-  - Interactive plotting interfaces
-  - Configurable output formats
-  - Multiple visualization perspectives
-  - Temporal evolution tracking
-  - Component-wise breakdowns
-  - Statistical summaries
-  - Export functionality for reports
+Supports decision making through:
+  - Clear visual comparisons of feature importance
+  - Uncertainty quantification in selections
+  - Feature redundancy identification
+  - Selection stability assessment
+  - Automated report generation
 """
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
@@ -143,53 +150,48 @@ class FeatureMetricsVisualizer:
         return fig
     
     def plot_feature_space(self, model: 'PreferenceModel', dataset: 'PreferenceDataset', title: str = "Feature Space") -> Figure:
-        """Plot 2D PCA of feature space with comfort scores."""
+        """Plot 2D feature space with improved point distribution and label handling."""
         feature_vectors = []
         bigram_labels = []
-        valid_indices = []
-        
-        # Extract features and handle NaN values
-        for i, pref in enumerate(dataset.preferences):
+        unique_bigrams = set()  # Track unique bigrams
+
+        # Extract features and handle duplicates
+        for pref in dataset.preferences:
             try:
-                # Get feature vectors and handle NaN values
                 feat1 = [pref.features1.get(f, 0.0) for f in model.selected_features]
                 feat2 = [pref.features2.get(f, 0.0) for f in model.selected_features]
                 
-                # Check for NaN values
-                if any(pd.isna(v) for v in feat1) or any(pd.isna(v) for v in feat2):
-                    continue
+                # Only add if bigram not seen before
+                if pref.bigram1 not in unique_bigrams:
+                    feature_vectors.append(feat1)
+                    bigram_labels.append(pref.bigram1)
+                    unique_bigrams.add(pref.bigram1)
+                if pref.bigram2 not in unique_bigrams:
+                    feature_vectors.append(feat2)
+                    bigram_labels.append(pref.bigram2)
+                    unique_bigrams.add(pref.bigram2)
                     
-                feature_vectors.extend([feat1, feat2])
-                bigram_labels.extend([pref.bigram1, pref.bigram2])
-                valid_indices.append(i)
-                
             except Exception as e:
                 logger.warning(f"Skipping preference due to feature error: {e}")
                 continue
 
-        if not feature_vectors:
-            raise ValueError("No valid feature vectors after filtering")
-
-        # Convert to numpy array and standardize features
         X = np.array(feature_vectors)
         
-        # Additional NaN check
-        if np.any(np.isnan(X)):
-            logger.warning(f"Found {np.sum(np.isnan(X))} NaN values after conversion")
-            # Replace NaN with 0
-            X = np.nan_to_num(X, nan=0.0)
+        # Apply transformation to spread out the points
+        # Option 1: Log transform (adding small constant to handle zeros)
+        X_transformed = np.sign(X) * np.log1p(np.abs(X) + 1e-10)
         
-        # Standardize features
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
+        # Option 2: Rank transform (more uniform distribution)
+        # from sklearn.preprocessing import QuantileTransformer
+        # transformer = QuantileTransformer(output_distribution='normal')
+        # X_transformed = transformer.fit_transform(X)
+        
+        # Standardize
+        X_transformed = StandardScaler().fit_transform(X_transformed)
         
         # Fit PCA
         pca = PCA(n_components=2)
-        X_2d = pca.fit_transform(X)
-        
-        # Calculate explained variance
-        var1 = pca.explained_variance_ratio_[0] * 100
-        var2 = pca.explained_variance_ratio_[1] * 100
+        X_2d = pca.fit_transform(X_transformed)
         
         # Create figure
         fig, ax = plt.subplots(figsize=self.figure_size)
@@ -199,56 +201,51 @@ class FeatureMetricsVisualizer:
                             c='lightblue', s=100, alpha=self.alpha,
                             edgecolor='darkblue')
         
-        # Add labels with offset
+        # Smart label placement to avoid overlaps
+        from adjustText import adjust_text
+        texts = []
+        
+        # Add labels with collision avoidance
         for i, label in enumerate(bigram_labels):
-            offset = 0.02 * (max(X_2d[:, 0]) - min(X_2d[:, 0]))
-            ax.annotate(label, 
-                    (X_2d[i, 0] + offset, X_2d[i, 1] + offset),
-                    fontsize=8,
-                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+            texts.append(ax.text(X_2d[i, 0], X_2d[i, 1], label,
+                            fontsize=8, alpha=0.7))
+        
+        # Adjust label positions to avoid overlaps
+        adjust_text(texts, 
+                arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5),
+                expand_points=(1.5, 1.5))
         
         # Add edges for paired bigrams
-        for i in range(0, len(bigram_labels), 2):
-            # Create curved line between points
-            mid_point = [(X_2d[i, 0] + X_2d[i+1, 0])/2,
-                        (X_2d[i, 1] + X_2d[i+1, 1])/2]
-            # Add some curvature
-            mid_point[1] += 0.05 * (max(X_2d[:, 1]) - min(X_2d[:, 1]))
-            
-            curve = plt.matplotlib.patches.ConnectionPatch(
-                xyA=(X_2d[i, 0], X_2d[i, 1]),
-                xyB=(X_2d[i+1, 0], X_2d[i+1, 1]),
-                coordsA="data", coordsB="data",
-                axesA=ax, axesB=ax,
-                color='gray', alpha=0.3,
-                connectionstyle="arc3,rad=0.2")
-            ax.add_patch(curve)
-        
-        # Set labels and title
+        processed_pairs = set()
+        for pref in dataset.preferences:
+            pair = (pref.bigram1, pref.bigram2)
+            if pair not in processed_pairs:
+                # Find indices of the bigrams
+                try:
+                    idx1 = bigram_labels.index(pref.bigram1)
+                    idx2 = bigram_labels.index(pref.bigram2)
+                    
+                    # Create curved line between points
+                    curve = plt.matplotlib.patches.ConnectionPatch(
+                        xyA=(X_2d[idx1, 0], X_2d[idx1, 1]),
+                        xyB=(X_2d[idx2, 0], X_2d[idx2, 1]),
+                        coordsA="data", coordsB="data",
+                        axesA=ax, axesB=ax,
+                        color='gray', alpha=0.2,
+                        connectionstyle="arc3,rad=0.2")
+                    ax.add_patch(curve)
+                    processed_pairs.add(pair)
+                except ValueError:
+                    continue
+
+        # Customize plot
+        var1, var2 = pca.explained_variance_ratio_ * 100
         ax.set_xlabel(f'PC1 ({var1:.1f}% variance)')
         ax.set_ylabel(f'PC2 ({var2:.1f}% variance)')
-        ax.set_title(title)
-        
-        # Add grid
+        ax.set_title(f"{title}\n{len(unique_bigrams)} unique bigrams")
         ax.grid(True, alpha=0.3)
         
-        # Add some padding to the limits
-        xlim = ax.get_xlim()
-        ylim = ax.get_ylim()
-        padding = 0.1
-        ax.set_xlim(xlim[0] - padding * (xlim[1] - xlim[0]),
-                    xlim[1] + padding * (xlim[1] - xlim[0]))
-        ax.set_ylim(ylim[0] - padding * (ylim[1] - ylim[0]),
-                    ylim[1] + padding * (ylim[1] - ylim[0]))
-        
         plt.tight_layout()
-        
-        # Log summary
-        logger.info(f"\nFeature space visualization:")
-        logger.info(f"  Total preferences: {len(dataset.preferences)}")
-        logger.info(f"  Valid preferences: {len(valid_indices)}")
-        logger.info(f"  Features used: {len(model.selected_features)}")
-        logger.info(f"  Variance explained: {var1 + var2:.1f}%")
         
         return fig
 

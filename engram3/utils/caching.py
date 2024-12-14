@@ -1,5 +1,21 @@
 # engram3/utils/caching.py
+"""
+Generic caching utility for managing computation results.
 
+Provides efficient caching with:
+  - LRU (Least Recently Used) eviction policy
+  - Configurable size limits
+  - Cache hit/miss statistics
+  - Pattern-based cache clearing
+  - Type-safe generic implementation
+  - Automatic resource cleanup
+
+Used throughout the system to cache:
+  - Feature computations
+  - Model predictions
+  - Interaction calculations
+  - Metric results
+"""
 from typing import Dict, Generic, TypeVar, Optional, Any, List
 from collections import OrderedDict
 
@@ -14,7 +30,6 @@ class CacheManager(Generic[K, V]):
         K: Key type
         V: Value type
     """
-    
     def __init__(self, max_size: int = 10000):
         self.max_size = max_size
         self.hits = 0

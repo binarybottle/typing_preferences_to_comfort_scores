@@ -358,8 +358,8 @@ class BigramRecommender:
         plt.tight_layout()
         
         # Save plot
-        plt.savefig(config.paths.plots_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
-        logger.info(f"Saved plot to {config.paths.plots_dir / 'bigram_recommendations.png'}")
+        plt.savefig(self.config.paths.plots_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
+        logger.info(f"Saved plot to {self.config.paths.plots_dir / 'bigram_recommendations.png'}")
         
         plt.show()
         
