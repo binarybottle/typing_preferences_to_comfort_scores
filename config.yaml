@@ -68,6 +68,10 @@ feature_selection:
     method: "likelihood_ratio"
     minimum_effect_size: 0.1
     hierarchical: true
+  statistical_testing: 
+    mi_bins: 50 # bins for mutual information calculation (sqrt(n_samples) but <= 50)
+    n_permutations: 10000 # permutations for significance test (1000 minimum, 10000 for more precise p-values)
+    n_bootstrap: 1000 # bootstrap samples (1000 for more stable feature importance estimates)
   metric_weights:  # sum = 1
     model_effect: 0.25
     correlation: 0.15

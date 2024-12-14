@@ -38,10 +38,6 @@ logger = LoggingManager.getLogger(__name__)
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
 
-    MI_BINS: int = 20  # Number of bins for mutual information calculation
-    N_PERMUTATIONS: int = 1000  # Number of permutations for significance test
-    DEFAULT_BOOTSTRAP_SAMPLES: int = 100  # Default number of bootstrap samples
-    
     def __init__(self, config: Union[Dict, Config]):
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
@@ -51,10 +47,15 @@ class FeatureImportanceCalculator:
 
         self.config = FeatureSelectionConfig(**feature_selection_config)
         
+        # Get statistical parameters from config
+        self.mi_bins = self.config.statistical_testing.mi_bins
+        self.n_permutations = self.config.statistical_testing.n_permutations
+        self.n_bootstrap = self.config.statistical_testing.n_bootstrap
+
         # Initialize metric cache
         from engram3.utils.caching import CacheManager
-        self.metric_cache = CacheManager(max_size=10000)  # Adjust size as needed
-
+        self.metric_cache = CacheManager(max_size=10000)
+        
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'metric_cache'):
