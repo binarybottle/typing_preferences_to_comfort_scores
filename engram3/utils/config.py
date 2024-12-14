@@ -253,10 +253,9 @@ class LoggingConfig(BaseModel):
 class PathsConfig(BaseModel):
     """Path configuration."""
     root_dir: Path
-    data_dir: Path
+    metrics_dir: Path
     plots_dir: Path
     logs_dir: Path
-    metrics_dir: Path
 
     @validator('*')
     def create_directories(cls, v: Path) -> Path:

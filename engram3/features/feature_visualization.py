@@ -75,7 +75,7 @@ class FeatureMetricsVisualizer:
         self.figure_size = self.DEFAULT_FIGURE_SIZE
         self.alpha = self.DEFAULT_ALPHA
         self.color_map = 'viridis'
-        
+
     def plot_feature_metrics(self, model: 'PreferenceModel', metrics_dict: Dict[str, Dict[str, float]]) -> Figure:
         """
         Plot comprehensive feature metrics visualization.
@@ -386,7 +386,7 @@ class FeatureMetricsVisualizer:
         report_df = report_df.sort_values('Combined Score', ascending=False)
         
         # Save to CSV
-        report_df.to_csv(self.config.paths.metrics_dir / output_file, index=False)
+        report_df.to_csv(output_file, index=False)
 
     def save_iteration(self, iteration: int, model: 'PreferenceModel',
                       dataset: PreferenceDataset, metrics: Dict[str, float]):

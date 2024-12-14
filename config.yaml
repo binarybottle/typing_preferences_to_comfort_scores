@@ -17,10 +17,9 @@
 
 paths:  # New section for all path-related settings
   root_dir: "output"
-  data_dir: "output/data"
+  metrics_dir: "output/data"
   plots_dir: "output/plots"
   logs_dir: "output/logs"
-  metrics_dir: "output/metrics"
   
 # Data settings
 data:
@@ -77,7 +76,8 @@ feature_selection:
     effect_magnitude: 0.1
     effect_consistency: 0.1
     predictive_impact: 0.1
-  metrics_file: "output/feature_metrics.csv"
+  metrics_file: "output/data/feature_metrics.csv"
+  model_file: "output/data/feature_selection_model.pkl"
 
 recommendations:
   # Scoring weights for different components
@@ -92,7 +92,7 @@ recommendations:
     transitivity: 0.1
   n_recommendations: 20
   max_candidates: 1000
-  recommendations_file: "output/recommended_bigram_pairs.csv"
+  recommendations_file: "output/data/recommended_bigram_pairs.csv"
 
 model:
   chains: 2        # number of parallel chains
@@ -102,6 +102,7 @@ model:
   max_treedepth: 12     # - helps with convergence
   feature_scale: 2.0    # prior scale for feature weights
   participant_scale: 1.0 # prior scale for participant effects
+  predictions_file: "output/data/estimated_bigram_scores.csv"
 
 # Logging settings
 logging:

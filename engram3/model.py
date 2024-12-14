@@ -41,6 +41,7 @@ import pandas as pd
 from pydantic import BaseModel, validator
 from dataclasses import dataclass
 import time  # Needed for computation_time in predict_preference
+import pickle
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -1305,3 +1306,31 @@ class PreferenceModel:
                 f.write(','.join(values) + '\n')
             
             logger.info(f"Saved feature metrics to {csv_file}")
+
+    def save(self, path: Path) -> None:
+        """Save model state to file."""
+        save_dict = {
+            'config': self.config,
+            'feature_names': self.feature_names,
+            'selected_features': self.selected_features,
+            'feature_weights': self.feature_weights,
+            'fit_result': self.fit_result,
+            'interaction_metadata': self.interaction_metadata
+        }
+        with open(path, 'wb') as f:
+            pickle.dump(save_dict, f)
+            
+    @classmethod
+    def load(cls, path: Path) -> 'PreferenceModel':
+        """Load model state from file."""
+        with open(path, 'rb') as f:
+            save_dict = pickle.load(f)
+            
+        model = cls(config=save_dict['config'])
+        model.feature_names = save_dict['feature_names']
+        model.selected_features = save_dict['selected_features']
+        model.feature_weights = save_dict['feature_weights']
+        model.fit_result = save_dict['fit_result']
+        model.interaction_metadata = save_dict['interaction_metadata']
+        
+        return model

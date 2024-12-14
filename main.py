@@ -115,23 +115,19 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
 def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
-    parser.add_argument('--mode', choices=['select_features', 'train_model', 'recommend_bigram_pairs'], 
+    parser.add_argument('--mode', choices=['select_features', 'visualize_feature_space', 
+                                           'train_model', 'recommend_bigram_pairs'], 
                        required=True,
                        help='Pipeline mode: feature selection, model training, or bigram recommendations')
     args = parser.parse_args()
     
     try:
-        # Load configuration
+        # Load configuration and cnvert to Pydantic model
         config_dict = load_config(args.config)
-        
-        # Convert to Pydantic model
         config = Config(**config_dict)
         
         # Setup logging using LoggingManager
         LoggingManager(config).setup_logging()        
-        
-        # Add plotting utils
-        plotting_utils = PlottingUtils(config.paths.plots_dir)
         
         # Set random seed for all operations
         np.random.seed(config.data.splits['random_seed'])
@@ -181,23 +177,21 @@ def main():
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
                     f"{len(holdout_data.preferences)} holdout preferences")
             
-            # Initialize model
-            model = PreferenceModel(config=config)
-            
+            # Initialize feature selection model
+            feature_selection_model = PreferenceModel(config=config)
+
             # First select features
-            selected_features = model.select_features(train_data)
+            selected_features = feature_selection_model.select_features(train_data)
+
+            # Then fit model with selected features 
+            feature_selection_model.fit(train_data, selected_features)
+
+            # Save the trained model
+            selection_model_save_path = Path(config.feature_selection.model_file)
+            feature_selection_model.save(selection_model_save_path)
             
-            # Then fit model with selected features
-            model.fit(train_data, selected_features)
-            
-            # Now get feature weights
-            feature_weights = model.get_feature_weights()
-            
-            # Generate visualizations
-            if model.feature_visualizer:
-                fig = model.feature_visualizer.plot_feature_space(model, train_data, "Feature Space")
-                fig.savefig(Path(config.paths.plots_dir) / 'final_feature_space.png')
-                plt.close()
+            # Get feature weights
+            feature_weights = feature_selection_model.get_feature_weights()
             
             # Create results DataFrame
             results = []
@@ -210,40 +204,55 @@ def main():
                 })
             
             # Save feature selection results
-            metrics_file = Path(config.feature_selection.metrics_file)
-            pd.DataFrame(results).to_csv(metrics_file, index=False)
-            logger.info(f"Saved feature metrics to {metrics_file}")
+            feature_metrics_file = Path(config.feature_selection.metrics_file)
+            pd.DataFrame(results).to_csv(feature_metrics_file, index=False)
+            logger.info(f"Saved feature metrics to {feature_metrics_file}")
             
             # Print summary
             logger.info(f"Selected features: {selected_features}")
             for feature in selected_features:
                 weight, std = feature_weights[feature]
                 logger.info(f"{feature}: {weight:.3f} ± {std:.3f}")
-                
+
+        #---------------------------------
+        # Visualize feature space
+        #---------------------------------
+        if args.mode == 'visualize_feature_space':
+            logger.info("Visualize feature space...")
+    
+            # Load feature selection model
+            selection_model_save_path = Path(config.feature_selection.model_file)
+            feature_selection_model = PreferenceModel.load(selection_model_save_path)
+
+            # Generate visualizations
+            if feature_selection_model.feature_visualizer:
+                fig = feature_selection_model.feature_visualizer.plot_feature_space(feature_selection_model, train_data, "Feature Space")
+                fig.savefig(Path(config.paths.plots_dir) / 'feature_space.png')
+                plt.close()
+            
         #---------------------------------
         # Recommend bigram pairs
         #---------------------------------
         elif args.mode == 'recommend_bigram_pairs':
+            logger.info("Starting recommendation of bigram pairs...")
 
             # Load feature metrics from previous feature selection
-            metrics_file = Path(config.feature_selection.metrics_file)
-            if not metrics_file.exists():
-                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
-            
-            df = pd.read_csv(metrics_file)
-            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
-            
+            feature_metrics_file = Path(config.feature_selection.metrics_file)
+            if not feature_metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
+            feature_metrics_df = pd.read_csv(feature_metrics_file)
+            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
             
             # Load trained model
-            logger.info("Loading trained model...")
-            model = PreferenceModel(config=config)
-            model.fit(dataset, features=selected_features)
-            
+            logger.info("Loading feature selection trained model...")
+            selection_model_save_path = Path(config.feature_selection.model_file)
+            feature_selection_model = PreferenceModel.load(selection_model_save_path)
+
             # Initialize recommender
             logger.info("Generating bigram pair recommendations...")
-            recommender = BigramRecommender(dataset, model, config)
+            recommender = BigramRecommender(dataset, feature_selection_model, config)
             recommended_pairs = recommender.get_recommended_pairs()
             
             # Visualize recommendations
@@ -251,10 +260,10 @@ def main():
             recommender.visualize_recommendations(recommended_pairs)
             
             # Save recommendations
-            output_file = Path(config.recommendations.recommendations_file)
+            recommendations_file = Path(config.recommendations.recommendations_file)
             pd.DataFrame(recommended_pairs, columns=['bigram1', 'bigram2']).to_csv(
-                output_file, index=False)
-            logger.info(f"Saved recommendations to {output_file}")
+                         recommendations_file, index=False)
+            logger.info(f"Saved recommendations to {recommendations_file}")
             
             # Print recommendations
             logger.info("\nRecommended bigram pairs:")
@@ -265,17 +274,17 @@ def main():
         # Train model
         #---------------------------------
         elif args.mode == 'train_model':
+            logger.info("Starting model training...")
+
             # Load train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             
-            # Load selected features
-            metrics_file = config.feature_selection.metrics_file
-            if not metrics_file.exists():
-                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
-            
-            df = pd.read_csv(metrics_file)
-            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
-            
+            # Load feature metrics from previous feature selection
+            feature_metrics_file = Path(config.feature_selection.metrics_file)
+            if not feature_metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
+            feature_metrics_df = pd.read_csv(feature_metrics_file)
+            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
             
@@ -297,13 +306,16 @@ def main():
         # Predict bigram scores
         #---------------------------------
         elif args.mode == 'predict_bigram_scores':
-            # Load feature metrics and selected features
-            metrics_file = Path(config.feature_selection.metrics_file)
-            if not metrics_file.exists():
-                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")
-                    
-            df = pd.read_csv(metrics_file)
-            selected_features = df[df['selected'] == 1]['feature_name'].tolist()
+            logger.info("Starting bigram score prediction...")
+
+            # Load feature metrics from previous feature selection
+            feature_metrics_file = Path(config.feature_selection.metrics_file)
+            if not feature_metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
+            feature_metrics_df = pd.read_csv(feature_metrics_file)
+            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
+            if not selected_features:
+                raise ValueError("No features were selected in feature selection phase")
 
             # Ensure model is trained
             logger.info(f"Loading trained model with {len(selected_features)} features...")
@@ -330,9 +342,9 @@ def main():
                 })
 
             # Save results
-            output_file = Path(config.paths.metrics_dir) / 'bigram_comfort_scores.csv'
-            pd.DataFrame(results).to_csv(output_file, index=False)
-            logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {output_file}")
+            bigram_scores_file = Path(config.model.predictions_file)
+            pd.DataFrame(results).to_csv(bigram_scores_file, index=False)
+            logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {bigram_scores_file}")
 
             # Generate summary statistics and visualizations
             df = pd.DataFrame(results)
@@ -341,7 +353,6 @@ def main():
             logger.info(f"Score range: {df['comfort_score'].min():.3f} to {df['comfort_score'].max():.3f}")
             logger.info(f"Mean uncertainty: {df['uncertainty'].mean():.3f}")
 
-            
         logger.info("Pipeline completed successfully")
         
     except Exception as e:
