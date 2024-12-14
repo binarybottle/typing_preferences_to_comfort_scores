@@ -15,13 +15,19 @@
 #   - logging: System logging configuration
 #   - recommendations: Bigram recommendation settings
 
+paths:  # New section for all path-related settings
+  root_dir: "output"
+  data_dir: "output/data"
+  plots_dir: "output/plots"
+  logs_dir: "output/logs"
+  metrics_dir: "output/metrics"
+  
 # Data settings
 data:
   #input_file: "data/input/processed_output_all4studies_303of406participants_0inconsistencies_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #input_file: "data/input/processed_output_all4studies_303of406participants_with_no_improbable/tables/processed_data/processed_bigram_data.csv"
   #input_file: "data/input/processed_output_all4studies_406participants_0inconsistencies/tables/processed_data/processed_bigram_data.csv"
   input_file: "data/input/processed_output_all4studies_406participants/tables/processed_data/processed_bigram_data.csv"
-  output_dir: "output"
 
   splits:
     test_ratio: 0.2
@@ -32,9 +38,8 @@ data:
   layout:
     chars: ['q', 'w', 'e', 'r', 't', 'a', 's', 'd', 'f', 'g', 'z', 'x', 'c', 'v', 'b']
 
-  visualization:
-    output_dir: "output/plots"
-    dpi: 300
+visualization:
+  dpi: 300
 
 # Feature settings
 features:
@@ -85,17 +90,16 @@ recommendations:
     stability: 0.1
     interaction_testing: 0.1
     transitivity: 0.1
-  # Output settings
   n_recommendations: 20
   max_candidates: 1000
   recommendations_file: "output/recommended_bigram_pairs.csv"
 
 model:
-  chains: 1        # number of parallel chains
-  warmup: 10     # warmup/adaptation samples per chain
-  samples: 10    # post-warmup samples per chain
-  adapt_delta: 0.7 #0.95     # - helps with divergent transitions
-  max_treedepth: 3 #12     # - helps with convergence
+  chains: 2        # number of parallel chains
+  warmup: 100     # warmup/adaptation samples per chain
+  samples: 100    # post-warmup samples per chain
+  adapt_delta: 0.95     # - helps with divergent transitions
+  max_treedepth: 12     # - helps with convergence
   feature_scale: 2.0    # prior scale for feature weights
   participant_scale: 1.0 # prior scale for participant effects
 

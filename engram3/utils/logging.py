@@ -28,49 +28,49 @@ class LoggingManager:
         return logging.getLogger(name)
 
     def setup_logging(self) -> None:
-            """Initialize and configure logging system."""
-            try:
-                # Get logging config
-                if hasattr(self.config, 'logging'):
-                    logging_config = self.config.logging
-                else:
-                    logging_config = self.config.get('logging', {})
-                
-                # Create log directory
-                log_dir = Path(logging_config.output_file).parent
-                log_dir.mkdir(parents=True, exist_ok=True)
+        """Initialize and configure logging system."""
+        try:
+            # Get logging config
+            if hasattr(self.config, 'logging'):
+                logging_config = self.config.logging
+            else:
+                logging_config = self.config.get('logging', {})
+            
+            # Create log directory
+            log_dir = Path(logging_config.output_file).parent
+            log_dir.mkdir(parents=True, exist_ok=True)
 
-                # Configure root logger
-                root_logger = logging.getLogger()
-                root_logger.setLevel(logging.DEBUG)  # Set to lowest level to capture everything
-                
-                # Clear any existing handlers
-                root_logger.handlers.clear()
+            # Configure root logger
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.DEBUG)  # Set to lowest level to capture everything
+            
+            # Clear any existing handlers
+            root_logger.handlers.clear()
 
-                # File handler - captures everything
-                file_handler = logging.FileHandler(logging_config.output_file)
-                file_handler.setLevel(getattr(logging, logging_config.file_level))
-                file_handler.setFormatter(logging.Formatter(logging_config.format))
-                root_logger.addHandler(file_handler)
+            # File handler - captures everything
+            file_handler = logging.FileHandler(logging_config.output_file)
+            file_handler.setLevel(getattr(logging, logging_config.file_level))
+            file_handler.setFormatter(logging.Formatter(logging_config.format))
+            root_logger.addHandler(file_handler)
 
-                # Console handler - only shows INFO and above by default
-                console_handler = logging.StreamHandler()
-                console_handler.setLevel(getattr(logging, logging_config.console_level))
-                console_handler.setFormatter(logging.Formatter(logging_config.format))
-                root_logger.addHandler(console_handler)
+            # Console handler - only shows INFO and above by default
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(getattr(logging, logging_config.console_level))
+            console_handler.setFormatter(logging.Formatter(logging_config.format))
+            root_logger.addHandler(console_handler)
 
-                logger = logging.getLogger(__name__)
-                logger.info("Logging initialized")
-                logger.debug("Debug logging enabled")  # This should only go to file
+            logger = logging.getLogger(__name__)
+            logger.info("Logging initialized")
+            logger.debug("Debug logging enabled")  # This should only go to file
 
-            except Exception as e:
-                # Fallback to basic configuration if there's an error
-                logging.basicConfig(
-                    level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-                logger = logging.getLogger(__name__)
-                logger.error(f"Error setting up logging: {str(e)}")
+        except Exception as e:
+            # Fallback to basic configuration if there's an error
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error setting up logging: {str(e)}")
                 
     def _create_console_handler(self) -> logging.Handler:
         """Create console handler with standard formatting."""

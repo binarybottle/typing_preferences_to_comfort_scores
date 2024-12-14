@@ -9,16 +9,20 @@ Provides standardized plotting functionality with:
   - Figure saving utilities
 """
 import matplotlib.pyplot as plt
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from pathlib import Path
 
 class PlottingUtils:
     """Centralized plotting utilities with common setup and styling."""
     
-    def __init__(self, output_dir: str, style: str = 'default'):
-        self.output_dir = Path(output_dir)
+    def __init__(self, plots_dir: Union[str, Path]):
+        """Initialize PlottingUtils.
+        
+        Args:
+            plots_dir: Directory path for saving plots
+        """
+        self.output_dir = Path(plots_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        plt.style.use(style)
         
     def setup_axis(self, ax: plt.Axes, 
                    title: Optional[str] = None,
@@ -54,6 +58,6 @@ class PlottingUtils:
                     dpi: int = 300,
                     bbox_inches: str = 'tight') -> None:
         """Save figure with standard settings."""
-        filepath = self.output_dir / filename
+        filepath = self.config.paths.plots_dir / filename
         fig.savefig(filepath, dpi=dpi, bbox_inches=bbox_inches)
         plt.close(fig)

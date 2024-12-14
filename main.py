@@ -131,7 +131,7 @@ def main():
         LoggingManager(config).setup_logging()        
         
         # Add plotting utils
-        plotting_utils = PlottingUtils(config.data.visualization.output_dir)
+        plotting_utils = PlottingUtils(config.paths.plots_dir)
         
         # Set random seed for all operations
         np.random.seed(config.data.splits['random_seed'])
@@ -196,7 +196,7 @@ def main():
             # Generate visualizations
             if model.feature_visualizer:
                 fig = model.feature_visualizer.plot_feature_space(model, train_data, "Feature Space")
-                fig.savefig(Path(config.data.output_dir) / 'final_feature_space.png')
+                fig.savefig(Path(config.paths.plots_dir) / 'final_feature_space.png')
                 plt.close()
             
             # Create results DataFrame
@@ -330,7 +330,7 @@ def main():
                 })
 
             # Save results
-            output_file = Path(config.data.output_dir) / 'bigram_comfort_scores.csv'
+            output_file = Path(config.paths.metrics_dir) / 'bigram_comfort_scores.csv'
             pd.DataFrame(results).to_csv(output_file, index=False)
             logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {output_file}")
 

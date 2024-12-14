@@ -8,7 +8,7 @@ Implements BigramRecommender class which:
 - Exports detailed recommendation data
 """
 from pathlib import Path
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Union
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import random
 
-from engram3.utils.config import RecommendationsConfig
+from engram3.utils.config import Config, RecommendationsConfig
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
 from engram3.features.feature_extraction import FeatureExtractor
@@ -25,18 +25,41 @@ from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 class BigramRecommender:
-    def __init__(self, dataset: PreferenceDataset, model: PreferenceModel, config: Dict):
-        self.config = config
+
+    def __init__(self, dataset: PreferenceDataset, model: PreferenceModel, config: Union[Dict, Config]):
+        """Initialize BigramRecommender.
+        
+        Args:
+            dataset: Dataset containing preferences
+            model: Trained preference model
+            config: Configuration object or dictionary
+        """
+        # Handle config
+        if isinstance(config, dict):
+            self.config = Config(**config)
+        elif isinstance(config, Config):
+            self.config = config
+        else:
+            raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
+
+        # Store basic attributes
         self.dataset = dataset
         self.model = model
         self.feature_extractor = model.feature_extractor
         self.selected_features = list(model.get_feature_weights().keys())
+        
+        # Get configuration values
         self.n_recommendations = config.recommendations.n_recommendations
+        self.max_candidates = config.recommendations.max_candidates
+        self.weights = config.recommendations.weights
+        
+        # Set up paths and utilities
+        self.output_dir = Path(config.paths.plots_dir)
+        self.layout_chars = config.data.layout["chars"]
+        
+        # Initialize components
         self.importance_calculator = model.importance_calculator
-        self.plotting = PlottingUtils(config.data.visualization.output_dir)
-        self.layout_chars = config.data.layout['chars']
-        self.output_dir = Path(config.data.output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.plotting = PlottingUtils(config.paths.plots_dir)
 
     def get_recommended_pairs(self) -> List[Tuple[str, str]]:
         """
@@ -335,10 +358,8 @@ class BigramRecommender:
         plt.tight_layout()
         
         # Save plot
-        output_dir = Path(self.config.data.output_dir) / 'plots'
-        output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
-        logger.info(f"Saved plot to {output_dir / 'bigram_recommendations.png'}")
+        plt.savefig(config.paths.plots_dir / 'bigram_recommendations.png', dpi=300, bbox_inches='tight')
+        logger.info(f"Saved plot to {config.paths.plots_dir / 'bigram_recommendations.png'}")
         
         plt.show()
         
@@ -523,10 +544,7 @@ class BigramRecommender:
             return 0.0
                         
     def _generate_candidate_pairs(self) -> List[Tuple[str, str]]:
-        """
-        Generate all possible bigram pairs from layout characters.
-        Excludes pairs that already exist in the dataset.
-        """
+        """Generate all possible bigram pairs from layout characters."""
         # Get existing pairs
         existing_pairs = set()
         for pref in self.dataset.preferences:
@@ -552,16 +570,16 @@ class BigramRecommender:
                 candidate_pairs.append(pair)
                 
         logger.info(f"Generated {len(candidate_pairs)} candidate pairs "
-                f"from {len(self.layout_chars)} characters")
+                    f"from {len(self.layout_chars)} characters")
         
-        # Optionally limit number of candidates for computational efficiency
-        max_candidates = getattr(self.config, 'recommendations', {}).get('max_candidates', 1000)
+        # Optionally limit number of candidates
+        max_candidates = self.config.max_candidates  # Direct attribute access
         if len(candidate_pairs) > max_candidates:
             logger.info(f"Randomly sampling {max_candidates} candidates")
             candidate_pairs = random.sample(candidate_pairs, max_candidates)
             
         return candidate_pairs
-    
+
     def _build_preference_graph(self) -> Dict[str, Set[str]]:
         """Build graph of existing preferences."""
         pref_graph = {}
@@ -620,15 +638,12 @@ class BigramRecommender:
         ])
         
         # Save to output files
-        base_dir = self.output_dir / 'recommendations'
-        base_dir.mkdir(exist_ok=True)
-        
-        scores_df.to_csv(base_dir / 'detailed_scores.csv', index=False)
+        scores_df.to_csv(self.config.paths.root_dir / 'detailed_scores.csv', index=False)
         
         # Simple pair list for backward compatibility
         pd.DataFrame([
             {'bigram1': pair[0], 'bigram2': pair[1]}
             for pair, _, _ in scored_pairs[:self.n_recommendations]
-        ]).to_csv(self.config.recommendations['recommendations_file'], index=False)
+        ]).to_csv(self.config.recommendations.recommendations_file, index=False)
 
     

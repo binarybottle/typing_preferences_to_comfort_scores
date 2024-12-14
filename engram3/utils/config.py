@@ -91,7 +91,7 @@ class MetricWeights(TypedDict):
     effect_magnitude: float
     effect_consistency: float
     inclusion_probability: float
-    
+
 class ModelSettings(BaseModel):
     """Model configuration with validation."""
     chains: int = Field(gt=0)
@@ -106,9 +106,8 @@ class ModelSettings(BaseModel):
 # feature_visualization.py
 #------------------------------------------------
 class VisualizationConfig(BaseModel):
-    """Visualization configuration."""
-    dpi: int = Field(default=300, gt=0)
-    output_dir: Path
+    """Visualization settings."""
+    dpi: int = 300
 
 @dataclass
 class VisualizationSettings:
@@ -215,10 +214,8 @@ class FeaturesConfig(BaseModel):
 class DataConfig(BaseModel):
     """Data configuration."""
     input_file: str
-    output_dir: str
     splits: Dict[str, Any]
     layout: Dict[str, List[str]]
-    visualization: VisualizationConfig
 
 class RecommendationsConfig(BaseModel):
     """Recommendations configuration."""
@@ -227,6 +224,25 @@ class RecommendationsConfig(BaseModel):
     max_candidates: int = Field(gt=0)
     recommendations_file: str
 
+    @validator('weights')
+    def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
+        total = sum(v.values())
+        if not np.isclose(total, 1.0, rtol=1e-5):
+            raise ValueError(f"Recommendation weights must sum to 1.0, got {total}")
+        return v
+
+    @validator('max_candidates')
+    def max_candidates_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("max_candidates must be positive")
+        return v
+
+    @validator('n_recommendations')
+    def n_recommendations_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("n_recommendations must be positive")
+        return v
+
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     format: str
@@ -234,12 +250,29 @@ class LoggingConfig(BaseModel):
     console_level: str = Field(pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
     file_level: str = Field(pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
+class PathsConfig(BaseModel):
+    """Path configuration."""
+    root_dir: Path
+    data_dir: Path
+    plots_dir: Path
+    logs_dir: Path
+    metrics_dir: Path
+
+    @validator('*')
+    def create_directories(cls, v: Path) -> Path:
+        v.mkdir(parents=True, exist_ok=True)
+        return v
+
 class Config(BaseModel):
     """Complete configuration with nested validation."""
+    paths: PathsConfig
     model: ModelSettings
     feature_selection: FeatureSelectionSettings
     features: FeaturesConfig
     data: DataConfig
     recommendations: RecommendationsConfig
     logging: LoggingConfig
+    visualization: VisualizationConfig
 
+    class Config:
+        arbitrary_types_allowed = True

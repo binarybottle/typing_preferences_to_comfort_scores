@@ -50,7 +50,7 @@ class FeatureMetricsVisualizer:
     DEFAULT_FIGURE_SIZE = (12, 8)
     DEFAULT_DPI = 300
     DEFAULT_ALPHA = 0.6
-    MI_BINS = 20  # For mutual information calculation
+    MI_BINS = 20
 
     def __init__(self, config: Union[Dict, Config]):
         """
@@ -59,7 +59,6 @@ class FeatureMetricsVisualizer:
         Args:
             config: Configuration dictionary or Config object
         """
-        # Handle both dict and Config inputs
         if isinstance(config, dict):
             self.config = Config(**config)
         elif isinstance(config, Config):
@@ -67,16 +66,16 @@ class FeatureMetricsVisualizer:
         else:
             raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
 
-        # Get visualization settings with defaults
-        self.dpi = self.config.data.visualization.dpi
-        self.output_dir = Path(self.config.data.visualization.output_dir)
+        # Use root-level visualization settings
+        self.dpi = self.config.visualization.dpi
+        self.output_dir = Path(self.config.paths.plots_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Set other visualization parameters
         self.figure_size = self.DEFAULT_FIGURE_SIZE
         self.alpha = self.DEFAULT_ALPHA
         self.color_map = 'viridis'
-
+        
     def plot_feature_metrics(self, model: 'PreferenceModel', metrics_dict: Dict[str, Dict[str, float]]) -> Figure:
         """
         Plot comprehensive feature metrics visualization.
@@ -387,7 +386,7 @@ class FeatureMetricsVisualizer:
         report_df = report_df.sort_values('Combined Score', ascending=False)
         
         # Save to CSV
-        report_df.to_csv(self.output_dir / output_file, index=False)
+        report_df.to_csv(self.config.paths.metrics_dir / output_file, index=False)
 
     def save_iteration(self, iteration: int, model: 'PreferenceModel',
                       dataset: PreferenceDataset, metrics: Dict[str, float]):

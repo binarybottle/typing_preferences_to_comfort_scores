@@ -114,7 +114,7 @@ class PreferenceModel:
         self.importance_calculator = FeatureImportanceCalculator(self.config)
         self.feature_cache: CacheManager[str, Dict[str, float]] = CacheManager()
         self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
-        self.plotting = PlottingUtils(self.config.data.visualization.output_dir)
+        self.plotting = PlottingUtils(config.paths.plots_dir)
         self.feature_visualizer = FeatureMetricsVisualizer(self.config)  # Pass self.config, not config
 
     # Property decorators
