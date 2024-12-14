@@ -172,6 +172,21 @@ def main():
         if args.mode == 'select_features':
             logger.info("Starting feature selection...")
 
+            # Get base features
+            base_features = config.features.base_features
+            logger.info(f"Base features: {len(base_features)}")
+            
+            # Generate possible feature interactions
+            interaction_features = []
+            for i, f1 in enumerate(base_features):
+                for f2 in base_features[i+1:]:
+                    interaction_features.append(f"{f1}_x_{f2}")
+            logger.info(f"Interaction features: {len(interaction_features)}")
+            
+            # Combine all possible features
+            all_features = base_features + interaction_features
+            logger.info(f"Evaluating {len(all_features)} total features...")
+
             # Get train/test split
             train_data, holdout_data = load_or_create_split(dataset, config)
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
@@ -181,11 +196,7 @@ def main():
             model = PreferenceModel(config=config)
             model.fit(train_data, config.features.base_features)  # Fit with base features first
             
-            # Get all possible features
-            all_features = dataset.get_feature_names()
-            logger.info(f"Evaluating {len(all_features)} total features...")
-
-            # Evaluate all features
+            # Evaluate all features and interactions
             feature_metrics = {}
             for feature in all_features:
                 try:
@@ -194,6 +205,9 @@ def main():
                         dataset=train_data,
                         model=model
                     )
+                    # Verify we got meaningful values
+                    if all(v in (0, 1) for v in metrics.values()):
+                        logger.warning(f"Got constant metrics for feature {feature}")
                     feature_metrics[feature] = metrics
                 except Exception as e:
                     logger.warning(f"Error evaluating feature {feature}: {str(e)}")
@@ -214,12 +228,13 @@ def main():
             
             # Create comprehensive results DataFrame
             results = []
-            for feature in all_features:  # Loop through ALL features
+            for feature in all_features:
                 metrics = feature_metrics[feature]
-                weight, std = feature_weights.get(feature, (0.0, 0.0))  # Default to 0 if not selected
+                weight, std = feature_weights.get(feature, (0.0, 0.0))
                 
-                results.append({
+                result = {
                     'feature_name': feature,
+                    'is_interaction': '_x_' in feature,
                     'selected': 1 if feature in selected_features else 0,
                     'importance_score': metrics.get('importance_score', 0.0),
                     'correlation': metrics.get('correlation', 0.0),
@@ -230,13 +245,25 @@ def main():
                     'p_value': metrics.get('p_value', 1.0),
                     'weight': weight,
                     'weight_std': std
-                })
+                }
+                
+                # Add component features for interactions
+                if result['is_interaction']:
+                    f1, f2 = feature.split('_x_')
+                    result['component_1'] = f1
+                    result['component_2'] = f2
+                    
+                results.append(result)
             
             # Save comprehensive feature metrics
             metrics_file = Path(config.feature_selection.metrics_file)
             pd.DataFrame(results).to_csv(metrics_file, index=False)
-            logger.info(f"Saved comprehensive metrics for {len(results)} features to {metrics_file}")
-            
+            logger.info(f"\nFeature selection summary:")
+            logger.info(f"  Total features evaluated: {len(all_features)}")
+            logger.info(f"  Base features: {len(base_features)}")
+            logger.info(f"  Interaction features: {len(interaction_features)}")
+            logger.info(f"  Features selected: {len(selected_features)}")
+                        
             # Print summary
             logger.info(f"\nSelected {len(selected_features)} out of {len(all_features)} features:")
             for feature in selected_features:

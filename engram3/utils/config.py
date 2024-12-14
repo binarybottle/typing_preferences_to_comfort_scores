@@ -66,12 +66,38 @@ class FeatureConfig:
 #------------------------------------------------
 # feature_importance.py
 #------------------------------------------------
+class MultipleTestingConfig(BaseModel):
+    """Multiple testing configuration."""
+    method: str = Field(pattern="^(fdr|bonferroni)$")
+    alpha: float = Field(default=0.05, gt=0, lt=1)
+
+class InteractionTestingConfig(BaseModel):
+    """Interaction testing configuration."""
+    method: str
+    minimum_effect_size: float = Field(gt=0)
+    hierarchical: bool = False
+
+class StatisticalTestingConfig(BaseModel):
+    """Configuration for statistical testing parameters."""
+    mi_bins: int = Field(default=50, gt=0)
+    n_permutations: int = Field(default=10000, gt=0)
+    n_bootstrap: int = Field(default=1000, gt=0)
+
 class FeatureSelectionConfig(BaseModel):
     """Validate feature selection configuration."""
     metric_weights: Dict[str, float]
     thresholds: Dict[str, float]
-    n_bootstrap: int = 100
-    
+    multiple_testing: MultipleTestingConfig
+    interaction_testing: InteractionTestingConfig
+    # Make statistical_testing optional with default values
+    statistical_testing: StatisticalTestingConfig = Field(
+        default_factory=lambda: StatisticalTestingConfig(
+            mi_bins=50,
+            n_permutations=10000,
+            n_bootstrap=1000
+        )
+    )
+
     @validator('metric_weights')
     def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
         total = sum(v.values())
@@ -85,6 +111,9 @@ class FeatureSelectionConfig(BaseModel):
             raise ValueError("All thresholds must be positive")
         return v
 
+    class Config:
+        validate_assignment = True
+    
 class FeatureSelectionMetricWeights(BaseModel):
     """Configuration for feature importance metric weights."""
     correlation: float = Field(gt=0, lt=1)
@@ -207,17 +236,6 @@ class ModelSettings(BaseModel):
         if not 0 < v < 1:
             raise ValueError("Must be between 0 and 1")
         return v
-
-class InteractionTestingConfig(BaseModel):
-    """Interaction testing configuration."""
-    method: str
-    minimum_effect_size: float = Field(gt=0)
-    hierarchical: bool = False
-
-class MultipleTestingConfig(BaseModel):
-    """Multiple testing configuration."""
-    method: str = Field(pattern="^(fdr|bonferroni)$")
-    alpha: float = Field(default=0.05, gt=0, lt=1)
 
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""

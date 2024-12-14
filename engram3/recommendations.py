@@ -187,7 +187,6 @@ class BigramRecommender:
 
     def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]) -> None:
         """Create plot showing existing bigrams plus recommended pairs."""
-        # First get base feature vectors and PCA for existing bigrams
         feature_vectors = []
         bigram_labels = []
         unique_bigrams = set()
@@ -207,34 +206,34 @@ class BigramRecommender:
 
         X = np.array(feature_vectors)
         
-        # Transform to spread out points better
-        X_transformed = np.sign(X) * np.log1p(np.abs(X) + 1e-10)
+        # Same log transform as in plot_feature_space
+        epsilon = 1e-10
+        X_transformed = np.sign(X) * np.log1p(np.abs(X) + epsilon)
         X_transformed = StandardScaler().fit_transform(X_transformed)
         
         # Fit PCA
         pca = PCA(n_components=2)
         X_2d = pca.fit_transform(X_transformed)
         
-        # Calculate explained variance for labels
-        var1 = pca.explained_variance_ratio_[0] * 100
-        var2 = pca.explained_variance_ratio_[1] * 100
-        
-        # Create plot
-        fig, ax = plt.subplots(figsize=(12, 8))
+        # Create figure
+        fig, ax = plt.subplots(figsize=self.figure_size)
         
         # Plot existing bigrams
         scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1],
                             c='lightblue', s=100, alpha=0.6,
                             edgecolor='darkblue', label='Existing bigrams')
         
-        # Add labels with collision avoidance
-        from adjustText import adjust_text
+        # Add labels for existing bigrams
         texts = []
+        offset = 0.05
         for i, label in enumerate(bigram_labels):
-            texts.append(ax.text(X_2d[i, 0], X_2d[i, 1], label, 
-                            fontsize=8, color='darkblue'))
+            texts.append(ax.text(X_2d[i, 0] + offset, 
+                            X_2d[i, 1] + offset,
+                            label,
+                            fontsize=8,
+                            alpha=0.7))
         
-        # Plot edges for existing pairs
+        # Add edges for existing pairs
         processed_pairs = set()
         for pref in self.dataset.preferences:
             pair = (pref.bigram1, pref.bigram2)
@@ -253,7 +252,7 @@ class BigramRecommender:
                     processed_pairs.add(pair)
                 except ValueError:
                     continue
-        
+
         # Add recommended pairs
         recommended_points = []
         recommended_labels = []
@@ -264,9 +263,9 @@ class BigramRecommender:
                 feat1 = [self.model._extract_features(b1).get(f, 0.0) for f in self.model.selected_features]
                 feat2 = [self.model._extract_features(b2).get(f, 0.0) for f in self.model.selected_features]
                 
-                # Transform using same parameters as training data
-                feat1_transformed = np.sign(feat1) * np.log1p(np.abs(feat1) + 1e-10)
-                feat2_transformed = np.sign(feat2) * np.log1p(np.abs(feat2) + 1e-10)
+                # Transform using same parameters
+                feat1_transformed = np.sign(feat1) * np.log1p(np.abs(feat1) + epsilon)
+                feat2_transformed = np.sign(feat2) * np.log1p(np.abs(feat2) + epsilon)
                 
                 # Project into same PCA space
                 point1 = pca.transform(feat1_transformed.reshape(1, -1))
@@ -275,14 +274,14 @@ class BigramRecommender:
                 recommended_points.extend([point1[0], point2[0]])
                 recommended_labels.extend([b1, b2])
                 
-                # Plot recommended pair with distinct style
+                # Plot recommended pairs with distinct style
                 ax.scatter([point1[0, 0], point2[0, 0]], 
                         [point1[0, 1], point2[0, 1]], 
                         c='red', s=150, alpha=0.8, 
                         edgecolor='darkred', marker='*',
                         label='Recommended' if len(recommended_points) == 1 else "")
                 
-                # Connect recommended pairs with distinct line
+                # Connect recommended pairs
                 curve = plt.matplotlib.patches.ConnectionPatch(
                     xyA=(point1[0, 0], point1[0, 1]),
                     xyB=(point2[0, 0], point2[0, 1]),
@@ -296,28 +295,42 @@ class BigramRecommender:
                 logger.warning(f"Could not plot recommended pair {b1}-{b2}: {str(e)}")
                 continue
         
-        # Add labels for recommended points with collision avoidance
+        # Add labels for recommended points
         rec_texts = []
         for i, label in enumerate(recommended_labels):
-            rec_texts.append(ax.text(recommended_points[i][0], 
-                                    recommended_points[i][1], 
-                                    label, fontsize=8, color='darkred',
-                                    weight='bold'))
+            rec_texts.append(ax.text(recommended_points[i][0] + offset, 
+                                recommended_points[i][1] + offset, 
+                                label,
+                                fontsize=8,
+                                color='darkred',
+                                weight='bold'))
         
-        # Adjust all labels to avoid overlaps
+        # Adjust all labels
         all_texts = texts + rec_texts
-        adjust_text(all_texts, ax=ax, 
-                    arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5))
+        adjust_text(all_texts,
+                ax=ax,
+                arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5),
+                expand_points=(2.0, 2.0))
         
         # Customize plot
-        ax.set_xlabel(f'PC1 ({var1:.1f}% variance)')
-        ax.set_ylabel(f'PC2 ({var2:.1f}% variance)')
+        var1, var2 = pca.explained_variance_ratio_ * 100
+        ax.set_xlabel(f'PC1 (log-transformed, {var1:.1f}% variance)')
+        ax.set_ylabel(f'PC2 (log-transformed, {var2:.1f}% variance)')
         ax.set_title(f"Bigram Space with Recommendations\n"
                     f"{len(unique_bigrams)} existing bigrams, "
                     f"{len(recommended_pairs)} recommended pairs")
         ax.grid(True, alpha=0.3)
-        ax.legend()
         
+        # Add transformation explanation
+        transform_text = ("Feature space transformation:\n"
+                        "sign(x) * log(|x| + ε)")
+        ax.text(0.02, 0.98, transform_text,
+                transform=ax.transAxes,
+                fontsize=8,
+                verticalalignment='top',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+        
+        ax.legend()
         plt.tight_layout()
         
         # Save plot
@@ -326,7 +339,7 @@ class BigramRecommender:
         plt.close()
         
         logger.info(f"Saved bigram recommendation visualization to {plot_path}")
-                            
+                                    
     def _calculate_pair_scores(self, pair: Tuple[str, str], 
                              feature_metrics: pd.DataFrame,
                              weights: Dict[str, float]) -> Dict[str, float]:

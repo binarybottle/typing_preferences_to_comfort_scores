@@ -150,7 +150,7 @@ class FeatureMetricsVisualizer:
         return fig
     
     def plot_feature_space(self, model: 'PreferenceModel', dataset: 'PreferenceDataset', title: str = "Feature Space") -> Figure:
-        """Plot 2D feature space with improved point distribution and label handling."""
+        """Plot 2D feature space with log-transformed features and improved label handling."""
         feature_vectors = []
         bigram_labels = []
         unique_bigrams = set()  # Track unique bigrams
@@ -177,14 +177,9 @@ class FeatureMetricsVisualizer:
 
         X = np.array(feature_vectors)
         
-        # Apply transformation to spread out the points
-        # Option 1: Log transform (adding small constant to handle zeros)
-        X_transformed = np.sign(X) * np.log1p(np.abs(X) + 1e-10)
-        
-        # Option 2: Rank transform (more uniform distribution)
-        # from sklearn.preprocessing import QuantileTransformer
-        # transformer = QuantileTransformer(output_distribution='normal')
-        # X_transformed = transformer.fit_transform(X)
+        # Log transform to spread out points
+        epsilon = 1e-10
+        X_transformed = np.sign(X) * np.log1p(np.abs(X) + epsilon)
         
         # Standardize
         X_transformed = StandardScaler().fit_transform(X_transformed)
@@ -199,28 +194,32 @@ class FeatureMetricsVisualizer:
         # Plot points
         scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1], 
                             c='lightblue', s=100, alpha=self.alpha,
-                            edgecolor='darkblue')
+                            edgecolor='darkblue', label='Bigrams')
         
         # Smart label placement to avoid overlaps
         from adjustText import adjust_text
         texts = []
         
-        # Add labels with collision avoidance
+        # Add labels with increased initial offset
+        offset = 0.05  # Increased offset for initial label placement
         for i, label in enumerate(bigram_labels):
-            texts.append(ax.text(X_2d[i, 0], X_2d[i, 1], label,
-                            fontsize=8, alpha=0.7))
+            texts.append(ax.text(X_2d[i, 0] + offset, 
+                            X_2d[i, 1] + offset,
+                            label,
+                            fontsize=8,
+                            alpha=0.7))
         
-        # Adjust label positions to avoid overlaps
+        # Adjust label positions with more spacing
         adjust_text(texts, 
+                ax=ax,
                 arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5),
-                expand_points=(1.5, 1.5))
+                expand_points=(2.0, 2.0))  # Increased spacing
         
         # Add edges for paired bigrams
         processed_pairs = set()
         for pref in dataset.preferences:
             pair = (pref.bigram1, pref.bigram2)
             if pair not in processed_pairs:
-                # Find indices of the bigrams
                 try:
                     idx1 = bigram_labels.index(pref.bigram1)
                     idx2 = bigram_labels.index(pref.bigram2)
@@ -240,10 +239,19 @@ class FeatureMetricsVisualizer:
 
         # Customize plot
         var1, var2 = pca.explained_variance_ratio_ * 100
-        ax.set_xlabel(f'PC1 ({var1:.1f}% variance)')
-        ax.set_ylabel(f'PC2 ({var2:.1f}% variance)')
+        ax.set_xlabel(f'PC1 (log-transformed, {var1:.1f}% variance)')
+        ax.set_ylabel(f'PC2 (log-transformed, {var2:.1f}% variance)')
         ax.set_title(f"{title}\n{len(unique_bigrams)} unique bigrams")
         ax.grid(True, alpha=0.3)
+        
+        # Add transformation explanation
+        transform_text = ("Feature space transformation:\n"
+                        "sign(x) * log(|x| + ε)")
+        ax.text(0.02, 0.98, transform_text,
+                transform=ax.transAxes,
+                fontsize=8,
+                verticalalignment='top',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         plt.tight_layout()
         

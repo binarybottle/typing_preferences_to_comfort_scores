@@ -262,7 +262,7 @@ class FeatureImportanceCalculator:
                                      dataset: 'PreferenceDataset',
                                      n_bootstrap: Optional[int] = None) -> float:
         """Calculate probability of feature being selected across bootstrap samples."""
-        n_bootstrap = n_bootstrap or self.DEFAULT_BOOTSTRAP_SAMPLES
+        n_bootstrap = n_bootstrap or self.n_bootstrap
 
         try:
             n_samples = len(dataset.preferences)
