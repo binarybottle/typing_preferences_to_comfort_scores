@@ -103,6 +103,7 @@ model:
   feature_scale: 2.0    # prior scale for feature weights
   participant_scale: 1.0 # prior scale for participant effects
   predictions_file: "output/data/estimated_bigram_scores.csv"
+  model_file: "output/data/bigram_score_prediction_model.pkl"
 
 # Logging settings
 logging:

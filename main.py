@@ -236,16 +236,7 @@ def main():
         elif args.mode == 'recommend_bigram_pairs':
             logger.info("Starting recommendation of bigram pairs...")
 
-            # Load feature metrics from previous feature selection
-            feature_metrics_file = Path(config.feature_selection.metrics_file)
-            if not feature_metrics_file.exists():
-                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
-            feature_metrics_df = pd.read_csv(feature_metrics_file)
-            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
-            if not selected_features:
-                raise ValueError("No features were selected in feature selection phase")
-            
-            # Load trained model
+            # Load feature selection trained model
             logger.info("Loading feature selection trained model...")
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
@@ -279,7 +270,7 @@ def main():
             # Load train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             
-            # Load feature metrics from previous feature selection
+            # Load selected features
             feature_metrics_file = Path(config.feature_selection.metrics_file)
             if not feature_metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
@@ -288,27 +279,30 @@ def main():
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
             
-            logger.info(f"Training model using {len(selected_features)} selected features...")
-            
-            # Train final model
+            # Train prediction model
+            logger.info(f"Training model on training data using {len(selected_features)} selected features...")
             model = PreferenceModel(config=config)
             model.fit(train_data, features=selected_features)
-            
-            # Evaluate on test set
-            logger.info("Evaluating model on test set...")
+
+            # Save the trained model
+            model_save_path = Path(config.model.model_file)
+            feature_selection_model.save(model_save_path)
+
+            # Evaluate on test data
+            logger.info("Evaluating model on test data...")
             test_metrics = model.evaluate(test_data)
             
-            logger.info("\nTest set metrics:")
+            logger.info("\nTest data metrics:")
             for metric, value in test_metrics.items():
                 logger.info(f"{metric}: {value:.3f}")
-        
+
         #---------------------------------
         # Predict bigram scores
         #---------------------------------
         elif args.mode == 'predict_bigram_scores':
             logger.info("Starting bigram score prediction...")
 
-            # Load feature metrics from previous feature selection
+            # Load selected features
             feature_metrics_file = Path(config.feature_selection.metrics_file)
             if not feature_metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
@@ -317,10 +311,10 @@ def main():
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
 
-            # Ensure model is trained
-            logger.info(f"Loading trained model with {len(selected_features)} features...")
-            model = PreferenceModel(config=config)
-            model.fit(dataset, features=selected_features)
+            # Load trained model
+            logger.info("Loading trained model...")
+            model_save_path = Path(config.model.model_file)
+            trained_model = PreferenceModel.load(model_save_path)
 
             # Generate all possible bigrams
             layout_chars = config.data.layout['chars']
@@ -332,7 +326,7 @@ def main():
             # Calculate comfort scores for all bigrams
             results = []
             for bigram in all_bigrams:
-                comfort_mean, comfort_std = model.get_bigram_comfort_scores(bigram)
+                comfort_mean, comfort_std = trained_model.get_bigram_comfort_scores(bigram)
                 results.append({
                     'bigram': bigram,
                     'comfort_score': comfort_mean,
