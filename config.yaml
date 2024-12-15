@@ -21,28 +21,14 @@ data:                                   # Path to processed preference data
             z, x, c, v, b]    # for symmetric analysis
 
 feature_selection:
-  n_iterations: 5                       # Number of feature selection iterations
+  n_iterations: 1 #5                       # Number of feature selection iterations
   thresholds:
     importance: 0.05                    # Minimum importance score for feature selection
     stability: 0.8                      # Minimum stability score across iterations
-  multiple_testing:
-    method: "fdr"                       # Multiple comparison correction (fdr = False Discovery Rate)
-    alpha: 0.01                         # Significance level for hypothesis tests (lower is more strict)
-  interaction_testing:
-    method: "likelihood_ratio"          # Method to test feature interactions
-    minimum_effect_size: 0.05           # Minimum interaction effect to consider
-    hierarchical: true                  # Whether to test interactions hierarchically
-  statistical_testing: 
-    mi_bins: 50                         # Bins for mutual information calculation (sqrt(n_samples) but <= 50)
-    n_permutations: 100000              # Permutations for significance test (1000 minimum, 10000 for more precise p-values)
-    n_bootstrap: 10000                  # Bootstrap samples (1000 for more stable feature importance estimates)
   metric_weights:                       # Weights for combining different metrics (must sum to 1)
-    model_effect: 0.3                   # Weight for features effect in model (most direct measure)
-    correlation: 0.15                   # Weight for correlation with preferences (robust linear relationship)
-    mutual_information: 0.15            # Weight for mutual information with preferences (captures nonlinear relationships)
-    inclusion_probability: 0.2          # Weight for likelihood of feature selection (selection stability)
-    effect_magnitude: 0.1               # Weight for absolute size of feature effect (absolute impact)
-    effect_consistency: 0.1             # Weight for consistency of effect across splits (cross-validation stability)
+    model_effect: 0.4                   # Weight for feature's effect in model
+    effect_consistency: 0.3             # Weight for consistency of effect across splits (cross-validation stability)
+    predictive_power: 0.3               # Weight for prediction improvement
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
@@ -52,20 +38,17 @@ recommendations:
     comfort_uncertainty: 0.2            # Weight for comfort score uncertainty (focus on uncertain comfort predictions)
     feature_space: 0.2                  # Weight for coverage of feature space (ensure good coverage of feature space)
     transitivity: 0.2                   # Weight for transitivity validation (Bradley-Terry models assume transitivity in preferences)
-    correlation: 0.05                   # Weight for correlation-based importance (linear relationships)
-    mutual_information: 0.05            # Weight for information-based importance (nonlinear relationships)
-    stability: 0.05                     # Weight for feature stability
-    interaction_testing: 0.05           # Weight for interaction effects
+    stability: 0.2                      # Weight for feature stability
   n_recommendations: 50                 # Number of bigram pairs to recommend
   max_candidates: 5000                  # Maximum number of candidate pairs to evaluate
   recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 model:                                  # Bayesian model parameters (Stan)
-  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  samples: 7000                         # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
-  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  chains: 1 #4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 30 #00                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  samples: 70 #00                         # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.7 #0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 5 #15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores

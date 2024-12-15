@@ -1,10 +1,46 @@
 # main.py
 """
-Main entry point for the Engram3 keyboard layout optimization system.
-Handles command-line interface and orchestrates the three main workflows:
-1. Feature selection - identifies important typing comfort features
-2. Bigram recommendations - suggests new bigram pairs for preference collection
-3. Model training - trains the final preference model using selected features
+Command-line interface and pipeline orchestration for the Engram3 keyboard layout optimization system.
+
+Provides four main operational modes:
+
+1. Feature Selection ('select_features'):
+   - Loads and splits typing preference dataset
+   - Evaluates base features and their interactions
+   - Performs feature selection with stability analysis
+   - Saves comprehensive feature metrics and selection results
+   - Generates feature importance visualizations
+
+2. Feature Space Visualization ('visualize_feature_space'):
+   - Projects bigrams into reduced feature space
+   - Visualizes feature relationships and impacts
+   - Generates multiple analysis plots:
+     * PCA feature space projection
+     * Feature weight impact analysis
+     * Selected vs. non-selected feature comparisons
+
+3. Model Training ('train_model'):
+   - Creates participant-aware train/test splits
+   - Trains Bayesian preference model on selected features
+   - Evaluates model performance on holdout data
+   - Saves trained model and performance metrics
+
+4. Bigram Recommendations ('recommend_bigram_pairs'):
+   - Generates candidate bigram pairs
+   - Scores pairs using multiple criteria
+   - Visualizes recommendations in feature space
+   - Exports recommended pairs for data collection
+
+Core functionality:
+- Configuration management via YAML
+- Comprehensive logging system
+- Reproducible train/test splitting
+- Feature precomputation and caching
+- Error handling and validation
+- Results visualization and export
+
+Usage:
+    python main.py --config config.yaml --mode [select_features|visualize_feature_space|train_model|recommend_bigram_pairs]
 """
 import argparse
 import yaml
@@ -13,13 +49,12 @@ import pandas as pd
 from typing import Dict, Any, Tuple
 from pathlib import Path
 import matplotlib.pyplot as plt
-from datetime import datetime
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
 from engram3.recommendations import BigramRecommender
-from engram3.utils.visualization import PlottingUtils
+from engram3.utils.visualization import plot_feature_space
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
 from engram3.features.features import key_metrics
 from engram3.features.keymaps import (
@@ -258,11 +293,8 @@ def main():
                     'n_components': len(components),
                     'selected': 1 if feature_name in selected_features else 0,
                     'importance_score': metrics.get('importance_score', 0.0),
-                    'correlation': metrics.get('correlation', 0.0),
-                    'mutual_information': metrics.get('mutual_information', 0.0),
-                    'effect_magnitude': metrics.get('effect_magnitude', 0.0),
+                    'model_effect': metrics.get('model_effect', 0.0),
                     'effect_consistency': metrics.get('effect_consistency', 0.0),
-                    'inclusion_probability': metrics.get('inclusion_probability', 0.0),
                     'p_value': metrics.get('p_value', 1.0),
                     'weight': weight,
                     'weight_std': std,
@@ -290,11 +322,8 @@ def main():
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
                 logger.info(f"  Importance score: {metrics.get('importance_score', 0.0):.3f}")
-                logger.info(f"  Correlation: {metrics.get('correlation', 0.0):.3f}")
-                logger.info(f"  Mutual information: {metrics.get('mutual_information', 0.0):.3f}")
-                logger.info(f"  Effect magnitude: {metrics.get('effect_magnitude', 0.0):.3f}")
+                logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
-                logger.info(f"  Inclusion probability: {metrics.get('inclusion_probability', 0.0):.3f}")
 
         #---------------------------------
         # Visualize feature space
@@ -363,8 +392,7 @@ def main():
             
             if feature_selection_model.feature_visualizer:
                 # 1. PCA Feature Space Plot
-                fig_pca = feature_selection_model.feature_visualizer.plot_feature_space(
-                    feature_selection_model, dataset, "Feature Space")
+                fig_pca = plot_feature_space(feature_selection_model, dataset, "Feature Space")
                 fig_pca.savefig(Path(config.paths.plots_dir) / 'feature_space_pca.png')
                 plt.close()
                 available_plots.append('feature_space_pca.png')

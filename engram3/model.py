@@ -1,21 +1,49 @@
 # model.py
 """
-Hierarchical Bayesian preference learning model.
+Hierarchical Bayesian model for keyboard layout preference learning.
 
-This model implements preference learning using a Bradley-Terry structure
-with feature-based comfort scores and participant-level random effects.
+Core functionality:
+  - Bayesian inference using Bradley-Terry preference model structure:
+    - Feature-based comfort score estimation
+    - Participant-level random effects
+    - Uncertainty quantification via MCMC sampling
+    - Stan backend integration
 
-Key Features:
-    - Bayesian inference for uncertainty quantification
-    - Feature selection with stability analysis
-    - Interaction detection
-    - Efficient caching system
-    
-Attributes:
-    config: Validated configuration object
-    feature_cache: Cache manager for feature computations
-    prediction_cache: Cache manager for predictions
-    
+Key components:
+  1. Feature Management:
+    - Dynamic feature extraction and caching
+    - Interaction feature computation
+    - Feature selection with cross-validation
+    - Comfort score estimation
+
+  2. Model Operations:
+    - Efficient data preparation for Stan
+    - MCMC sampling with diagnostics
+    - Cross-validation with participant grouping
+    - Feature weight extraction and caching
+
+  3. Prediction Pipeline:
+    - Bigram comfort score estimation
+    - Preference probability prediction
+    - Uncertainty quantification
+    - Cached predictions for efficiency
+
+  4. Evaluation Mechanisms:
+    - Classification metrics (accuracy, AUC)
+    - Effect size estimation
+    - Cross-validation stability
+    - Model diagnostics
+
+  5. Output Handling:
+    - Detailed metric reporting
+    - State serialization
+    - Comprehensive logging
+    - CSV export capabilities
+
+The PreferenceModel class provides a complete pipeline for learning and predicting
+keyboard layout preferences while maintaining efficiency through caching and
+proper error handling.
+
 Example:
     >>> model = PreferenceModel(config)
     >>> model.fit(dataset)
@@ -23,23 +51,22 @@ Example:
     >>> print(f"Preference probability: {prob:.2f} ± {unc:.2f}")
 
 Notes:
-    - Caches are automatically managed with LRU policy
-    - Features are computed lazily and cached
-    - Model supports both Stan and PyMC3 backends
+    - Uses LRU caching for feature computations
+    - Lazy feature computation
+    - Thread-safe Stan implementation
+    - Comprehensive error handling
+    - Detailed logging system
 """
 import cmdstanpy
 import numpy as np
 from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import KFold, GroupKFold
+from sklearn.model_selection import KFold
 from collections import defaultdict
 from pathlib import Path
 from typing import (
-    Dict, List, Optional, Tuple, Any, TypedDict, Protocol, 
-    runtime_checkable, Iterator, Union, NamedTuple
+    Dict, List, Optional, Tuple, Any, Union
 )
 import pandas as pd
-from pydantic import BaseModel, validator
-from dataclasses import dataclass
 import time  # Needed for computation_time in predict_preference
 import pickle
 
@@ -48,8 +75,6 @@ from engram3.utils.config import (
     ModelPrediction, StabilityMetrics
 )
 from engram3.data import PreferenceDataset
-from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
-from engram3.features.feature_visualization import FeatureMetricsVisualizer
 from engram3.features.feature_importance import FeatureImportanceCalculator
 from engram3.utils.visualization import PlottingUtils
 from engram3.utils.caching import CacheManager
@@ -62,7 +87,7 @@ class PreferenceModel:
 
     #--------------------------------------------
     # Core model methods
-    #--------------------------------------------
+    #--------------------------------------------   
     def __init__(self, config: Union[Dict, Config] = None):
         """Initialize PreferenceModel."""
         # First, validate and set config
@@ -76,7 +101,7 @@ class PreferenceModel:
             self.config = config
         else:
             raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
-
+            
         # Initialize basic attributes
         self.fit_result = None
         self.feature_names = None
@@ -85,7 +110,7 @@ class PreferenceModel:
         self.dataset = None
         self.feature_weights = None
         self.feature_extractor = None
-        
+                
         # Initialize caches
         self.feature_cache = CacheManager()
         self.prediction_cache = CacheManager()
@@ -118,21 +143,11 @@ class PreferenceModel:
 
         # Initialize visualization components
         self.plotting = PlottingUtils(self.config.paths.plots_dir)
-        self.feature_visualizer = FeatureMetricsVisualizer(self.config)
         
         # Initialize importance calculator last (needs fully initialized self)
         self.importance_calculator = FeatureImportanceCalculator(self.config, self)
 
-    def get_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
-        """Wrapper to access feature values through importance calculator."""
-        return self.importance_calculator._get_feature_values(feature, dataset)
-    
     # Property decorators
-    @property
-    def interaction_threshold(self) -> float:
-        """Threshold for including feature interactions."""
-        return self.config.feature_selection.interaction_testing.get('threshold', 0.15)
-        
     @property
     def feature_scale(self) -> float:
         """Prior scale for feature weights."""
@@ -393,15 +408,14 @@ class PreferenceModel:
             selected_features, importance_metrics)
         
         # Save metrics to CSV
-        if self.visualizer:
-            self.visualizer.save_metrics_report(
-                metrics_dict={feature: {
-                    **processed_effects.get(feature, {}),
-                    **importance_metrics.get(feature, {}),
-                    **stability_metrics.get(feature, {})
-                } for feature in feature_names},
-                output_file=self.config.feature_selection.metrics_file
-            )
+        self.save_metrics_report(
+            metrics_dict={feature: {
+                **processed_effects.get(feature, {}),
+                **importance_metrics.get(feature, {}),
+                **stability_metrics.get(feature, {})
+            } for feature in feature_names},
+            output_file=self.config.feature_selection.metrics_file
+        )
         
         return {
             'metrics': metrics,
@@ -414,13 +428,14 @@ class PreferenceModel:
 
     def select_features(self, dataset: PreferenceDataset) -> List[str]:
         """Select features using centralized importance calculator."""
-        self.dataset = dataset
         logger.info("Starting feature selection...")
 
-        self.selected_features = self.config.features.base_features
+        self.selected_features = []  # Start empty
+        base_features = self.config.features.base_features
+        all_features = self.config.features.get_all_features()
 
-        metrics_history = []
-        all_features = dataset.get_feature_names()
+        # Initial model fit with base features to get started
+        self.model.fit(dataset, base_features)
         
         iteration = 0
         while iteration < self.config.feature_selection.n_iterations:
@@ -430,29 +445,19 @@ class PreferenceModel:
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
-                    model=self,
-                    selected_features=self.selected_features
+                    model=self.model  # Now required
                 )
                 feature_metrics[feature] = metrics
-                            
-            # Apply statistical testing
-            p_values = [m.get('p_value', 1.0) for m in feature_metrics.values()]
-            significant = self.importance_calculator.fdr_correct(
-                np.array(p_values),
-                self.config.feature_selection.multiple_testing.alpha
-            )
-            
+                                    
             # Get importance scores and threshold
             importance_scores = [m['importance_score'] for m in feature_metrics.values()]
-            threshold = self.importance_calculator.calculate_adaptive_threshold(
-                np.array(importance_scores)
-            )
+            threshold = self._calculate_adaptive_threshold(importance_scores)
             
-            # Select best feature
+            # Select best feature that passes criteria
             passing_features = [
                 (f, m['importance_score']) 
                 for i, (f, m) in enumerate(feature_metrics.items())
-                if significant[i] and m['importance_score'] >= threshold
+                if m['importance_score'] >= threshold
             ]
             
             if not passing_features:
@@ -461,15 +466,11 @@ class PreferenceModel:
             best_feature, best_score = max(passing_features, key=lambda x: x[1])
             self.selected_features.append(best_feature)
             
-            # Update history and check interactions
-            metrics_history.append(feature_metrics[best_feature])
-            if self.config.feature_selection.interaction_testing.hierarchical:
-                self._evaluate_interactions(dataset, best_feature)
-                
-            iteration += 1
+            # Refit model with updated feature set
+            self.model.fit(dataset, self.selected_features)
             
-        return self.selected_features
-    
+            iteration += 1
+                
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
@@ -820,6 +821,60 @@ class PreferenceModel:
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------          
+    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
+        """
+        Calculate how much a feature improves model predictions.
+        
+        Args:
+            feature: Feature to evaluate
+            dataset: Dataset to test on
+            model: Trained model
+            
+        Returns:
+            float: Normalized improvement in prediction accuracy [0,1]
+        """
+        try:
+            # Get current feature set and performance
+            current_features = model.selected_features
+            if feature in current_features:
+                features_without = [f for f in current_features if f != feature]
+                features_with = current_features
+            else:
+                features_without = current_features
+                features_with = current_features + [feature]
+
+            # Measure performance without feature
+            model_without = copy.deepcopy(model)
+            model_without.fit(dataset, features_without)
+            metrics_without = model_without.evaluate(dataset)
+            acc_without = metrics_without['accuracy']
+
+            # Measure performance with feature
+            model_with = copy.deepcopy(model)
+            model_with.fit(dataset, features_with)
+            metrics_with = model_with.evaluate(dataset)
+            acc_with = metrics_with['accuracy']
+
+            # Calculate improvement
+            improvement = acc_with - acc_without
+            
+            # Normalize improvement to [0,1] range
+            # Note: Could adjust max_improvement based on domain knowledge
+            max_improvement = 0.5  # Maximum expected improvement from one feature
+            normalized_improvement = np.clip(improvement / max_improvement, 0, 1)
+
+            logger.debug(f"Feature {feature} predictive power:")
+            logger.debug(f"  Accuracy without: {acc_without:.4f}")
+            logger.debug(f"  Accuracy with: {acc_with:.4f}")
+            logger.debug(f"  Improvement: {improvement:.4f}")
+            logger.debug(f"  Normalized: {normalized_improvement:.4f}")
+
+            return float(normalized_improvement)
+
+        except Exception as e:
+            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
+            return 0.0
+            
     def _calculate_stability_metrics(self, dataset: PreferenceDataset,
                                 feature: str) -> StabilityMetrics:
         """
@@ -941,7 +996,139 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error checking transitivity: {str(e)}")
             return 0.0
-                        
+
+    def _calculate_adaptive_threshold(self, importance_scores: np.ndarray) -> float:
+        """
+        Calculate adaptive threshold for feature importance scores.
+        
+        Args:
+            importance_scores: Array of importance scores
+            
+        Returns:
+            float: Adaptive threshold value
+        """
+        try:
+            scores = np.array(importance_scores)
+            if len(scores) == 0:
+                return 0.0
+                
+            # Remove any invalid values
+            scores = scores[~np.isnan(scores)]
+            
+            # Use various statistical measures to determine threshold
+            mean = np.mean(scores)
+            std = np.std(scores)
+            
+            # Use simple threshold based on mean and std
+            threshold = mean + 0.1 * std  # Using fixed 0.1 factor
+                    
+            # Ensure threshold is not too extreme
+            min_threshold = np.percentile(scores, 25)
+            max_threshold = np.percentile(scores, 75)
+            threshold = np.clip(threshold, min_threshold, max_threshold)
+                
+            logger.debug(f"Calculated adaptive threshold: {threshold:.3f}")
+            return float(threshold)
+                
+        except Exception as e:
+            logger.error(f"Error calculating adaptive threshold: {str(e)}")
+            return 0.1  # Simple default threshold
+        
+    def _compute_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
+        """
+        Compute feature values without caching.
+        
+        Args:
+            feature: Feature name or interaction feature (containing '_x_')
+            dataset: PreferenceDataset containing preferences
+            
+        Returns:
+            np.ndarray of feature differences between bigram pairs
+        """
+        try:
+            # Handle interaction features
+            if '_x_' in feature:
+                components = feature.split('_x_')
+                # Get component values
+                component_values = []
+                for comp in components:
+                    values = self._compute_single_feature_values(comp, dataset)
+                    component_values.append(values)
+                
+                # Multiply components for interaction
+                feature_diffs = component_values[0]
+                for values in component_values[1:]:
+                    feature_diffs = feature_diffs * values
+                return feature_diffs
+                
+            else:
+                # Handle single features
+                return self._compute_single_feature_values(feature, dataset)
+                
+        except Exception as e:
+            logger.error(f"Error computing feature values for {feature}: {str(e)}")
+            return np.zeros(len(dataset.preferences))
+
+    def _compute_single_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
+        """
+        Compute values for a single (non-interaction) feature.
+        
+        Args:
+            feature: Feature name
+            dataset: PreferenceDataset containing preferences
+            
+        Returns:
+            np.ndarray of feature differences between bigram pairs
+        """
+        values = []
+        
+        # Special handling for typing_time
+        if feature == 'typing_time':
+            # Calculate mean typing time once
+            valid_times = []
+            for pref in dataset.preferences:
+                if pref.typing_time1 is not None:
+                    valid_times.append(pref.typing_time1)
+                if pref.typing_time2 is not None:
+                    valid_times.append(pref.typing_time2)
+            mean_time = np.mean(valid_times) if valid_times else 0.0
+            
+            # Use mean time for None values
+            for pref in dataset.preferences:
+                val1 = mean_time if pref.typing_time1 is None else pref.typing_time1
+                val2 = mean_time if pref.typing_time2 is None else pref.typing_time2
+                values.append(val1 - val2)
+                
+        # All other features
+        else:
+            for pref in dataset.preferences:
+                val1 = pref.features1.get(feature, 0.0)
+                val2 = pref.features2.get(feature, 0.0)
+                val1 = 0.0 if val1 is None else val1
+                val2 = 0.0 if val2 is None else val2
+                values.append(val1 - val2)
+                
+        return np.array(values)
+                                                                                                                     
+    def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
+        """Generate and save a detailed metrics report."""
+        report_df = pd.DataFrame([
+            {
+                'Feature': feature,
+                'Model Effect': metrics['model_effect'],
+                'Effect Consistency': metrics['effect_consistency'],
+                'Predictive Power': metrics['predictive_power'],
+                'Combined Score': metrics['importance_score']
+            }
+            for feature, metrics in metrics_dict.items()
+        ])
+        
+        # Sort by combined score
+        report_df = report_df.sort_values('Combined Score', ascending=False)
+        
+        # Save to CSV
+        report_df.to_csv(output_file, index=False)
+
     #--------------------------------------------
     # Statistical and model diagnostic methods
     #--------------------------------------------
@@ -1079,7 +1266,7 @@ class PreferenceModel:
             
         Returns:
             Dict containing model-specific metrics:
-            - effect_magnitude: Absolute effect size
+            - model_effect: Absolute effect size
             - effect_consistency: Cross-validation based consistency
             - feature_weight: Current weight in model
             - weight_uncertainty: Uncertainty in weight estimate
@@ -1093,11 +1280,11 @@ class PreferenceModel:
                 weight_mean, weight_std = weights[feature]
                 metrics['feature_weight'] = weight_mean
                 metrics['weight_uncertainty'] = weight_std
-                metrics['effect_magnitude'] = abs(weight_mean)
+                metrics['model_effect'] = abs(weight_mean)
             else:
                 metrics['feature_weight'] = 0.0
                 metrics['weight_uncertainty'] = 1.0
-                metrics['effect_magnitude'] = 0.0
+                metrics['model_effect'] = 0.0
                 
             # Calculate effect consistency through cross-validation
             metrics['effect_consistency'] = self._calculate_effect_consistency(feature, dataset)
@@ -1109,7 +1296,7 @@ class PreferenceModel:
             return {
                 'feature_weight': 0.0,
                 'weight_uncertainty': 1.0,
-                'effect_magnitude': 0.0,
+                'model_effect': 0.0,
                 'effect_consistency': 1.0
             }
         
@@ -1138,48 +1325,7 @@ class PreferenceModel:
             splits.append((np.array(train_indices), np.array(val_indices)))
             
         return splits
-
-    #--------------------------------------------
-    # Interaction analysis methods
-    #--------------------------------------------
-    def evaluate_interaction(self, components: List[str], dataset: PreferenceDataset) -> Dict[str, float]:
-        """Evaluate metrics specific to feature interactions."""
-        try:
-            # Get feature values for all components
-            feature_values = [self._get_feature_values(f, dataset) for f in components]
-            
-            # Get responses
-            responses = np.array([1 if pref.preferred else 0 for pref in dataset.preferences])
-            
-            # Calculate interaction strength using likelihood ratio test
-            interaction_value, p_value = self._compute_interaction_lr(
-                feature_values=feature_values,
-                responses=responses,
-                min_effect_size=self.config.interaction_testing.minimum_effect_size
-            )
-            
-            return {
-                'interaction_strength': interaction_value,
-                'interaction_significance': p_value
-            }
-        except Exception as e:
-            logger.warning(f"Error evaluating interaction metrics: {str(e)}")
-            return {
-                'interaction_strength': 0.0,
-                'interaction_significance': 1.0
-            }
                             
-    def _compute_feature_values(self, dataset: PreferenceDataset, feature: str) -> np.ndarray:
-        """Compute feature values without caching."""
-        values = []
-        for pref in dataset.preferences:
-            feat1 = self.feature_extractor.extract_bigram_features(
-                pref.bigram1[0], pref.bigram1[1]).get(feature, 0.0)
-            feat2 = self.feature_extractor.extract_bigram_features(
-                pref.bigram2[0], pref.bigram2[1]).get(feature, 0.0)
-            values.append(feat1 - feat2)
-        return np.array(values)
-
     #--------------------------------------------
     # Output and visualization methods
     #--------------------------------------------
@@ -1197,8 +1343,6 @@ class PreferenceModel:
                 "combined_score",
                 "model_effect_mean",
                 "model_effect_std",
-                "correlation",
-                "mutual_information",
                 "effect_cv",
                 "relative_range",
                 "sign_consistency"
@@ -1224,8 +1368,6 @@ class PreferenceModel:
                     f"{importance.get('combined_score', 0.0):.6f}",
                     f"{effects.get('mean', 0.0):.6f}",
                     f"{effects.get('std', 0.0):.6f}",
-                    f"{importance.get('correlation', 0.0):.6f}",
-                    f"{importance.get('mutual_info', 0.0):.6f}",
                     f"{stability.get('effect_cv', 0.0):.6f}",
                     f"{stability.get('relative_range', 0.0):.6f}",
                     f"{stability.get('sign_consistency', 0.0):.6f}"

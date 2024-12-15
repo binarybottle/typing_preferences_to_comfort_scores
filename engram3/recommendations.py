@@ -1,11 +1,36 @@
 # recommendations.py
 """
-Recommendation system for selecting informative bigram pairs.
-Implements BigramRecommender class which:
-- Generates candidate bigram pairs
-- Scores pairs using multiple criteria (uncertainty, coverage, etc.)
-- Visualizes recommendations in feature space
-- Exports detailed recommendation data
+Bigram recommendation system for keyboard layout analysis.
+
+Provides comprehensive recommendation generation through:
+  - Candidate generation:
+    - Creates all possible bigram pairs from layout characters
+    - Filters out existing/evaluated pairs
+    - Handles pair reversals and duplicates
+
+  - Multi-criteria scoring:
+    - Prediction uncertainty: Prioritizes pairs with uncertain model predictions
+    - Comfort uncertainty: Considers uncertainty in comfort scores
+    - Feature space coverage: Favors pairs in underexplored regions
+    - Stability assessment: Considers feature stability metrics
+    - Transitivity: Tests for preference consistency
+
+  - Visualization capabilities:
+    - Projects bigrams into 2D feature space using PCA
+    - Displays existing and recommended pairs
+    - Shows relationships and connections between bigrams
+    - Includes detailed labels and transformation explanations
+
+Core features:
+  - Efficient caching mechanisms
+  - Distance-based feature space exploration
+  - Detailed scoring reports
+  - Configurable recommendation counts
+  - Comprehensive logging
+  - Robust error handling
+
+The BigramRecommender class orchestrates the recommendation process while
+respecting dataset constraints and configuration parameters.
 """
 from pathlib import Path
 from typing import List, Tuple, Dict, Set, Union
@@ -15,11 +40,12 @@ from itertools import combinations
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from adjustText import adjust_text
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
-from engram3.utils.visualization import PlottingUtils
+from engram3.utils.visualization import PlottingUtils, plot_feature_space
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
@@ -197,10 +223,7 @@ class BigramRecommender:
             'prediction_uncertainty': 0.25,
             'comfort_uncertainty': 0.15,
             'feature_space': 0.15,
-            'correlation': 0.075,
-            'mutual_information': 0.075,
             'stability': 0.1,
-            'interaction_testing': 0.1,
             'transitivity': 0.1
         })
         
@@ -222,7 +245,7 @@ class BigramRecommender:
             
         feature_metrics = pd.read_csv(metrics_file)
         
-        required_columns = {'feature_name', 'correlation', 'mutual_information'}
+        required_columns = {'feature_name'}
         missing_cols = required_columns - set(feature_metrics.columns)
         
         if missing_cols:
@@ -390,29 +413,25 @@ class BigramRecommender:
                              weights: Dict[str, float]) -> Dict[str, float]:
         """Calculate all scores for a bigram pair."""
         try:
-            # 1. Get prediction uncertainty
+            # Get prediction uncertainty
             pred_mean, pred_std = self.model.predict_preference(*pair)
             prediction_score = pred_std
             
-            # 2. Get comfort score uncertainties
+            # Get comfort score uncertainties
             comfort1_mean, comfort1_std = self.model.get_bigram_comfort_scores(pair[0])
             comfort2_mean, comfort2_std = self.model.get_bigram_comfort_scores(pair[1])
             comfort_score = (comfort1_std + comfort2_std) / 2
             
-            # 3. Calculate feature space coverage score
+            # Calculate feature space coverage score
             feature_score = self._calculate_feature_space_score(pair)
             
-            # 4. Get correlation and mutual information scores
-            correlation_score = self._get_metric_difference(pair, feature_metrics, 'correlation')
-            mi_score = self._get_metric_difference(pair, feature_metrics, 'mutual_information')
-            
-            # 5. Get stability score from effect CV
+            # Get stability score from effect CV
             stability_score = self._get_metric_average(pair, feature_metrics, 'effect_cv')
             
-            # 6. Calculate interaction testing score
+            # Calculate interaction testing score
             interaction_score = self._calculate_interaction_score(pair[0], pair[1])
             
-            # 7. Calculate transitivity testing score
+            # Calculate transitivity testing score
             transitivity_score = self._calculate_transitivity_score(pair[0], pair[1])
             
             # Combine all scores
@@ -421,10 +440,7 @@ class BigramRecommender:
                     (weights['prediction_uncertainty'], prediction_score),
                     (weights['comfort_uncertainty'], comfort_score),
                     (weights['feature_space'], feature_score),
-                    (weights['correlation'], correlation_score),
-                    (weights['mutual_information'], mi_score),
                     (weights['stability'], 1.0 - stability_score),
-                    (weights['interaction_testing'], interaction_score),
                     (weights['transitivity'], transitivity_score)
                 ]
             )
@@ -433,10 +449,7 @@ class BigramRecommender:
                 'prediction_uncertainty': prediction_score,
                 'comfort_uncertainty': comfort_score,
                 'feature_space': feature_score,
-                'correlation': correlation_score,
-                'mutual_information': mi_score,
                 'stability': 1.0 - stability_score,
-                'interaction_testing': interaction_score,
                 'transitivity': transitivity_score,
                 'total': total_score
             }

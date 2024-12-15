@@ -66,36 +66,10 @@ class FeatureConfig:
 #------------------------------------------------
 # feature_importance.py
 #------------------------------------------------
-class MultipleTestingConfig(BaseModel):
-    """Multiple testing configuration."""
-    method: str = Field(pattern="^(fdr|bonferroni)$")
-    alpha: float = Field(default=0.05, gt=0, lt=1)
-
-class InteractionTestingConfig(BaseModel):
-    """Interaction testing configuration."""
-    method: str
-    minimum_effect_size: float = Field(gt=0)
-    hierarchical: bool = False
-
-class StatisticalTestingConfig(BaseModel):
-    """Configuration for statistical testing parameters."""
-    mi_bins: int = Field(default=50, gt=0)
-    n_permutations: int = Field(default=10000, gt=0)
-    n_bootstrap: int = Field(default=1000, gt=0)
-
 class FeatureSelectionConfig(BaseModel):
     """Validate feature selection configuration."""
     metric_weights: Dict[str, float]
     thresholds: Dict[str, float]
-    multiple_testing: MultipleTestingConfig
-    interaction_testing: InteractionTestingConfig
-    statistical_testing: StatisticalTestingConfig = Field(
-        default_factory=lambda: StatisticalTestingConfig(
-            mi_bins=50,
-            n_permutations=10000,
-            n_bootstrap=1000
-        )
-    )
 
     @validator('metric_weights')
     def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
@@ -115,11 +89,8 @@ class FeatureSelectionConfig(BaseModel):
     
 class FeatureSelectionMetricWeights(BaseModel):
     """Configuration for feature importance metric weights."""
-    correlation: float = Field(gt=0, lt=1)
-    mutual_information: float = Field(gt=0, lt=1)
-    effect_magnitude: float = Field(gt=0, lt=1)
+    model_effect: float = Field(gt=0, lt=1)
     effect_consistency: float = Field(gt=0, lt=1)
-    inclusion_probability: float = Field(gt=0, lt=1)
 
     @field_validator('*')
     def weights_must_sum_to_one(cls, values):
@@ -134,11 +105,8 @@ class FeatureSelectionThresholds(BaseModel):
 
 class MetricWeights(TypedDict):
     """Type definition for metric weights."""
-    correlation: float
-    mutual_information: float
-    effect_magnitude: float
+    model_effect: float
     effect_consistency: float
-    inclusion_probability: float
 
 class ModelSettings(BaseModel):
     """Model configuration with validation."""
@@ -194,8 +162,6 @@ class ModelPrediction:
 class FeatureMetrics(TypedDict):
     """Type definition for feature metrics."""
     importance_score: float
-    correlation: float
-    mutual_information: float
     effect_size: float
     p_value: float
 
@@ -240,8 +206,6 @@ class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
     n_iterations: int = Field(gt=0)
     thresholds: Dict[str, float]
-    multiple_testing: MultipleTestingConfig
-    interaction_testing: InteractionTestingConfig
     metric_weights: Dict[str, float]
     metrics_file: str
     model_file: str
