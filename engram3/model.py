@@ -429,13 +429,12 @@ class PreferenceModel:
     def select_features(self, dataset: PreferenceDataset) -> List[str]:
         """Select features using centralized importance calculator."""
         logger.info("Starting feature selection...")
-
         self.selected_features = []  # Start empty
         base_features = self.config.features.base_features
         all_features = self.config.features.get_all_features()
-
+        
         # Initial model fit with base features to get started
-        self.model.fit(dataset, base_features)
+        self.fit(dataset, base_features)
         
         iteration = 0
         while iteration < self.config.feature_selection.n_iterations:
@@ -445,7 +444,7 @@ class PreferenceModel:
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
-                    model=self.model  # Now required
+                    model=self  # Changed from self.model to self
                 )
                 feature_metrics[feature] = metrics
                                     
@@ -467,10 +466,11 @@ class PreferenceModel:
             self.selected_features.append(best_feature)
             
             # Refit model with updated feature set
-            self.model.fit(dataset, self.selected_features)
-            
+            self.fit(dataset, self.selected_features)
             iteration += 1
-                
+            
+        return self.selected_features
+               
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
