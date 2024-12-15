@@ -21,7 +21,7 @@ data:                                   # Path to processed preference data
             z, x, c, v, b]    # for symmetric analysis
 
 feature_selection:
-  n_iterations: 1 #5                       # Number of feature selection iterations
+  n_iterations: 5                       # Number of feature selection iterations
   thresholds:
     importance: 0.05                    # Minimum importance score for feature selection
     stability: 0.8                      # Minimum stability score across iterations
@@ -33,9 +33,9 @@ feature_selection:
     minimum_effect_size: 0.05           # Minimum interaction effect to consider
     hierarchical: true                  # Whether to test interactions hierarchically
   statistical_testing: 
-    mi_bins: 10 #50                         # Bins for mutual information calculation (sqrt(n_samples) but <= 50)
-    n_permutations: 10 #100000              # Permutations for significance test (1000 minimum, 10000 for more precise p-values)
-    n_bootstrap: 1 #10000                  # Bootstrap samples (1000 for more stable feature importance estimates)
+    mi_bins: 50                         # Bins for mutual information calculation (sqrt(n_samples) but <= 50)
+    n_permutations: 100000              # Permutations for significance test (1000 minimum, 10000 for more precise p-values)
+    n_bootstrap: 10000                  # Bootstrap samples (1000 for more stable feature importance estimates)
   metric_weights:                       # Weights for combining different metrics (must sum to 1)
     model_effect: 0.3                   # Weight for features effect in model (most direct measure)
     correlation: 0.15                   # Weight for correlation with preferences (robust linear relationship)
@@ -61,11 +61,11 @@ recommendations:
   recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 model:                                  # Bayesian model parameters (Stan)
-  chains: 1 #4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 30 #00                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  samples: 70 #00                         # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  adapt_delta: 0.50 #99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
-  max_treedepth: 5 #15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  samples: 7000                         # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
@@ -87,7 +87,63 @@ features:
     - [same_finger, sum_finger_values]
     - [same_finger, rows_apart]
     - [same_finger, sum_row_position_values]
-
+    - [sum_finger_values, adj_finger_diff_row]
+    - [sum_finger_values, rows_apart]
+    - [sum_finger_values, angle_apart]
+    - [sum_finger_values, outward_roll]
+    - [sum_finger_values, sum_engram_position_values]
+    - [sum_finger_values, sum_row_position_values]
+    - [adj_finger_diff_row, rows_apart]
+    - [adj_finger_diff_row, angle_apart]
+    - [adj_finger_diff_row, outward_roll]
+    - [adj_finger_diff_row, sum_engram_position_values]
+    - [adj_finger_diff_row, sum_row_position_values]
+    - [rows_apart, outward_roll]
+    - [rows_apart, sum_engram_position_values]
+    - [rows_apart, sum_row_position_values]
+    - [angle_apart, outward_roll]
+    - [angle_apart, sum_engram_position_values]
+    - [outward_roll, sum_engram_position_values]
+    - [outward_roll, sum_row_position_values]
+    - [same_finger, sum_finger_values, rows_apart]
+    - [same_finger, sum_finger_values, sum_row_position_values]
+    #- [same_finger, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, sum_row_position_values]
+    - [sum_finger_values, rows_apart, outward_roll]
+    - [sum_finger_values, rows_apart, sum_engram_position_values]
+    - [sum_finger_values, rows_apart, sum_row_position_values]
+    - [sum_finger_values, angle_apart, outward_roll]
+    - [sum_finger_values, angle_apart, sum_engram_position_values]
+    - [sum_finger_values, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, outward_roll, sum_row_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll]
+    - [adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, sum_row_position_values]
+    - [adj_finger_diff_row, angle_apart, outward_roll]
+    - [adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    - [adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, outward_roll, sum_row_position_values]
+    - [rows_apart, outward_roll, sum_engram_position_values]
+    - [rows_apart, outward_roll, sum_row_position_values]
+    - [angle_apart, outward_roll, sum_engram_position_values]
+    - [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_row_position_values]
+    - [sum_finger_values, rows_apart, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, rows_apart, outward_roll, sum_row_position_values]
+    - [sum_finger_values, angle_apart, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll, sum_row_position_values]
+    - [adj_finger_diff_row, angle_apart, outward_roll, sum_engram_position_values]
 
 visualization:
   dpi: 300                              # Resolution of saved plots (dots per inch)

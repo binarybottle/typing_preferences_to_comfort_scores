@@ -201,60 +201,33 @@ def main():
                 except Exception as e:
                     logger.warning(f"Error evaluating base feature {feature}: {str(e)}")
                     base_metrics[feature] = model.importance_calculator._get_default_metrics()
-            
+
             # Generate and evaluate interactions
             logger.info("Evaluating feature interactions...")
             interaction_metrics = {}
-            
+
             # Get interactions from config
             logger.info("Processing configured feature interactions...")
             all_features = config.features.get_all_features()
             interaction_features = [f for f in all_features if '_x_' in f]
 
+            # Use the same evaluation method for interactions
             for interaction_name in interaction_features:
                 try:
-                    # Split interaction into component features
-                    components = interaction_name.split('_x_')
-                    
-                    # Calculate interaction metrics
-                    if len(components) == 2:  # 2-way interaction
-                        interaction_effect = model.importance_calculator._calculate_interaction_effect(
-                            feature1=components[0],
-                            feature2=components[1],
-                            dataset=train_data
-                        )
-                    else:  # Higher-order interaction
-                        # Calculate as series of 2-way interactions
-                        interaction_effect = model.importance_calculator._calculate_interaction_effect(
-                            feature1='_x_'.join(components[:-1]),
-                            feature2=components[-1],
-                            dataset=train_data
-                        )
-                    
-                    metrics = {
-                        'effect_magnitude': abs(interaction_effect),
-                        'mutual_information': model.importance_calculator._calculate_mutual_information(
-                            interaction_name, dataset=train_data),
-                        'correlation': model.importance_calculator._calculate_correlation(
-                            interaction_name, dataset=train_data),
-                        'effect_consistency': model.importance_calculator._calculate_effect_consistency(
-                            interaction_name, dataset=train_data),
-                        'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
-                            interaction_name, dataset=train_data),
-                        'p_value': model.importance_calculator._calculate_significance(
-                            interaction_name, dataset=train_data)
-                    }
-                    
-                    # Calculate importance score
-                    metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
+                    metrics = model.importance_calculator.evaluate_feature(
+                        feature=interaction_name,
+                        dataset=train_data,
+                        model=model
+                    )
+                    if all(isinstance(v, (int, float)) and v in (0, 1) for v in metrics.values()):
+                        logger.warning(f"Got constant metrics for interaction {interaction_name}")
                     interaction_metrics[interaction_name] = metrics
-                    
                 except Exception as e:
                     logger.warning(f"Error evaluating interaction {interaction_name}: {str(e)}")
                     interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
 
             logger.info(f"Processed {len(interaction_features)} configured interactions")
-            
+
             # Combine all metrics
             all_features = base_features + list(interaction_metrics.keys())
             all_metrics = {**base_metrics, **interaction_metrics}

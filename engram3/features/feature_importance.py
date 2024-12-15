@@ -271,33 +271,44 @@ class FeatureImportanceCalculator:
             logger.error(f"Error calculating inclusion probability for {feature}: {str(e)}")
             return 0.0
                 
-    def _calculate_correlation(self, feature: str, dataset: PreferenceDataset) -> float:
-        """Calculate correlation between feature and preferences."""
+    def _calculate_correlation_from_values(self, values: np.ndarray, preferences: np.ndarray) -> float:
+        """Calculate correlation from feature values and preferences."""
         try:
-            # Extract feature differences and preferences
-            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
-                    
             # Ensure we're working with numpy arrays
-            feature_diffs = np.array(feature_diffs, dtype=float)
+            values = np.array(values, dtype=float)
             preferences = np.array(preferences, dtype=float)
             
             # Handle None/NaN values
-            feature_diffs = np.nan_to_num(feature_diffs, 0.0)
+            values = np.nan_to_num(values, 0.0)
             preferences = np.nan_to_num(preferences, 0.0)
             
             # Calculate correlation if we have valid data
-            if len(feature_diffs) > 0 and len(set(feature_diffs)) > 1:
-                correlation, _ = spearmanr(feature_diffs, preferences)
+            if len(values) > 0 and len(set(values)) > 1:
+                correlation, _ = spearmanr(values, preferences)
                 return float(correlation) if not np.isnan(correlation) else 0.0
             return 0.0
             
         except Exception as e:
+            logger.error(f"Error calculating correlation: {str(e)}")
+            return 0.0
+
+    def _calculate_correlation(self, feature: str, dataset: PreferenceDataset) -> float:
+        """Calculate correlation between feature and preferences."""
+        try:
+            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
+            return self._calculate_correlation_from_values(feature_diffs, preferences)
+        except Exception as e:
             logger.error(f"Error calculating correlation for feature {feature}: {str(e)}")
             return 0.0
-                        
+                    
     def _extract_feature_differences(self, feature: str, dataset: PreferenceDataset) -> Tuple[np.ndarray, np.ndarray]:
         """Extract feature differences and preferences from dataset."""
         try:
+            # Ensure feature is a string
+            if not isinstance(feature, str):
+                logger.error(f"Feature must be a string, got {type(feature)}")
+                return np.array([0.0]), np.array([0.0])
+                
             # Handle interaction features
             if '_x_' in feature:
                 components = feature.split('_x_')
@@ -402,7 +413,7 @@ class FeatureImportanceCalculator:
         """Calculate basic importance score without model-dependent metrics."""
         try:
             feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
-            correlation = self._calculate_correlation(feature_diffs, preferences)  # Pass arrays
+            correlation = self._calculate_correlation_from_values(feature_diffs, preferences)
             mutual_info = self._calculate_mutual_information(feature, dataset)
             
             # Use configured weights or defaults
@@ -601,7 +612,7 @@ class FeatureImportanceCalculator:
             
             # 1. Correlation and p-value
             try:
-                correlation = self._calculate_correlation(feature_diffs, preferences)
+                correlation = self._calculate_correlation_from_values(feature_diffs, preferences)
                 p_value = self._calculate_significance(feature, dataset)
                 metrics['correlation'] = correlation
                 metrics['p_value'] = p_value
@@ -694,8 +705,8 @@ class FeatureImportanceCalculator:
             interaction = diffs1 * diffs2
             
             # Calculate correlation
-            return self._calculate_correlation(interaction, prefs1)
-            
+            return self._calculate_correlation_from_values(interaction, prefs1)
+
         except Exception as e:
             logger.warning(f"Error calculating interaction effect: {str(e)}")
             return 0.0
