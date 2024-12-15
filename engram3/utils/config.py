@@ -249,7 +249,40 @@ class FeatureSelectionSettings(BaseModel):
 class FeaturesConfig(BaseModel):
     """Features configuration."""
     base_features: List[str]
-    interactions_file: str
+    interactions: List[List[str]] = []
+
+    @validator('interactions')
+    def validate_interactions(cls, v: List[List[str]], values: Dict[str, Any]) -> List[List[str]]:
+        """Validate interaction features."""
+        if 'base_features' not in values:
+            raise ValueError("base_features must be defined before interactions")
+        
+        base_features = values['base_features']
+        for interaction in v:
+            # Check each interaction is a list
+            if not isinstance(interaction, list):
+                raise ValueError(f"Interaction must be a list: {interaction}")
+            
+            # Check interaction has at least 2 features
+            if len(interaction) < 2:
+                raise ValueError(f"Interaction must have at least 2 features: {interaction}")
+            
+            # Check all features exist in base_features
+            for feature in interaction:
+                if feature not in base_features:
+                    raise ValueError(f"Feature {feature} in interaction not found in base_features")
+        
+        return v
+
+    def get_all_features(self) -> List[str]:
+        """Get list of all features including interactions."""
+        features = self.base_features.copy()
+        
+        # Interaction features
+        for interaction in self.interactions:
+            features.append('_x_'.join(interaction))
+            
+        return features
 
 class DataConfig(BaseModel):
     """Data configuration."""
@@ -282,11 +315,10 @@ class RecommendationsConfig(BaseModel):
         if v <= 0:
             raise ValueError("n_recommendations must be positive")
         return v
-
+    
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     format: str
-    output_file: str
     console_level: str = Field(pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
     file_level: str = Field(pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 

@@ -53,11 +53,6 @@ logger = LoggingManager.getLogger(__name__)
 
 class FeatureMetricsVisualizer:
     """Handles all feature-related visualization and tracking."""
-    
-    DEFAULT_FIGURE_SIZE = (12, 8)
-    DEFAULT_DPI = 300
-    DEFAULT_ALPHA = 0.6
-    MI_BINS = 20
 
     def __init__(self, config: Union[Dict, Config]):
         """
@@ -73,15 +68,16 @@ class FeatureMetricsVisualizer:
         else:
             raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
 
-        # Use root-level visualization settings
-        self.dpi = self.config.visualization.dpi
+        # Get visualization settings from config with defaults
+        viz_config = self.config.visualization
+        self.dpi = viz_config.dpi
+        self.figure_size = getattr(viz_config, 'figure_size', (12, 8))
+        self.alpha = getattr(viz_config, 'alpha', 0.6)
+        self.color_map = getattr(viz_config, 'color_map', 'viridis')
+
+        # Set up output directory
         self.output_dir = Path(self.config.paths.plots_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Set other visualization parameters
-        self.figure_size = self.DEFAULT_FIGURE_SIZE
-        self.alpha = self.DEFAULT_ALPHA
-        self.color_map = 'viridis'
 
     def plot_feature_metrics(self, model: 'PreferenceModel', metrics_dict: Dict[str, Dict[str, float]]) -> Figure:
         """

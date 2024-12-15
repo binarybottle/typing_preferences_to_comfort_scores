@@ -38,68 +38,54 @@ logger = LoggingManager.getLogger(__name__)
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
 
-    def __init__(self, config: Union[Dict, Config]):
+    def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
         else:
-            # It's a Config object, access feature_selection directly
             feature_selection_config = config.feature_selection.dict()
-
         self.config = FeatureSelectionConfig(**feature_selection_config)
+        
+        # Store model reference
+        self.model = model
         
         # Get statistical parameters from config
         self.mi_bins = self.config.statistical_testing.mi_bins
         self.n_permutations = self.config.statistical_testing.n_permutations
         self.n_bootstrap = self.config.statistical_testing.n_bootstrap
-
-        # Initialize metric cache
-        from engram3.utils.caching import CacheManager
-        self.metric_cache = CacheManager(max_size=10000)
         
+        # Initialize caches
+        self.metric_cache = CacheManager(max_size=10000)
+        self.feature_values_cache = CacheManager(max_size=10000)
+
+    def _get_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
+        """Get feature values from dataset with caching."""
+        cache_key = f"{dataset.file_path}_{feature}"
+        cached_values = self.feature_values_cache.get(cache_key)
+        if cached_values is not None:
+            return cached_values
+
+        values = self._compute_feature_values(feature, dataset)
+        self.feature_values_cache.set(cache_key, values)
+        return values
+
+    def _compute_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
+        """Compute feature values without caching."""
+        if '_x_' in feature:  # Handle interaction features
+            f1, f2 = feature.split('_x_')
+            return self._get_feature_values(f1, dataset) * self._get_feature_values(f2, dataset)
+            
+        values = []
+        for pref in dataset.preferences:
+            val1 = pref.features1.get(feature, 0.0)
+            val2 = pref.features2.get(feature, 0.0)
+            values.append(val1 - val2)
+        return np.array(values)
+
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'metric_cache'):
             self.metric_cache.clear()
-
-    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
-                        model: Optional['PreferenceModel'] = None) -> Dict[str, float]:
-        """Main public interface for evaluating feature importance."""
-        if not isinstance(feature, str):
-            raise ValueError(f"Feature must be a string, got {type(feature)}")
         
-        if not isinstance(dataset, PreferenceDataset):
-            raise ValueError(f"Dataset must be PreferenceDataset, got {type(dataset)}")
-    
-        cache_key = self.metric_cache.get_cache_key(dataset.file_path, feature, id(dataset))
-        cached_metrics = self.metric_cache.get(cache_key)
-        if cached_metrics is not None:
-            return cached_metrics.copy()
-            
-        try:
-            # Calculate base metrics
-            metrics = self._calculate_base_metrics(feature, dataset)
-            
-            # Add model-dependent metrics if model provided
-            if model is not None:
-                # Use model's method instead of calculating here
-                model_metrics = model._calculate_model_metrics(feature, dataset)
-                metrics.update(model_metrics)
-                
-            # Calculate combined score
-            metrics['importance_score'] = self._calculate_combined_score(**metrics)
-            
-            # Calculate statistical significance
-            metrics['p_value'] = self._calculate_significance(feature, dataset)
-            
-            # Cache results
-            self.metric_cache.set(cache_key, metrics.copy())
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error evaluating feature {feature}: {str(e)}")
-            return self._get_default_metrics()
-
     def calculate_adaptive_threshold(self, importance_scores: np.ndarray) -> float:
             """
             Calculate adaptive threshold for feature importance scores.
@@ -257,70 +243,159 @@ class FeatureImportanceCalculator:
             weights['mutual_information'] * metrics['mutual_information']
         )
         
-    def _calculate_inclusion_probability(self,
-                                     feature: str,
-                                     dataset: 'PreferenceDataset',
-                                     n_bootstrap: Optional[int] = None) -> float:
+    def _calculate_inclusion_probability(self, feature: str, dataset: PreferenceDataset) -> float:
         """Calculate probability of feature being selected across bootstrap samples."""
-        n_bootstrap = n_bootstrap or self.n_bootstrap
-
         try:
             n_samples = len(dataset.preferences)
             inclusion_count = 0
             
-            for _ in range(n_bootstrap):
-                try:
-                    bootstrap_indices = np.random.choice(
-                        n_samples,
-                        size=n_samples,
-                        replace=True
-                    )
-                    bootstrap_data = dataset._create_subset_dataset(bootstrap_indices)
-                    importance = self._calculate_basic_importance(feature, bootstrap_data)
-                    threshold = self.config.feature_selection.thresholds['importance']
+            for _ in range(self.n_bootstrap):
+                # Create bootstrap sample
+                bootstrap_indices = np.random.choice(
+                    n_samples,
+                    size=n_samples,
+                    replace=True
+                )
+                bootstrap_data = dataset._create_subset_dataset(bootstrap_indices)
+                
+                # Calculate feature importance on bootstrap sample
+                importance = self._calculate_basic_importance(feature, bootstrap_data)
+                threshold = self.config.thresholds['importance']
+                
+                if importance > threshold:
+                    inclusion_count += 1
                     
-                    if importance > threshold:
-                        inclusion_count += 1
-                        
-                except Exception as e:
-                    logger.warning(f"Error in bootstrap iteration: {str(e)}")
-                    continue
-                    
-            return inclusion_count / n_bootstrap
+            return inclusion_count / self.n_bootstrap
             
         except Exception as e:
-            logger.error(f"Error calculating inclusion probability: {str(e)}")
+            logger.error(f"Error calculating inclusion probability for {feature}: {str(e)}")
             return 0.0
-        
-    def _calculate_correlation(self, feature_diffs: np.ndarray, preferences: np.ndarray) -> float:
-        """Calculate correlation handling constant inputs."""
-        try:
-            # Check for constant inputs
-            if len(set(feature_diffs)) <= 1 or len(set(preferences)) <= 1:
-                logger.debug(f"Constant input detected for correlation calculation")
-                return 0.0
                 
-            correlation, _ = spearmanr(feature_diffs, preferences)
-            return float(correlation) if not np.isnan(correlation) else 0.0
-        except Exception as e:
-            logger.warning(f"Error calculating correlation: {str(e)}")
+    def _calculate_correlation(self, feature_diffs: Union[str, np.ndarray],
+                            preferences: Union[np.ndarray, List],
+                            dataset: Optional[PreferenceDataset] = None) -> float:
+        """Calculate correlation between feature and preferences."""
+        try:
+            # If string feature name is provided, extract values
+            if isinstance(feature_diffs, str) and dataset is not None:
+                feature_diffs, preferences = self._extract_feature_differences(feature_diffs, dataset)
+                
+            # Ensure we're working with numpy arrays
+            feature_diffs = np.array(feature_diffs, dtype=float)
+            preferences = np.array(preferences, dtype=float)
+            
+            # Handle None/NaN values
+            feature_diffs = np.nan_to_num(feature_diffs, 0.0)
+            preferences = np.nan_to_num(preferences, 0.0)
+            
+            # Calculate correlation if we have valid data
+            if len(feature_diffs) > 0 and len(set(feature_diffs)) > 1:
+                correlation, _ = spearmanr(feature_diffs, preferences)
+                return float(correlation) if not np.isnan(correlation) else 0.0
             return 0.0
-        
-    def _calculate_mutual_information(self, feature: str, dataset: 'PreferenceDataset') -> float:
+            
+        except Exception as e:
+            logger.error(f"Error calculating correlation: {str(e)}")
+            return 0.0
+                        
+    def _extract_feature_differences(self, feature: str, dataset: PreferenceDataset) -> Tuple[np.ndarray, np.ndarray]:
+        """Extract feature differences and preferences from dataset."""
+        try:
+            # Handle interaction features
+            if '_x_' in feature:
+                components = feature.split('_x_')
+                # Get component values
+                component_values = []
+                for comp in components:
+                    values = []
+                    if comp == 'typing_time':
+                        # Calculate mean typing time once for the dataset
+                        valid_times = []
+                        for pref in dataset.preferences:
+                            if pref.typing_time1 is not None:
+                                valid_times.append(pref.typing_time1)
+                            if pref.typing_time2 is not None:
+                                valid_times.append(pref.typing_time2)
+                        mean_time = np.mean(valid_times) if valid_times else 0.0
+                        
+                        # Use mean time for None values
+                        for pref in dataset.preferences:
+                            val1 = mean_time if pref.typing_time1 is None else pref.typing_time1
+                            val2 = mean_time if pref.typing_time2 is None else pref.typing_time2
+                            values.append(val1 - val2)
+                    else:
+                        for pref in dataset.preferences:
+                            val1 = pref.features1.get(comp, 0.0)
+                            val2 = pref.features2.get(comp, 0.0)
+                            val1 = 0.0 if val1 is None else val1
+                            val2 = 0.0 if val2 is None else val2
+                            values.append(val1 - val2)
+                    component_values.append(np.array(values))
+                
+                # Multiply components for interaction
+                feature_diffs = component_values[0]
+                for values in component_values[1:]:
+                    feature_diffs = feature_diffs * values
+            else:
+                # Handle base features
+                if feature == 'typing_time':
+                    # Calculate mean typing time once for the dataset
+                    valid_times = []
+                    for pref in dataset.preferences:
+                        if pref.typing_time1 is not None:
+                            valid_times.append(pref.typing_time1)
+                        if pref.typing_time2 is not None:
+                            valid_times.append(pref.typing_time2)
+                    mean_time = np.mean(valid_times) if valid_times else 0.0
+                    
+                    # Use mean time for None values
+                    feature_diffs = []
+                    for pref in dataset.preferences:
+                        val1 = mean_time if pref.typing_time1 is None else pref.typing_time1
+                        val2 = mean_time if pref.typing_time2 is None else pref.typing_time2
+                        feature_diffs.append(val1 - val2)
+                else:
+                    feature_diffs = []
+                    for pref in dataset.preferences:
+                        val1 = pref.features1.get(feature, 0.0)
+                        val2 = pref.features2.get(feature, 0.0)
+                        val1 = 0.0 if val1 is None else val1
+                        val2 = 0.0 if val2 is None else val2
+                        feature_diffs.append(val1 - val2)
+                
+                feature_diffs = np.array(feature_diffs)
+            
+            # Get preferences
+            preferences = np.array([1.0 if pref.preferred else -1.0 
+                                for pref in dataset.preferences])
+            
+            # Ensure we have valid data
+            if len(feature_diffs) == 0 or len(preferences) == 0:
+                logger.warning(f"No valid data for feature {feature}, returning dummy arrays")
+                return np.array([0.0]), np.array([0.0])
+                
+            return feature_diffs, preferences
+            
+        except Exception as e:
+            logger.error(f"Error extracting feature differences for {feature}: {str(e)}")
+            logger.error("Returning dummy arrays")
+            return np.array([0.0]), np.array([0.0])
+
+    def _calculate_mutual_information(self, feature: str, dataset: PreferenceDataset) -> float:
         """Calculate mutual information between feature and preferences."""
         try:
-            # Use consolidated extraction method
+            # Get values with proper None handling
             feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
             
-            # Convert preferences to 0/1 for MI calculation
-            preferences = (preferences + 1) / 2  # Convert from [-1,1] to [0,1]
+            # Handle None/NaN values
+            feature_diffs = np.nan_to_num(feature_diffs, 0.0)
+            preferences = np.nan_to_num(preferences, 0.0)
             
-            # Discretize feature differences for MI calculation
-            bins = np.linspace(min(feature_diffs), max(feature_diffs), self.MI_BINS)
+            # Discretize feature differences using config parameter
+            bins = np.histogram_bin_edges(feature_diffs, bins=self.mi_bins)
             binned_diffs = np.digitize(feature_diffs, bins)
             
-            mi_score = mutual_info_score(binned_diffs, preferences)
-            return float(mi_score)
+            return float(mutual_info_score(binned_diffs, (preferences + 1) / 2))
             
         except Exception as e:
             logger.error(f"Error calculating mutual information for {feature}: {str(e)}")
@@ -329,7 +404,8 @@ class FeatureImportanceCalculator:
     def _calculate_basic_importance(self, feature: str, dataset: 'PreferenceDataset') -> float:
         """Calculate basic importance score without model-dependent metrics."""
         try:
-            correlation = self._calculate_correlation(feature, dataset)
+            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
+            correlation = self._calculate_correlation(feature_diffs, preferences)  # Pass arrays
             mutual_info = self._calculate_mutual_information(feature, dataset)
             
             # Use configured weights or defaults
@@ -373,29 +449,31 @@ class FeatureImportanceCalculator:
             p-value from permutation test
         """
         try:
-            # Get original correlation
-            original_corr = self._calculate_correlation(feature, dataset)
+            # Get original feature differences and preferences
+            feature_diffs, original_preferences = self._extract_feature_differences(feature, dataset)
             
-            # Perform permutation test
-            n_permutations = self.N_PERMUTATIONS
+            # Calculate original correlation
+            original_corr, _ = spearmanr(feature_diffs, original_preferences)
+            if np.isnan(original_corr):
+                return 1.0
+            
+            # Perform permutation test using config parameter
+            n_permutations = self.n_permutations  # Use instance attribute
             null_corrs = []
             
-            preferences = [pref.preferred for pref in dataset.preferences]
+            preferences = original_preferences.copy()  # Work with copy
             for _ in range(n_permutations):
                 # Shuffle preferences
                 np.random.shuffle(preferences)
                 
                 # Calculate correlation with shuffled preferences
-                feature_diffs = []
-                for pref, shuffled_pref in zip(dataset.preferences, preferences):
-                    value1 = pref.features1.get(feature, 0.0)
-                    value2 = pref.features2.get(feature, 0.0)
-                    feature_diffs.append(value1 - value2)
-                    
                 corr, _ = spearmanr(feature_diffs, preferences)
                 if not np.isnan(corr):
                     null_corrs.append(abs(corr))
                     
+            if not null_corrs:
+                return 1.0
+                
             # Calculate p-value
             null_corrs = np.array(null_corrs)
             p_value = np.mean(null_corrs >= abs(original_corr))
@@ -406,6 +484,30 @@ class FeatureImportanceCalculator:
             logger.error(f"Error calculating significance for {feature}: {str(e)}")
             return 1.0
         
+    def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset) -> float:
+        """Calculate consistency of feature effect across cross-validation splits."""
+        try:
+            n_splits = 5  # Could move to config if needed
+            effects = []
+            
+            # Use model's CV splitting method
+            for train_idx, val_idx in self.model._get_cv_splits(dataset, n_splits):
+                train_data = dataset._create_subset_dataset(train_idx)
+                self.model.fit(train_data, [feature])
+                weights = self.model.get_feature_weights()
+                if feature in weights:
+                    effects.append(weights[feature][0])
+                    
+            if not effects:
+                return 0.0
+                
+            # Calculate consistency as 1 - coefficient of variation
+            return 1.0 - (np.std(effects) / (abs(np.mean(effects)) + 1e-10))
+            
+        except Exception as e:
+            logger.error(f"Error calculating effect consistency: {str(e)}")
+            return 0.0
+                
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {
@@ -419,36 +521,185 @@ class FeatureImportanceCalculator:
         }
 
     def _calculate_base_metrics(self, feature: str, dataset: PreferenceDataset) -> Dict[str, float]:
-        """Calculate base metrics independent of model."""
-        feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
-        
-        return {
-            'correlation': self._calculate_correlation(feature_diffs, preferences),
-            'mutual_information': self._calculate_mutual_information(feature, dataset)
-        }
+        """Calculate base metrics for a feature with detailed error logging."""
+        metrics = {}
+        feature_diffs = None
+        preferences = None
 
-    def _extract_feature_differences(self, feature: str, dataset: PreferenceDataset) -> Tuple[np.ndarray, np.ndarray]:
-        """Extract feature differences and preferences from dataset."""
-        if not dataset.preferences:
-            raise ValueError("Dataset contains no preferences")
+        try:
+            # Get feature differences and preferences first
+            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
+            logger.debug(f"Feature {feature} value range: [{np.min(feature_diffs)}, {np.max(feature_diffs)}]")
             
-        feature_diffs = []
-        preferences = []
-        
-        for pref in dataset.preferences:
+            # Calculate correlation
+            correlation, p_value = spearmanr(feature_diffs, preferences)
+            metrics['correlation'] = float(correlation) if not np.isnan(correlation) else 0.0
+            logger.debug(f"Correlation for {feature}: {metrics['correlation']:.3f} (p={p_value:.3f})")
+
+            # Calculate mutual information
+            bins = np.histogram_bin_edges(feature_diffs, bins=self.mi_bins)
+            binned_diffs = np.digitize(feature_diffs, bins)
+            mi_score = mutual_info_score(binned_diffs, (preferences + 1) / 2)
+            metrics['mutual_information'] = float(mi_score)
+            logger.debug(f"Mutual information for {feature}: {metrics['mutual_information']:.3f}")
+
+            # Calculate effect magnitude
+            effect_magnitude = np.mean(np.abs(feature_diffs))
+            metrics['effect_magnitude'] = float(effect_magnitude)
+            logger.debug(f"Effect magnitude for {feature}: {metrics['effect_magnitude']:.3f}")
+
+            # Calculate effect consistency through cross-validation
+            cv_effects = []
+            for train_idx, val_idx in self.model._get_cv_splits(dataset, 5):
+                train_data = dataset._create_subset_dataset(train_idx)
+                self.model.fit(train_data, [feature])
+                weights = self.model.get_feature_weights()
+                if feature in weights:
+                    cv_effects.append(weights[feature][0])
+            
+            if cv_effects:
+                effect_consistency = 1.0 - (np.std(cv_effects) / (abs(np.mean(cv_effects)) + 1e-10))
+                metrics['effect_consistency'] = float(effect_consistency)
+                logger.debug(f"Effect consistency for {feature}: {metrics['effect_consistency']:.3f}")
+            else:
+                metrics['effect_consistency'] = 0.0
+                logger.warning(f"No CV effects calculated for {feature}")
+
+            # Calculate inclusion probability
+            inclusion_count = 0
+            for _ in range(self.n_bootstrap):
+                bootstrap_indices = np.random.choice(len(dataset.preferences), 
+                                                  size=len(dataset.preferences), 
+                                                  replace=True)
+                bootstrap_data = dataset._create_subset_dataset(bootstrap_indices)
+                importance = self._calculate_basic_importance(feature, bootstrap_data)
+                if importance > self.config.thresholds['importance']:
+                    inclusion_count += 1
+            
+            metrics['inclusion_probability'] = float(inclusion_count / self.n_bootstrap)
+            logger.debug(f"Inclusion probability for {feature}: {metrics['inclusion_probability']:.3f}")
+
+            return metrics
+
+        except Exception as e:
+            logger.error(f"Error calculating metrics for {feature}: {str(e)}")
+            logger.error(f"Feature differences shape: {feature_diffs.shape if feature_diffs is not None else None}")
+            logger.error(f"Preferences shape: {preferences.shape if preferences is not None else None}")
+            logger.error("Traceback:", exc_info=True)
+            return self._get_default_metrics()
+
+    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
+                        model: Optional['PreferenceModel'] = None) -> Dict[str, float]:
+        """Calculate all metrics for a feature."""
+        try:
+            logger.debug(f"\nEvaluating feature: {feature}")
+
+            # Get feature differences and preferences first
+            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
+            logger.debug(f"Feature differences sample: {feature_diffs[:5]} ...")
+            logger.debug(f"Preferences sample: {preferences[:5]} ...")
+
+            # Calculate each metric individually with error handling
+            metrics = {}
+            
+            # 1. Correlation and p-value
             try:
-                value1 = pref.features1.get(feature, 0.0)
-                value2 = pref.features2.get(feature, 0.0)
-                # Handle None values
-                if value1 is None or value2 is None:
-                    continue
-                feature_diffs.append(float(value1) - float(value2))
-                preferences.append(1.0 if pref.preferred else -1.0)
-            except AttributeError as e:
-                logger.warning(f"Invalid preference format: {str(e)}")
-                continue
+                correlation = self._calculate_correlation(feature_diffs, preferences)
+                p_value = self._calculate_significance(feature, dataset)
+                metrics['correlation'] = correlation
+                metrics['p_value'] = p_value
+                logger.debug(f"Correlation: {correlation:.4f}")
+                logger.debug(f"P-value: {p_value:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating correlation for {feature}: {str(e)}")
+                metrics['correlation'] = 0.0
+                metrics['p_value'] = 1.0
+
+            # 2. Mutual Information
+            try:
+                mi_score = self._calculate_mutual_information(feature, dataset)
+                metrics['mutual_information'] = mi_score
+                logger.debug(f"Mutual information: {mi_score:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating mutual information for {feature}: {str(e)}")
+                metrics['mutual_information'] = 0.0
+
+            # 3. Effect Magnitude
+            try:
+                effect = np.mean(np.abs(feature_diffs))
+                metrics['effect_magnitude'] = effect
+                logger.debug(f"Effect magnitude: {effect:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating effect magnitude for {feature}: {str(e)}")
+                metrics['effect_magnitude'] = 0.0
+
+            # 4. Effect Consistency
+            try:
+                consistency = self._calculate_effect_consistency(feature, dataset)
+                metrics['effect_consistency'] = consistency
+                logger.debug(f"Effect consistency: {consistency:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating effect consistency for {feature}: {str(e)}")
+                metrics['effect_consistency'] = 0.0
+
+            # 5. Inclusion Probability
+            try:
+                inclusion_prob = self._calculate_inclusion_probability(feature, dataset)
+                metrics['inclusion_probability'] = inclusion_prob
+                logger.debug(f"Inclusion probability: {inclusion_prob:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating inclusion probability for {feature}: {str(e)}")
+                metrics['inclusion_probability'] = 0.0
+
+            # Calculate combined importance score last
+            try:
+                importance_score = self._calculate_combined_score(**metrics)
+                metrics['importance_score'] = importance_score
+                logger.debug(f"Final importance score: {importance_score:.4f}")
                 
-        if not feature_diffs:
-            raise ValueError(f"No valid feature differences extracted for {feature}")
+                # Log weights used for combined score
+                logger.debug("Weights used for scoring:")
+                weights = self.config.metric_weights
+                for metric, weight in weights.items():
+                    logger.debug(f"  {metric}: {weight:.3f}")
+            except Exception as e:
+                logger.error(f"Error calculating importance score for {feature}: {str(e)}")
+                metrics['importance_score'] = 0.0
+
+            # Check if all metrics are zeros/ones
+            if all(v in (0, 1) for v in metrics.values()):
+                logger.warning(f"All metrics are 0/1 for feature {feature} - possible calculation error")
             
-        return np.array(feature_diffs), np.array(preferences)
+            # Final summary log
+            logger.debug("\nFinal metrics summary for feature %s:", feature)
+            for metric_name, value in metrics.items():
+                logger.debug(f"  {metric_name}: {value:.4f}")
+
+            return metrics
+
+        except Exception as e:
+            logger.error(f"Error evaluating feature {feature}: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            return self._get_default_metrics()
+               
+    def _calculate_interaction_effect(self, feature1: str, feature2: str, dataset: PreferenceDataset) -> float:
+        """Calculate interaction effect between features."""
+        try:
+            # Get feature values with None handling
+            diffs1, prefs1 = self._extract_feature_differences(feature1, dataset)
+            diffs2, _ = self._extract_feature_differences(feature2, dataset)
+            
+            # Handle None/NaN values
+            diffs1 = np.nan_to_num(diffs1, 0.0)
+            diffs2 = np.nan_to_num(diffs2, 0.0)
+            
+            # Calculate interaction
+            interaction = diffs1 * diffs2
+            
+            # Calculate correlation
+            return self._calculate_correlation(interaction, prefs1)
+            
+        except Exception as e:
+            logger.warning(f"Error calculating interaction effect: {str(e)}")
+            return 0.0
+        

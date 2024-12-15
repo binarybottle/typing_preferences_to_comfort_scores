@@ -14,12 +14,11 @@ import pandas as pd
 from itertools import combinations
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-import random
+from sklearn.preprocessing import StandardScaler
 
-from engram3.utils.config import Config, RecommendationsConfig
+from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
-from engram3.features.feature_extraction import FeatureExtractor
 from engram3.utils.visualization import PlottingUtils
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
@@ -61,6 +60,52 @@ class BigramRecommender:
         self.importance_calculator = model.importance_calculator
         self.plotting = PlottingUtils(config.paths.plots_dir)
 
+        # Validate adaptive sampling config
+        sampling_config = config.feature_selection.get('adaptive_sampling', {})
+        self.bandwidth = sampling_config.get('bandwidth', 1.0)
+        self.min_density = sampling_config.get('min_density_threshold', 0.1)
+        self.max_density = sampling_config.get('max_density_threshold', 0.9)
+        
+        if not (0 < self.bandwidth and 0 < self.min_density < self.max_density < 1):
+            raise ValueError("Invalid adaptive sampling configuration")
+
+    def _generate_candidate_pairs(self) -> List[Tuple[str, str]]:
+        """Generate all possible bigram pairs from layout characters."""
+        # Get existing pairs
+        existing_pairs = set()
+        for pref in self.dataset.preferences:
+            pair = (pref.bigram1, pref.bigram2)
+            existing_pairs.add(pair)
+            existing_pairs.add((pair[1], pair[0]))  # Add reverse pair too
+            
+        # Generate all possible bigrams first
+        possible_bigrams = []
+        for char1, char2 in combinations(self.layout_chars, 2):
+            bigram = char1 + char2
+            possible_bigrams.append(bigram)
+            # Add reverse bigram
+            reverse_bigram = char2 + char1
+            possible_bigrams.append(reverse_bigram)
+            
+        # Generate all possible pairs of bigrams
+        candidate_pairs = []
+        for b1, b2 in combinations(possible_bigrams, 2):
+            pair = (b1, b2)
+            # Skip if pair (or its reverse) already exists in dataset
+            if pair not in existing_pairs and (b2, b1) not in existing_pairs:
+                candidate_pairs.append(pair)
+                
+        logger.info(f"Generated {len(candidate_pairs)} candidate pairs "
+                    f"from {len(self.layout_chars)} characters")
+        
+        # Optionally limit number of candidates
+        max_candidates = self.config.max_candidates  # Direct attribute access
+        if len(candidate_pairs) > max_candidates:
+            logger.info(f"Randomly sampling {max_candidates} candidates")
+            candidate_pairs = random.sample(candidate_pairs, max_candidates)
+            
+        return candidate_pairs
+                
     def get_recommended_pairs(self) -> List[Tuple[str, str]]:
         """
         Get recommended bigram pairs using comprehensive scoring metrics.
@@ -514,43 +559,6 @@ class BigramRecommender:
             logger.warning(f"Error calculating transitivity score: {str(e)}")
             return 0.0
                         
-    def _generate_candidate_pairs(self) -> List[Tuple[str, str]]:
-        """Generate all possible bigram pairs from layout characters."""
-        # Get existing pairs
-        existing_pairs = set()
-        for pref in self.dataset.preferences:
-            pair = (pref.bigram1, pref.bigram2)
-            existing_pairs.add(pair)
-            existing_pairs.add((pair[1], pair[0]))  # Add reverse pair too
-            
-        # Generate all possible bigrams first
-        possible_bigrams = []
-        for char1, char2 in combinations(self.layout_chars, 2):
-            bigram = char1 + char2
-            possible_bigrams.append(bigram)
-            # Add reverse bigram
-            reverse_bigram = char2 + char1
-            possible_bigrams.append(reverse_bigram)
-            
-        # Generate all possible pairs of bigrams
-        candidate_pairs = []
-        for b1, b2 in combinations(possible_bigrams, 2):
-            pair = (b1, b2)
-            # Skip if pair (or its reverse) already exists in dataset
-            if pair not in existing_pairs and (b2, b1) not in existing_pairs:
-                candidate_pairs.append(pair)
-                
-        logger.info(f"Generated {len(candidate_pairs)} candidate pairs "
-                    f"from {len(self.layout_chars)} characters")
-        
-        # Optionally limit number of candidates
-        max_candidates = self.config.max_candidates  # Direct attribute access
-        if len(candidate_pairs) > max_candidates:
-            logger.info(f"Randomly sampling {max_candidates} candidates")
-            candidate_pairs = random.sample(candidate_pairs, max_candidates)
-            
-        return candidate_pairs
-
     def _build_preference_graph(self) -> Dict[str, Set[str]]:
         """Build graph of existing preferences."""
         pref_graph = {}

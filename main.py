@@ -171,71 +171,144 @@ def main():
         #---------------------------------
         if args.mode == 'select_features':
             logger.info("Starting feature selection...")
-
-            # Get base features
-            base_features = config.features.base_features
-            logger.info(f"Base features: {len(base_features)}")
             
-            # Generate possible feature interactions
-            interaction_features = []
-            for i, f1 in enumerate(base_features):
-                for f2 in base_features[i+1:]:
-                    interaction_features.append(f"{f1}_x_{f2}")
-            logger.info(f"Interaction features: {len(interaction_features)}")
-            
-            # Combine all possible features
-            all_features = base_features + interaction_features
-            logger.info(f"Evaluating {len(all_features)} total features...")
-
             # Get train/test split
             train_data, holdout_data = load_or_create_split(dataset, config)
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
                     f"{len(holdout_data.preferences)} holdout preferences")
             
-            # Initialize and fit base model first
-            model = PreferenceModel(config=config)
-            model.fit(train_data, config.features.base_features)  # Fit with base features first
+            # Get base features
+            base_features = config.features.base_features
+            logger.info(f"Base features: {len(base_features)}")
             
-            # Evaluate all features and interactions
-            feature_metrics = {}
-            for feature in all_features:
+            # Initialize model and fit with base features first
+            model = PreferenceModel(config=config)
+            model.fit(train_data, base_features)
+            
+            # First evaluate base features
+            logger.info("Evaluating base features...")
+            base_metrics = {}
+            for feature in base_features:
                 try:
                     metrics = model.importance_calculator.evaluate_feature(
                         feature=feature,
                         dataset=train_data,
                         model=model
                     )
-                    # Verify we got meaningful values
-                    if all(v in (0, 1) for v in metrics.values()):
-                        logger.warning(f"Got constant metrics for feature {feature}")
-                    feature_metrics[feature] = metrics
+                    if all(isinstance(v, (int, float)) and v in (0, 1) for v in metrics.values()):
+                        logger.warning(f"Got constant metrics for base feature {feature}")
+                    base_metrics[feature] = metrics
                 except Exception as e:
-                    logger.warning(f"Error evaluating feature {feature}: {str(e)}")
-                    feature_metrics[feature] = model.importance_calculator._get_default_metrics()
+                    logger.warning(f"Error evaluating base feature {feature}: {str(e)}")
+                    base_metrics[feature] = model.importance_calculator._get_default_metrics()
+            
+            # Generate and evaluate interactions
+            logger.info("Evaluating feature interactions...")
+            interaction_metrics = {}
+            
+            # 2-way interactions
+            for i, f1 in enumerate(base_features):
+                for j in range(i+1, len(base_features)):
+                    f2 = base_features[j]
+                    interaction_name = f"{f1}_x_{f2}"
                     
-            # Then select features
+                    try:
+                        # Get interaction metrics
+                        interaction_effect = model.importance_calculator._calculate_interaction_effect(
+                            feature1=f1,
+                            feature2=f2,
+                            dataset=train_data
+                        )
+                        
+                        metrics = {
+                            'effect_magnitude': abs(interaction_effect),
+                            'mutual_information': model.importance_calculator._calculate_mutual_information(
+                                interaction_name, dataset=train_data),
+                            # Extract feature differences first for correlation
+                            'correlation': (lambda diffs, prefs: model.importance_calculator._calculate_correlation(diffs, prefs))
+                                (*model.importance_calculator._extract_feature_differences(interaction_name, train_data)),
+                            'effect_consistency': model.importance_calculator._calculate_effect_consistency(
+                                interaction_name, dataset=train_data),
+                            'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
+                                interaction_name, dataset=train_data),
+                            'p_value': model.importance_calculator._calculate_significance(
+                                interaction_name, dataset=train_data)
+                        }
+                        
+                        # Calculate importance score
+                        metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
+                        interaction_metrics[interaction_name] = metrics
+                        
+                    except Exception as e:
+                        logger.warning(f"Error evaluating interaction {interaction_name}: {str(e)}")
+                        interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
+            
+            # 3-way interactions
+            for i, f1 in enumerate(base_features):
+                for j, f2 in enumerate(base_features[i+1:], i+1):
+                    for k, f3 in enumerate(base_features[j+1:], j+1):
+                        interaction_name = f"{f1}_x_{f2}_x_{f3}"
+                        
+                        try:
+                            # Get 3-way interaction metrics
+                            interaction_effect = model.importance_calculator._calculate_interaction_effect(
+                                feature1=f"{f1}_x_{f2}",
+                                feature2=f3,
+                                dataset=train_data
+                            )
+                            
+                            metrics = {
+                                'effect_magnitude': abs(interaction_effect),
+                                'mutual_information': model.importance_calculator._calculate_mutual_information(
+                                    interaction_name, dataset=train_data),
+                                # Extract feature differences first for correlation
+                                'correlation': (lambda diffs, prefs: model.importance_calculator._calculate_correlation(diffs, prefs))
+                                    (*model.importance_calculator._extract_feature_differences(interaction_name, train_data)),
+                                'effect_consistency': model.importance_calculator._calculate_effect_consistency(
+                                    interaction_name, dataset=train_data),
+                                'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
+                                    interaction_name, dataset=train_data),
+                                'p_value': model.importance_calculator._calculate_significance(
+                                    interaction_name, dataset=train_data)
+                            }
+                            
+                            # Calculate importance score
+                            metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
+                            interaction_metrics[interaction_name] = metrics
+                            
+                        except Exception as e:
+                            logger.warning(f"Error evaluating 3-way interaction {interaction_name}: {str(e)}")
+                            interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
+            
+            # Combine all metrics
+            all_features = base_features + list(interaction_metrics.keys())
+            all_metrics = {**base_metrics, **interaction_metrics}
+            
+            # Select features
+            logger.info(f"Selecting from {len(all_features)} total features...")
             selected_features = model.select_features(train_data)
             
-            # Fit model with selected features
+            # Final fit with selected features
             model.fit(train_data, selected_features)
-
+            
             # Save the trained model
             model_save_path = Path(config.feature_selection.model_file)
             model.save(model_save_path)
-
-            # Get feature weights for selected features
+            
+            # Get feature weights
             feature_weights = model.get_feature_weights()
             
             # Create comprehensive results DataFrame
             results = []
-            for feature in all_features:
-                metrics = feature_metrics[feature]
-                weight, std = feature_weights.get(feature, (0.0, 0.0))
+            for feature_name in all_features:
+                metrics = all_metrics[feature_name]
+                weight, std = feature_weights.get(feature_name, (0.0, 0.0))
+                components = feature_name.split('_x_')
                 
-                result = {
-                    'feature_name': feature,
-                    'is_interaction': '_x_' in feature,
-                    'selected': 1 if feature in selected_features else 0,
+                results.append({
+                    'feature_name': feature_name,
+                    'n_components': len(components),
+                    'selected': 1 if feature_name in selected_features else 0,
                     'importance_score': metrics.get('importance_score', 0.0),
                     'correlation': metrics.get('correlation', 0.0),
                     'mutual_information': metrics.get('mutual_information', 0.0),
@@ -244,36 +317,35 @@ def main():
                     'inclusion_probability': metrics.get('inclusion_probability', 0.0),
                     'p_value': metrics.get('p_value', 1.0),
                     'weight': weight,
-                    'weight_std': std
-                }
-                
-                # Add component features for interactions
-                if result['is_interaction']:
-                    f1, f2 = feature.split('_x_')
-                    result['component_1'] = f1
-                    result['component_2'] = f2
-                    
-                results.append(result)
+                    'weight_std': std,
+                    'component_1': components[0] if len(components) > 0 else '',
+                    'component_2': components[1] if len(components) > 1 else '',
+                    'component_3': components[2] if len(components) > 2 else ''
+                })
             
-            # Save comprehensive feature metrics
+            # Save comprehensive metrics
             metrics_file = Path(config.feature_selection.metrics_file)
             pd.DataFrame(results).to_csv(metrics_file, index=False)
-            logger.info(f"\nFeature selection summary:")
-            logger.info(f"  Total features evaluated: {len(all_features)}")
-            logger.info(f"  Base features: {len(base_features)}")
-            logger.info(f"  Interaction features: {len(interaction_features)}")
-            logger.info(f"  Features selected: {len(selected_features)}")
-                        
+            
             # Print summary
-            logger.info(f"\nSelected {len(selected_features)} out of {len(all_features)} features:")
+            logger.info("\nFeature selection summary:")
+            logger.info(f"Total features evaluated: {len(all_features)}")
+            logger.info(f"Base features: {len(base_features)}")
+            logger.info(f"Interaction features: {len(interaction_metrics)}")
+            logger.info(f"Features selected: {len(selected_features)}")
+            
+            logger.info("\nSelected features:")
             for feature in selected_features:
                 weight, std = feature_weights[feature]
-                metrics = feature_metrics[feature]
+                metrics = all_metrics[feature]
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                logger.info(f"  Importance score: {metrics['importance_score']:.3f}")
-                logger.info(f"  Correlation: {metrics['correlation']:.3f}")
-                logger.info(f"  Mutual information: {metrics['mutual_information']:.3f}")
+                logger.info(f"  Importance score: {metrics.get('importance_score', 0.0):.3f}")
+                logger.info(f"  Correlation: {metrics.get('correlation', 0.0):.3f}")
+                logger.info(f"  Mutual information: {metrics.get('mutual_information', 0.0):.3f}")
+                logger.info(f"  Effect magnitude: {metrics.get('effect_magnitude', 0.0):.3f}")
+                logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
+                logger.info(f"  Inclusion probability: {metrics.get('inclusion_probability', 0.0):.3f}")
 
         #---------------------------------
         # Visualize feature space

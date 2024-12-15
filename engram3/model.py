@@ -69,6 +69,7 @@ class PreferenceModel:
         if config is None:
             raise ValueError("Config is required")
         
+        # Set config first before using it
         if isinstance(config, dict):
             self.config = Config(**config)
         elif isinstance(config, Config):
@@ -76,6 +77,19 @@ class PreferenceModel:
         else:
             raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
 
+        # Initialize basic attributes
+        self.fit_result = None
+        self.feature_names = None
+        self.selected_features = []
+        self.interaction_metadata = {}
+        self.dataset = None
+        self.feature_weights = None
+        self.feature_extractor = None
+        
+        # Initialize caches
+        self.feature_cache = CacheManager()
+        self.prediction_cache = CacheManager()
+        
         try:
             # Initialize Stan model
             model_path = Path(__file__).parent / "models" / "preference_model.stan"
@@ -102,22 +116,17 @@ class PreferenceModel:
             logger.error("Traceback:", exc_info=True)
             raise
 
-        # Initialize other attributes after config is set
-        self.fit_result = None
-        self.feature_names = None
-        self.selected_features = []
-        self.interaction_metadata = {}
-        self.dataset = None
-        self.feature_weights = None
-        self.feature_extractor = None
+        # Initialize visualization components
+        self.plotting = PlottingUtils(self.config.paths.plots_dir)
+        self.feature_visualizer = FeatureMetricsVisualizer(self.config)
         
-        # Initialize components that need config
-        self.importance_calculator = FeatureImportanceCalculator(self.config)
-        self.feature_cache: CacheManager[str, Dict[str, float]] = CacheManager()
-        self.prediction_cache: CacheManager[Tuple[str, str], ModelPrediction] = CacheManager()
-        self.plotting = PlottingUtils(config.paths.plots_dir)
-        self.feature_visualizer = FeatureMetricsVisualizer(self.config)  # Pass self.config, not config
+        # Initialize importance calculator last (needs fully initialized self)
+        self.importance_calculator = FeatureImportanceCalculator(self.config, self)
 
+    def get_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
+        """Wrapper to access feature values through importance calculator."""
+        return self.importance_calculator._get_feature_values(feature, dataset)
+    
     # Property decorators
     @property
     def interaction_threshold(self) -> float:
@@ -585,16 +594,26 @@ class PreferenceModel:
                     features1 = []
                     features2 = []
                     for feature in self.feature_names:
-                        feat1 = pref.features1.get(feature, 0.0)
-                        feat2 = pref.features2.get(feature, 0.0)
+                        feat1 = pref.features1.get(feature)
+                        feat2 = pref.features2.get(feature)
                         
-                        # Check for invalid values
-                        if pd.isna(feat1) or pd.isna(feat2):
-                            raise ValueError(f"Invalid feature value for {feature}")
+                        # Special handling for typing_time
+                        if feature == 'typing_time':
+                            if feat1 is None or feat2 is None:
+                                # Get mean of valid times from this preference
+                                valid_times = [t for t in [pref.typing_time1, pref.typing_time2] if t is not None]
+                                mean_time = np.mean(valid_times) if valid_times else 0.0
+                                feat1 = mean_time if feat1 is None else feat1
+                                feat2 = mean_time if feat2 is None else feat2
+                        
+                        # For other features, use 0.0 for None
+                        else:
+                            feat1 = 0.0 if feat1 is None else feat1
+                            feat2 = 0.0 if feat2 is None else feat2
                         
                         features1.append(feat1)
                         features2.append(feat2)
-                    
+
                     X1.append(features1)
                     X2.append(features2)
                     participant.append(participant_map[pref.participant_id])
@@ -1097,125 +1116,59 @@ class PreferenceModel:
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------
-    def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
-        """Get cross-validation splits while preserving participant grouping.
+    def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Get cross-validation splits preserving participant structure."""
+        from sklearn.model_selection import KFold
         
-        Args:
-            dataset: PreferenceDataset to split
-            n_splits: Number of CV folds, defaults to config value if not specified
+        # Get unique participants
+        participants = list(dataset.participants)
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        
+        splits = []
+        for train_part_idx, val_part_idx in kf.split(participants):
+            # Get participant IDs for each split
+            train_participants = {participants[i] for i in train_part_idx}
             
-        Returns:
-            Iterator of train/validation indices from GroupKFold
-        """
-        if n_splits is None:
-            n_splits = getattr(self.config, 'model', {}).get('cross_validation', {}).get('n_splits', 5)
-        
-        participant_ids = np.array([p.participant_id for p in dataset.preferences])
-        cv = GroupKFold(n_splits=n_splits)
-        return cv.split(np.zeros(len(participant_ids)), groups=participant_ids)
+            # Get preference indices for each split
+            train_indices = [i for i, pref in enumerate(dataset.preferences)
+                           if pref.participant_id in train_participants]
+            val_indices = [i for i, pref in enumerate(dataset.preferences)
+                          if pref.participant_id not in train_participants]
+            
+            splits.append((np.array(train_indices), np.array(val_indices)))
+            
+        return splits
 
     #--------------------------------------------
     # Interaction analysis methods
     #--------------------------------------------
-    def _evaluate_interactions(self, dataset: PreferenceDataset, new_feature: str) -> None:
-        """
-        Evaluate and potentially add interactions with new feature.
-        
-        Args:
-            dataset: PreferenceDataset to evaluate interactions on
-            new_feature: Newly selected feature to test interactions with
+    def evaluate_interaction(self, components: List[str], dataset: PreferenceDataset) -> Dict[str, float]:
+        """Evaluate metrics specific to feature interactions."""
+        try:
+            # Get feature values for all components
+            feature_values = [self._get_feature_values(f, dataset) for f in components]
             
-        Returns:
-            None
+            # Get responses
+            responses = np.array([1 if pref.preferred else 0 for pref in dataset.preferences])
             
-        Raises:
-            ValueError: If feature values cannot be extracted
-        """
-        # Get configuration parameters
-        interaction_config = self.config.feature_selection.interaction_testing
-        min_effect_size = interaction_config.minimum_effect_size
-        alpha = self.config.feature_selection.multiple_testing.alpha
-        threshold = getattr(self.config.feature_selection, 'interaction_threshold', 0.15)
-        
-        # Only consider interactions with base features
-        base_features = [f for f in self.selected_features[:-1] 
-                        if '_x_' not in f and f != new_feature]
-        
-        for existing_feature in base_features:
-            try:
-                # Get feature values
-                new_feature_values = self._get_feature_values(dataset, new_feature)
-                existing_feature_values = self._get_feature_values(dataset, existing_feature)
-                
-                # Get preference responses
-                responses = np.array([1 if pref.preferred else 0 
-                                    for pref in dataset.preferences])
-                
-                # Test interaction significance
-                interaction_value, p_value = self.importance_calculator.compute_interaction_lr(
-                    [existing_feature_values, new_feature_values],
-                    responses,
-                    min_effect_size
-                )
-                
-                # Create interaction name
-                interaction = f"{new_feature}_x_{existing_feature}"
-                
-                # If interaction is not significant, skip importance calculation
-                if p_value >= alpha:
-                    logger.debug(f"Interaction {interaction} not significant (p={p_value:.4f})")
-                    continue
-                    
-                # Get importance score for significant interactions
-                metrics = self.importance_calculator.evaluate_feature(
-                    feature=interaction,
-                    dataset=dataset,
-                    model=self
-                )
-                importance_score = metrics['importance_score']
-                
-                # Add interaction if it meets both significance and importance criteria
-                if importance_score >= self.interaction_threshold:
-                    self.selected_features.append(interaction)
-                    
-                    # Store comprehensive metadata
-                    self.interaction_metadata[interaction] = {
-                        'components': [existing_feature, new_feature],
-                        'p_value': p_value,
-                        'effect_size': interaction_value,
-                        'importance_score': importance_score
-                    }
-                    
-                    logger.info(
-                        f"Added interaction: {interaction}\n"
-                        f"  - p-value: {p_value:.4f}\n"
-                        f"  - effect size: {interaction_value:.4f}\n"
-                        f"  - importance score: {importance_score:.3f}"
-                    )
-                else:
-                    logger.debug(
-                        f"Interaction {interaction} below threshold\n"
-                        f"  - importance score: {importance_score:.3f} < {threshold:.3f}"
-                    )
-                    
-            except Exception as e:
-                logger.warning(
-                    f"Error evaluating interaction between {existing_feature} "
-                    f"and {new_feature}: {str(e)}"
-                )
-                continue
-                        
-    def _get_feature_values(self, dataset: PreferenceDataset, feature: str) -> np.ndarray:
-        """Get feature values from cache or compute them."""
-        cache_key = f"{dataset.file_path}_{feature}"
-        cached_values = self.feature_values_cache.get(cache_key)
-        if cached_values is not None:
-            return cached_values
+            # Calculate interaction strength using likelihood ratio test
+            interaction_value, p_value = self._compute_interaction_lr(
+                feature_values=feature_values,
+                responses=responses,
+                min_effect_size=self.config.interaction_testing.minimum_effect_size
+            )
             
-        values = self._compute_feature_values(dataset, feature)
-        self.feature_values_cache.set(cache_key, values)
-        return values
-
+            return {
+                'interaction_strength': interaction_value,
+                'interaction_significance': p_value
+            }
+        except Exception as e:
+            logger.warning(f"Error evaluating interaction metrics: {str(e)}")
+            return {
+                'interaction_strength': 0.0,
+                'interaction_significance': 1.0
+            }
+                            
     def _compute_feature_values(self, dataset: PreferenceDataset, feature: str) -> np.ndarray:
         """Compute feature values without caching."""
         values = []
