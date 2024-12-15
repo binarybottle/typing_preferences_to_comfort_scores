@@ -206,79 +206,54 @@ def main():
             logger.info("Evaluating feature interactions...")
             interaction_metrics = {}
             
-            # 2-way interactions
-            for i, f1 in enumerate(base_features):
-                for j in range(i+1, len(base_features)):
-                    f2 = base_features[j]
-                    interaction_name = f"{f1}_x_{f2}"
+            # Get interactions from config
+            logger.info("Processing configured feature interactions...")
+            all_features = config.features.get_all_features()
+            interaction_features = [f for f in all_features if '_x_' in f]
+
+            for interaction_name in interaction_features:
+                try:
+                    # Split interaction into component features
+                    components = interaction_name.split('_x_')
                     
-                    try:
-                        # Get interaction metrics
+                    # Calculate interaction metrics
+                    if len(components) == 2:  # 2-way interaction
                         interaction_effect = model.importance_calculator._calculate_interaction_effect(
-                            feature1=f1,
-                            feature2=f2,
+                            feature1=components[0],
+                            feature2=components[1],
                             dataset=train_data
                         )
-                        
-                        metrics = {
-                            'effect_magnitude': abs(interaction_effect),
-                            'mutual_information': model.importance_calculator._calculate_mutual_information(
-                                interaction_name, dataset=train_data),
-                            # Extract feature differences first for correlation
-                            'correlation': (lambda diffs, prefs: model.importance_calculator._calculate_correlation(diffs, prefs))
-                                (*model.importance_calculator._extract_feature_differences(interaction_name, train_data)),
-                            'effect_consistency': model.importance_calculator._calculate_effect_consistency(
-                                interaction_name, dataset=train_data),
-                            'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
-                                interaction_name, dataset=train_data),
-                            'p_value': model.importance_calculator._calculate_significance(
-                                interaction_name, dataset=train_data)
-                        }
-                        
-                        # Calculate importance score
-                        metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
-                        interaction_metrics[interaction_name] = metrics
-                        
-                    except Exception as e:
-                        logger.warning(f"Error evaluating interaction {interaction_name}: {str(e)}")
-                        interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
-            
-            # 3-way interactions
-            for i, f1 in enumerate(base_features):
-                for j, f2 in enumerate(base_features[i+1:], i+1):
-                    for k, f3 in enumerate(base_features[j+1:], j+1):
-                        interaction_name = f"{f1}_x_{f2}_x_{f3}"
-                        
-                        try:
-                            # Get 3-way interaction metrics
-                            interaction_effect = model.importance_calculator._calculate_interaction_effect(
-                                feature1=f"{f1}_x_{f2}",
-                                feature2=f3,
-                                dataset=train_data
-                            )
-                            
-                            metrics = {
-                                'effect_magnitude': abs(interaction_effect),
-                                'mutual_information': model.importance_calculator._calculate_mutual_information(
-                                    interaction_name, dataset=train_data),
-                                # Extract feature differences first for correlation
-                                'correlation': (lambda diffs, prefs: model.importance_calculator._calculate_correlation(diffs, prefs))
-                                    (*model.importance_calculator._extract_feature_differences(interaction_name, train_data)),
-                                'effect_consistency': model.importance_calculator._calculate_effect_consistency(
-                                    interaction_name, dataset=train_data),
-                                'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
-                                    interaction_name, dataset=train_data),
-                                'p_value': model.importance_calculator._calculate_significance(
-                                    interaction_name, dataset=train_data)
-                            }
-                            
-                            # Calculate importance score
-                            metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
-                            interaction_metrics[interaction_name] = metrics
-                            
-                        except Exception as e:
-                            logger.warning(f"Error evaluating 3-way interaction {interaction_name}: {str(e)}")
-                            interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
+                    else:  # Higher-order interaction
+                        # Calculate as series of 2-way interactions
+                        interaction_effect = model.importance_calculator._calculate_interaction_effect(
+                            feature1='_x_'.join(components[:-1]),
+                            feature2=components[-1],
+                            dataset=train_data
+                        )
+                    
+                    metrics = {
+                        'effect_magnitude': abs(interaction_effect),
+                        'mutual_information': model.importance_calculator._calculate_mutual_information(
+                            interaction_name, dataset=train_data),
+                        'correlation': model.importance_calculator._calculate_correlation(
+                            interaction_name, dataset=train_data),
+                        'effect_consistency': model.importance_calculator._calculate_effect_consistency(
+                            interaction_name, dataset=train_data),
+                        'inclusion_probability': model.importance_calculator._calculate_inclusion_probability(
+                            interaction_name, dataset=train_data),
+                        'p_value': model.importance_calculator._calculate_significance(
+                            interaction_name, dataset=train_data)
+                    }
+                    
+                    # Calculate importance score
+                    metrics['importance_score'] = model.importance_calculator._calculate_combined_score(**metrics)
+                    interaction_metrics[interaction_name] = metrics
+                    
+                except Exception as e:
+                    logger.warning(f"Error evaluating interaction {interaction_name}: {str(e)}")
+                    interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
+
+            logger.info(f"Processed {len(interaction_features)} configured interactions")
             
             # Combine all metrics
             all_features = base_features + list(interaction_metrics.keys())
@@ -320,7 +295,8 @@ def main():
                     'weight_std': std,
                     'component_1': components[0] if len(components) > 0 else '',
                     'component_2': components[1] if len(components) > 1 else '',
-                    'component_3': components[2] if len(components) > 2 else ''
+                    'component_3': components[2] if len(components) > 2 else '',
+                    'component_4': components[3] if len(components) > 3 else ''
                 })
             
             # Save comprehensive metrics

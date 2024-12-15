@@ -271,15 +271,12 @@ class FeatureImportanceCalculator:
             logger.error(f"Error calculating inclusion probability for {feature}: {str(e)}")
             return 0.0
                 
-    def _calculate_correlation(self, feature_diffs: Union[str, np.ndarray],
-                            preferences: Union[np.ndarray, List],
-                            dataset: Optional[PreferenceDataset] = None) -> float:
+    def _calculate_correlation(self, feature: str, dataset: PreferenceDataset) -> float:
         """Calculate correlation between feature and preferences."""
         try:
-            # If string feature name is provided, extract values
-            if isinstance(feature_diffs, str) and dataset is not None:
-                feature_diffs, preferences = self._extract_feature_differences(feature_diffs, dataset)
-                
+            # Extract feature differences and preferences
+            feature_diffs, preferences = self._extract_feature_differences(feature, dataset)
+                    
             # Ensure we're working with numpy arrays
             feature_diffs = np.array(feature_diffs, dtype=float)
             preferences = np.array(preferences, dtype=float)
@@ -295,7 +292,7 @@ class FeatureImportanceCalculator:
             return 0.0
             
         except Exception as e:
-            logger.error(f"Error calculating correlation: {str(e)}")
+            logger.error(f"Error calculating correlation for feature {feature}: {str(e)}")
             return 0.0
                         
     def _extract_feature_differences(self, feature: str, dataset: PreferenceDataset) -> Tuple[np.ndarray, np.ndarray]:
