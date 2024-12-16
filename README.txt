@@ -189,11 +189,10 @@ where:
   - importance_score: Combined score from the prediction and variation metrics below, indicating overall feature importance
   - Prediction/Effect measures: 
     - model_effect: Absolute size of the feature's effect in the model
+    - predictive_power: Model performance improvement from feature
   - Variation/Stability measures: 
     - effect_consistency: How consistent the feature's effect is across cross-validation splits
       - (1 - coefficient of variation: 1 - std_effect / abs(mean_effect)
-  - Statistical significance: 
-    - p_value: Statistical significance of the feature's effect
   - Resulting model weights: 
     - weight: Mean weight/coefficient of the feature in the model
     - weight_std: Standard deviation of the feature's weight (uncertainty measure)

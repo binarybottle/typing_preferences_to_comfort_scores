@@ -295,7 +295,7 @@ def main():
                     'importance_score': metrics.get('importance_score', 0.0),
                     'model_effect': metrics.get('model_effect', 0.0),
                     'effect_consistency': metrics.get('effect_consistency', 0.0),
-                    'p_value': metrics.get('p_value', 1.0),
+                    'predictive_power': metrics.get('predictive_power', 0.0),
                     'weight': weight,
                     'weight_std': std,
                     'component_1': components[0] if len(components) > 0 else '',
@@ -324,6 +324,7 @@ def main():
                 logger.info(f"  Importance score: {metrics.get('importance_score', 0.0):.3f}")
                 logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
+                logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
 
         #---------------------------------
         # Visualize feature space

@@ -38,7 +38,7 @@ logger = LoggingManager.getLogger(__name__)
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
 
-    def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):        
+    def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
         else:
@@ -52,6 +52,16 @@ class FeatureImportanceCalculator:
         self.metric_cache = CacheManager(max_size=10000)
         self.feature_values_cache = CacheManager(max_size=10000)
 
+        # Ensure Stan model executable has proper permissions
+        if hasattr(model, 'model') and hasattr(model.model, 'exe_file'):
+            try:
+                import os
+                exe_path = Path(model.model.exe_file)
+                if exe_path.exists():
+                    os.chmod(str(exe_path), 0o755)
+            except Exception as e:
+                logger.warning(f"Could not set Stan model executable permissions: {str(e)}")
+                
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
@@ -108,6 +118,71 @@ class FeatureImportanceCalculator:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
 
+    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
+        """
+        Calculate how much a feature improves model predictions.
+        """
+        try:
+            # Get current feature set and performance
+            current_features = model.selected_features
+            if feature in current_features:
+                features_without = [f for f in current_features if f != feature]
+                features_with = current_features
+            else:
+                features_without = current_features
+                features_with = current_features + [feature]
+
+            # Ensure we have at least one feature
+            if not features_without:
+                features_without = [feature]
+            if not features_with:
+                features_with = [feature]
+
+            # Validate feature lists
+            if len(features_without) == 0 or len(features_with) == 0:
+                logger.error(f"Invalid feature sets: without={features_without}, with={features_with}")
+                return 0.0
+
+            try:
+                # Measure performance without feature
+                model_without = type(model)(config=model.config)
+                model_without.feature_extractor = model.feature_extractor
+                model_without.feature_names = features_without  # Set feature names before fitting
+                model_without.fit(dataset, features_without)
+                metrics_without = model_without.evaluate(dataset)
+                acc_without = metrics_without.get('accuracy', 0.0)
+
+                # Measure performance with feature
+                model_with = type(model)(config=model.config)
+                model_with.feature_extractor = model.feature_extractor
+                model_with.feature_names = features_with  # Set feature names before fitting
+                model_with.fit(dataset, features_with)
+                metrics_with = model_with.evaluate(dataset)
+                acc_with = metrics_with.get('accuracy', 0.0)
+
+                # Calculate improvement
+                improvement = acc_with - acc_without
+                
+                # Normalize improvement to [0,1] range
+                max_improvement = 0.5  # Maximum expected improvement from one feature
+                normalized_improvement = np.clip(improvement / max_improvement, 0, 1)
+
+                return float(normalized_improvement)
+
+            except Exception as e:
+                logger.error(f"Error during model fitting: {str(e)}")
+                return 0.0
+            finally:
+                # Clean up
+                if 'model_without' in locals():
+                    del model_without
+                if 'model_with' in locals():
+                    del model_with
+
+        except Exception as e:
+            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
+            return 0.0
+                                
     def _calculate_combined_score(self, **metrics) -> float:
         """Calculate combined importance score."""
         try:

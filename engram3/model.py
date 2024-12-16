@@ -69,6 +69,7 @@ from typing import (
 import pandas as pd
 import time  # Needed for computation_time in predict_preference
 import pickle
+import copy
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -176,26 +177,32 @@ class PreferenceModel:
         self.feature_values_cache.clear()
 
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
-        """
-        Fit the model to data using Stan backend.
-        
-        Args:
-            dataset: PreferenceDataset containing preferences
-            features: Optional list of features to use. If None, uses all features.
-        """
         try:
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
+            # Validate features
+            if not features:
+                features = dataset.get_feature_names()
+            if not features:
+                raise ValueError("No features provided and none available from dataset")
+            
+            # Store feature names
+            self.feature_names = features
+            
             # Prepare data
             stan_data = self.prepare_data(dataset, features)
             
+            # Validate Stan data
+            if stan_data['F'] < 1:
+                raise ValueError(f"Invalid number of features: {stan_data['F']}")
+                
             # Fit using Stan
-            self.fit_result = self.model.sample(  # Update this line
+            self.fit_result = self.model.sample(
                 data=stan_data,
                 chains=self.config.model.chains,
                 iter_warmup=self.config.model.warmup,
-                iter_sampling=self.config.model.samples,
+                iter_sampling=self.config.model.n_samples,
                 adapt_delta=self.config.model.adapt_delta,
                 max_treedepth=self.config.model.max_treedepth
             )
@@ -217,7 +224,7 @@ class PreferenceModel:
             data=stan_data,
             chains=self.config.model.chains,
             iter_warmup=self.config.model.warmup,
-            iter_sampling=self.config.model.samples,
+            iter_sampling=self.config.model.n_samples,
             adapt_delta=getattr(self.config.model, 'adapt_delta', 0.95),
             max_treedepth=getattr(self.config.model, 'max_treedepth', 12),
             show_progress=True,
@@ -480,7 +487,6 @@ class PreferenceModel:
             metrics = importance_metrics.get(feature, {})
             logger.info(f"  {feature}:")
             logger.info(f"    Score: {metrics.get('importance_score', 0.0):.3f}")
-            logger.info(f"    p-value: {metrics.get('p_value', 1.0):.3f}")
 
     #--------------------------------------------
     # Data preparation and feature methods
@@ -820,61 +826,7 @@ class PreferenceModel:
                             
     #--------------------------------------------
     # Feature selection and evaluation methods
-    #--------------------------------------------          
-    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
-        """
-        Calculate how much a feature improves model predictions.
-        
-        Args:
-            feature: Feature to evaluate
-            dataset: Dataset to test on
-            model: Trained model
-            
-        Returns:
-            float: Normalized improvement in prediction accuracy [0,1]
-        """
-        try:
-            # Get current feature set and performance
-            current_features = model.selected_features
-            if feature in current_features:
-                features_without = [f for f in current_features if f != feature]
-                features_with = current_features
-            else:
-                features_without = current_features
-                features_with = current_features + [feature]
-
-            # Measure performance without feature
-            model_without = copy.deepcopy(model)
-            model_without.fit(dataset, features_without)
-            metrics_without = model_without.evaluate(dataset)
-            acc_without = metrics_without['accuracy']
-
-            # Measure performance with feature
-            model_with = copy.deepcopy(model)
-            model_with.fit(dataset, features_with)
-            metrics_with = model_with.evaluate(dataset)
-            acc_with = metrics_with['accuracy']
-
-            # Calculate improvement
-            improvement = acc_with - acc_without
-            
-            # Normalize improvement to [0,1] range
-            # Note: Could adjust max_improvement based on domain knowledge
-            max_improvement = 0.5  # Maximum expected improvement from one feature
-            normalized_improvement = np.clip(improvement / max_improvement, 0, 1)
-
-            logger.debug(f"Feature {feature} predictive power:")
-            logger.debug(f"  Accuracy without: {acc_without:.4f}")
-            logger.debug(f"  Accuracy with: {acc_with:.4f}")
-            logger.debug(f"  Improvement: {improvement:.4f}")
-            logger.debug(f"  Normalized: {normalized_improvement:.4f}")
-
-            return float(normalized_improvement)
-
-        except Exception as e:
-            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
-            return 0.0
-            
+    #--------------------------------------------                          
     def _calculate_stability_metrics(self, dataset: PreferenceDataset,
                                 feature: str) -> StabilityMetrics:
         """
@@ -1268,6 +1220,7 @@ class PreferenceModel:
             Dict containing model-specific metrics:
             - model_effect: Absolute effect size
             - effect_consistency: Cross-validation based consistency
+            - predictive_power: Improvement in model predictions
             - feature_weight: Current weight in model
             - weight_uncertainty: Uncertainty in weight estimate
         """
@@ -1289,6 +1242,9 @@ class PreferenceModel:
             # Calculate effect consistency through cross-validation
             metrics['effect_consistency'] = self._calculate_effect_consistency(feature, dataset)
             
+            # Calculate predictive power
+            metrics['predictive_power'] = self._calculate_predictive_power(feature, dataset, self)
+            
             return metrics
             
         except Exception as e:
@@ -1297,9 +1253,10 @@ class PreferenceModel:
                 'feature_weight': 0.0,
                 'weight_uncertainty': 1.0,
                 'model_effect': 0.0,
-                'effect_consistency': 1.0
+                'effect_consistency': 1.0,
+                'predictive_power': 0.0  # Add this line
             }
-        
+                
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------

@@ -91,7 +91,8 @@ class FeatureSelectionMetricWeights(BaseModel):
     """Configuration for feature importance metric weights."""
     model_effect: float = Field(gt=0, lt=1)
     effect_consistency: float = Field(gt=0, lt=1)
-
+    predictive_power: float = Field(gt=0, lt=1)  # Add this line
+    
     @field_validator('*')
     def weights_must_sum_to_one(cls, values):
         total = sum(values.values())
@@ -102,23 +103,13 @@ class FeatureSelectionMetricWeights(BaseModel):
 class FeatureSelectionThresholds(BaseModel):
     importance: float = Field(gt=0)
     stability: float = Field(gt=0)
+    predictive_power: float = Field(gt=0)  # Add this line
 
 class MetricWeights(TypedDict):
     """Type definition for metric weights."""
     model_effect: float
     effect_consistency: float
-
-class ModelSettings(BaseModel):
-    """Model configuration with validation."""
-    chains: int = Field(gt=0)
-    warmup: int = Field(gt=0)
-    samples: int = Field(gt=0)
-    adapt_delta: float = Field(gt=0, lt=1)
-    max_treedepth: int = Field(gt=0)
-    feature_scale: float = Field(gt=0)
-    participant_scale: float = Field(gt=0)
-    predictions_file: str
-    model_file: str
+    predictive_power: float  # Add this line
 
 #------------------------------------------------
 # feature_visualization.py
@@ -163,7 +154,6 @@ class FeatureMetrics(TypedDict):
     """Type definition for feature metrics."""
     importance_score: float
     effect_size: float
-    p_value: float
 
 class FeatureEffect(NamedTuple):
     """Feature effect statistics."""
@@ -182,26 +172,19 @@ class StabilityMetrics(TypedDict):
 #------------------------------------------------
 class ModelSettings(BaseModel):
     """Model configuration with validation."""
-    chains: int
-    warmup: int
-    samples: int
-    adapt_delta: float
-    max_treedepth: int
-    feature_scale: float
-    participant_scale: float
-    
-    @validator('chains', 'warmup', 'samples')
-    def positive_int(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("Must be positive")
-        return v
-        
-    @validator('adapt_delta')
-    def valid_probability(cls, v: float) -> float:
-        if not 0 < v < 1:
-            raise ValueError("Must be between 0 and 1")
-        return v
+    chains: int = Field(gt=0)
+    warmup: int = Field(gt=0)
+    n_samples: int = Field(gt=0)
+    adapt_delta: float = Field(gt=0, lt=1)
+    max_treedepth: int = Field(gt=0)
+    feature_scale: float = Field(gt=0)
+    participant_scale: float = Field(gt=0)
+    predictions_file: str
+    model_file: str
 
+    class Config:
+        validate_assignment = True
+    
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
     n_iterations: int = Field(gt=0)
