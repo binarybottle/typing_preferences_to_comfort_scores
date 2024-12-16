@@ -285,23 +285,23 @@ def main():
             results = []
             for feature_name in all_features:
                 metrics = all_metrics[feature_name]
+                
+                # Get feature weights from the full model, not just selected features
+                feature_weights = model.get_feature_weights()  # This gets ALL weights
                 weight, std = feature_weights.get(feature_name, (0.0, 0.0))
+                
                 components = feature_name.split('_x_')
                 
                 results.append({
                     'feature_name': feature_name,
                     'n_components': len(components),
                     'selected': 1 if feature_name in selected_features else 0,
-                    'importance_score': metrics.get('importance_score', 0.0),
+                    'combined_score': metrics.get('combined_score', 0.0),
                     'model_effect': metrics.get('model_effect', 0.0),
                     'effect_consistency': metrics.get('effect_consistency', 0.0),
                     'predictive_power': metrics.get('predictive_power', 0.0),
                     'weight': weight,
-                    'weight_std': std,
-                    'component_1': components[0] if len(components) > 0 else '',
-                    'component_2': components[1] if len(components) > 1 else '',
-                    'component_3': components[2] if len(components) > 2 else '',
-                    'component_4': components[3] if len(components) > 3 else ''
+                    'weight_std': std
                 })
             
             # Save comprehensive metrics
@@ -321,7 +321,7 @@ def main():
                 metrics = all_metrics[feature]
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                logger.info(f"  Importance score: {metrics.get('importance_score', 0.0):.3f}")
+                logger.info(f"  Combined score: {metrics.get('combined_score', 0.0):.3f}")
                 logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
                 logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
@@ -331,7 +331,7 @@ def main():
         #---------------------------------
         if args.mode == 'visualize_feature_space':
             logger.info("Generating feature analysis visualizations...")
-
+            
             # Load feature selection model
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
@@ -374,79 +374,65 @@ def main():
             metrics_file = Path(config.feature_selection.metrics_file)
             if not metrics_file.exists():
                 raise FileNotFoundError(f"Feature metrics file not found: {metrics_file}")
-                        
+                    
             # Load metrics and check available columns
             metrics_df = pd.read_csv(metrics_file)
             logger.info(f"Available columns in metrics file: {list(metrics_df.columns)}")
             
-            # Convert metrics CSV to dictionary using actual column names
-            metrics_dict = {
-                row['feature_name']: {
-                    'weight': row['weight'],
-                    'weight_std': row['weight_std'],
-                    'selected': row['selected'] == 1
-                }
-                for _, row in metrics_df.iterrows()
-            }
-            
             available_plots = []
             
-            if feature_selection_model.feature_visualizer:
+            try:
                 # 1. PCA Feature Space Plot
-                fig_pca = plot_feature_space(feature_selection_model, dataset, "Feature Space")
+                fig_pca = plot_feature_space(
+                    model=feature_selection_model,
+                    dataset=dataset,
+                    title="Feature Space",
+                    figure_size=(12, 8),
+                    alpha=0.6
+                )
                 fig_pca.savefig(Path(config.paths.plots_dir) / 'feature_space_pca.png')
                 plt.close()
                 available_plots.append('feature_space_pca.png')
-
-                # 2. Feature Impacts Plot
+                
+                # 2. Feature Impacts Plot from metrics
                 fig_impacts = plt.figure(figsize=(12, 6))
                 ax = fig_impacts.add_subplot(111)
-
-                # Sort features by absolute weight value
-                sorted_features = sorted(
-                    [(name, d['weight'], d['weight_std'], d['selected']) 
-                    for name, d in metrics_dict.items()],
-                    key=lambda x: abs(x[1]),  # Sort by absolute weight
-                    reverse=True
-                )
                 
-                features = [f for f, _, _, _ in sorted_features]
-                weights = [w for _, w, _, _ in sorted_features]
-                stds = [s for _, _, s, _ in sorted_features]
-                selected = [s for _, _, _, s in sorted_features]
+                # Sort features by absolute weight value
+                sorted_metrics = metrics_df.sort_values('weight', key=abs, ascending=False)
                 
                 # Plot horizontal bar chart with error bars
-                y_pos = np.arange(len(features))
-                bars = ax.barh(y_pos, weights, xerr=stds, 
-                            alpha=0.6, capsize=5,
-                            color=['blue' if s else 'lightgray' for s in selected])
+                y_pos = np.arange(len(sorted_metrics))
+                ax.barh(y_pos,
+                        sorted_metrics['weight'],
+                        xerr=sorted_metrics['weight_std'],
+                        alpha=0.6,
+                        capsize=5,
+                        color=['blue' if s else 'lightgray' for s in sorted_metrics['selected']])
                 
                 # Customize plot
                 ax.set_yticks(y_pos)
-                ax.set_yticklabels(features)
+                ax.set_yticklabels(sorted_metrics['feature_name'])
                 ax.set_xlabel('Feature Weight')
                 ax.set_title('Feature Impact Analysis\n(blue = selected features)')
                 ax.grid(True, alpha=0.3)
                 ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
                 
                 plt.tight_layout()
-                fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts.png')
+                fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts_metrics.png')
                 plt.close()
-                available_plots.append('feature_impacts.png')
+                available_plots.append('feature_impacts_metrics.png')
                 
-                # 3. Feature Impacts Plot
-                # Get feature weights from trained model
+                # 3. Feature Impacts Plot from model weights
                 feature_weights = feature_selection_model.get_feature_weights()
-
                 if feature_weights:
-                    # Create figure for feature impacts
-                    fig_impacts = plt.figure(figsize=(12, 6))
-                    ax = fig_impacts.add_subplot(111)
-
-                    # Sort features by absolute weight value
+                    fig_weights = plt.figure(figsize=(12, 6))
+                    ax = fig_weights.add_subplot(111)
+                    
+                    # Sort features by absolute weight
                     sorted_features = sorted(
-                        feature_weights.items(), 
-                        key=lambda x: abs(x[1][0]),  # Sort by absolute mean weight
+                        feature_weights.items(),
+                        key=lambda x: abs(x[1][0]),
                         reverse=True
                     )
                     
@@ -454,30 +440,31 @@ def main():
                     means = [w[0] for _, w in sorted_features]
                     stds = [w[1] for _, w in sorted_features]
                     
-                    # Plot horizontal bar chart with error bars
+                    # Plot horizontal bar chart
                     y_pos = np.arange(len(features))
-                    ax.barh(y_pos, means, xerr=stds, 
-                            alpha=0.6, capsize=5,
-                            color=['blue' if m > 0 else 'red' for m in means])
+                    ax.barh(y_pos, means, xerr=stds,
+                        alpha=0.6, capsize=5,
+                        color=['blue' if m > 0 else 'red' for m in means])
                     
                     # Customize plot
                     ax.set_yticks(y_pos)
                     ax.set_yticklabels(features)
                     ax.set_xlabel('Feature Weight')
-                    ax.set_title('Feature Impact Analysis')
+                    ax.set_title('Feature Weights from Model')
                     ax.grid(True, alpha=0.3)
-                    
-                    # Add vertical line at x=0 for reference
                     ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
                     
-                    # Adjust layout and save
                     plt.tight_layout()
-                    fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts.png')
+                    fig_weights.savefig(Path(config.paths.plots_dir) / 'feature_impacts_weights.png')
                     plt.close()
-                    available_plots.append('feature_impacts.png')
-
-            logger.info(f"Generated the following plots: {', '.join(available_plots)}")
-            
+                    available_plots.append('feature_impacts_weights.png')
+                
+                logger.info(f"Generated the following plots: {', '.join(available_plots)}")
+                
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                raise
+                        
         #---------------------------------
         # Recommend bigram pairs
         #---------------------------------

@@ -70,6 +70,7 @@ import pandas as pd
 import time  # Needed for computation_time in predict_preference
 import pickle
 import copy
+from pathlib import Path
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -257,18 +258,21 @@ class PreferenceModel:
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         try:
-            if not hasattr(self, 'fit') or self.fit_result is None:
+            if not hasattr(self, 'fit_result') or self.fit_result is None:
+                logger.error("Model must be fit before evaluation")
                 raise RuntimeError("Model must be fit before evaluation")
                 
             predictions = []
             actuals = []
             
+            logger.info(f"Evaluating model on {len(dataset.preferences)} preferences")
+            
             for pref in dataset.preferences:
                 try:
-                    # Get prediction probability
-                    pred_mean, _ = self.predict_preference(pref.bigram1, pref.bigram2)
-                    if not np.isnan(pred_mean):
-                        predictions.append(pred_mean)
+                    # Get prediction probability - now handling ModelPrediction object
+                    prediction = self.predict_preference(pref.bigram1, pref.bigram2)
+                    if not np.isnan(prediction.probability):
+                        predictions.append(prediction.probability)
                         actuals.append(1.0 if pref.preferred else 0.0)
                 except Exception as e:
                     logger.debug(f"Skipping preference in evaluation due to: {str(e)}")
@@ -277,10 +281,12 @@ class PreferenceModel:
             if not predictions:
                 logger.warning("No valid predictions for evaluation")
                 return {
-                    'accuracy': 0.0,
+                    'accuracy': 0.5,  # Random chance
                     'auc': 0.5,
                     'n_evaluated': 0
                 }
+            
+            logger.info(f"Made predictions for {len(predictions)} preferences")
                 
             predictions = np.array(predictions)
             actuals = np.array(actuals)
@@ -289,20 +295,23 @@ class PreferenceModel:
             accuracy = np.mean((predictions > 0.5) == actuals)
             auc = roc_auc_score(actuals, predictions)
             
+            logger.info(f"Evaluation results - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
+            
             return {
                 'accuracy': float(accuracy),
                 'auc': float(auc),
                 'n_evaluated': len(predictions)
             }
-            
+                
         except Exception as e:
             logger.error(f"Error in model evaluation: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             return {
-                'accuracy': 0.0,
+                'accuracy': 0.5,
                 'auc': 0.5,
                 'n_evaluated': 0
             }
-
+                
     def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Dict[str, Any]:
         """Perform cross-validation with multiple validation strategies."""
         feature_names = dataset.get_feature_names()
@@ -402,11 +411,6 @@ class PreferenceModel:
                     model=self
                 )
 
-        # Calculate stability metrics
-        stability_metrics = {}
-        for feature in feature_names:
-            stability_metrics[feature] = self._calculate_stability_metrics(dataset, feature)
-
         # Determine selected features using Bayesian criteria
         selected_features = self.selected_features
         
@@ -419,7 +423,6 @@ class PreferenceModel:
             metrics_dict={feature: {
                 **processed_effects.get(feature, {}),
                 **importance_metrics.get(feature, {}),
-                **stability_metrics.get(feature, {})
             } for feature in feature_names},
             output_file=self.config.feature_selection.metrics_file
         )
@@ -429,12 +432,11 @@ class PreferenceModel:
             'selected_features': selected_features,
             'feature_effects': processed_effects,
             'importance_metrics': importance_metrics,
-            'stability_metrics': stability_metrics,
             'fold_uncertainties': dict(metrics['mean_uncertainty'])
         }
 
     def select_features(self, dataset: PreferenceDataset) -> List[str]:
-        """Select features using centralized importance calculator."""
+        """Select features using importance scores derived from combined metrics."""
         logger.info("Starting feature selection...")
         self.selected_features = []  # Start empty
         base_features = self.config.features.base_features
@@ -443,41 +445,51 @@ class PreferenceModel:
         # Initial model fit with base features to get started
         self.fit(dataset, base_features)
         
-        iteration = 0
-        while iteration < self.config.feature_selection.n_iterations:
+        while True:  # Keep selecting features until none pass threshold
             # Evaluate remaining features
             feature_metrics = {}
-            for feature in [f for f in all_features if f not in self.selected_features]:
+            remaining_features = [f for f in all_features if f not in self.selected_features]
+            
+            if not remaining_features:
+                logger.info("No more features to evaluate")
+                break
+                
+            logger.info(f"\nEvaluating {len(remaining_features)} remaining features")
+            
+            for feature in remaining_features:
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
-                    model=self  # Changed from self.model to self
+                    model=self
                 )
+                combined_score = metrics.get('combined_score', 0.0)
+                logger.info(f"Feature {feature}: combined score = {combined_score:.3f}")
                 feature_metrics[feature] = metrics
-                                    
-            # Get importance scores and threshold
-            importance_scores = [m['importance_score'] for m in feature_metrics.values()]
-            threshold = self._calculate_adaptive_threshold(importance_scores)
+                                        
+            # Get scores and threshold
+            scores = [m.get('combined_score', 0.0) for m in feature_metrics.values()]
+            threshold = self._calculate_adaptive_threshold(scores)
             
             # Select best feature that passes criteria
             passing_features = [
-                (f, m['importance_score']) 
-                for i, (f, m) in enumerate(feature_metrics.items())
-                if m['importance_score'] >= threshold
+                (f, m.get('combined_score', 0.0)) 
+                for f, m in feature_metrics.items()
+                if m.get('combined_score', 0.0) >= threshold
             ]
             
             if not passing_features:
+                logger.info("No features passed threshold - stopping selection")
                 break
                 
             best_feature, best_score = max(passing_features, key=lambda x: x[1])
+            logger.info(f"Selected feature: {best_feature} (score: {best_score:.3f})")
             self.selected_features.append(best_feature)
             
             # Refit model with updated feature set
             self.fit(dataset, self.selected_features)
-            iteration += 1
             
         return self.selected_features
-               
+              
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
@@ -486,7 +498,7 @@ class PreferenceModel:
         for feature in selected_features:
             metrics = importance_metrics.get(feature, {})
             logger.info(f"  {feature}:")
-            logger.info(f"    Score: {metrics.get('importance_score', 0.0):.3f}")
+            logger.info(f"    Score: {metrics.get('combined_score', 0.0):.3f}")
 
     #--------------------------------------------
     # Data preparation and feature methods
@@ -520,6 +532,13 @@ class PreferenceModel:
             values = data1['values'] * data2['values']
             differences = data1['differences'] * data2['differences']
             
+            # Compute raw_features for interactions
+            raw_features = {}
+            raw1 = data1['raw_features']
+            raw2 = data2['raw_features']
+            for bigram in set(raw1.keys()) | set(raw2.keys()):
+                raw_features[bigram] = raw1.get(bigram, 0.0) * raw2.get(bigram, 0.0)
+
         else:
             # Handle base features
             values = []
@@ -782,109 +801,44 @@ class PreferenceModel:
             return 0.0, 1.0
 
     def get_feature_weights(self) -> Dict[str, Tuple[float, float]]:
-        """
-        Get the learned feature weights including interactions.
-        
-        Returns:
-            Dict mapping feature names to (mean, std) tuples of weights
-            
-        Raises:
-            NotFittedError: If model hasn't been fit yet
-            FeatureError: If error occurs extracting weights
-        """
         if not self.fit_result:
             raise NotFittedError("Model must be fit before getting weights")
             
-        # Use cached weights if available
         if self.feature_weights is not None:
             return self.feature_weights.copy()
             
         try:
             summary = self.fit_result.summary()
+            logger.info("\nAvailable features in summary:")
+            logger.info(f"Summary index: {list(summary.index)}")
+            
             weights: Dict[str, Tuple[float, float]] = {}
             
-            for feature in self.selected_features:
+            # Look at all features, not just selected ones
+            logger.info("\nProcessing features:")
+            for feature in self.feature_names:
+                logger.info(f"Processing feature: {feature}")
                 if feature in summary.index:
-                    weights[feature] = (
-                        float(summary.loc[feature, 'mean']),
-                        float(summary.loc[feature, 'sd'])
-                    )
+                    mean_val = float(summary.loc[feature, 'mean'])
+                    std_val = float(summary.loc[feature, 'sd'])
+                    logger.info(f"Found weights - mean: {mean_val}, std: {std_val}")
+                    weights[feature] = (mean_val, std_val)
                 else:
-                    logger.warning(f"Feature {feature} not found in model summary")
+                    logger.warning(f"Feature {feature} not found in model summary. Available columns: {list(summary.columns)}")
                     
             # Cache the results
+            logger.info(f"\nFinal weights dictionary: {weights}")
             self.feature_weights = weights
             return weights.copy()
             
-        except AttributeError:
-            raise NotFittedError("Model fitting did not complete successfully")
-        except KeyError as e:
-            raise FeatureError(f"Error accessing feature weights: {str(e)}")
         except Exception as e:
             logger.error(f"Error extracting feature weights: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             raise FeatureError(f"Failed to extract feature weights: {str(e)}")
-                            
+                                    
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------                          
-    def _calculate_stability_metrics(self, dataset: PreferenceDataset,
-                                feature: str) -> StabilityMetrics:
-        """
-        Calculate stability metrics for a feature using cross-validation.
-        
-        Args:
-            dataset: PreferenceDataset to evaluate
-            feature: Name of feature to assess stability
-            
-        Returns:
-            Dict containing stability metrics:
-            - effect_cv: Coefficient of variation of feature effects
-            - sign_consistency: Consistency of effect direction
-            - relative_range: Range of effects relative to mean
-        """
-        try:
-            # Get n_splits from config or use default
-            n_splits = getattr(self.config, 'model', {}).get('cross_validation', {}).get('n_splits', 5)
-            
-            # Perform cross-validation using shared splitting method
-            cv_effects = []
-            
-            # Get train/val splits using common method
-            for train_idx, val_idx in self._get_cv_splits(dataset, n_splits):
-                # Create train dataset
-                train_data = dataset._create_subset_dataset(train_idx)
-                
-                # Fit model on training data
-                self.fit_result(train_data, self.selected_features + [feature])
-                
-                # Get feature effect
-                weights = self.get_feature_weights()
-                if feature in weights:
-                    effect = weights[feature][0]  # Get mean effect
-                    cv_effects.append(effect)
-            
-            cv_effects = np.array(cv_effects)
-            
-            if len(cv_effects) == 0:
-                raise ValueError(f"No valid effects calculated for feature {feature}")
-            
-            # Calculate stability metrics
-            metrics = {
-                'effect_cv': np.std(cv_effects) / (abs(np.mean(cv_effects)) + 1e-10),
-                'sign_consistency': np.mean(np.sign(cv_effects) == np.sign(np.mean(cv_effects))),
-                'relative_range': (np.max(cv_effects) - np.min(cv_effects)) / (abs(np.mean(cv_effects)) + 1e-10)
-            }
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error calculating stability metrics for {feature}: {str(e)}")
-            return {
-                'effect_cv': float('inf'),
-                'sign_consistency': 0.0,
-                'relative_range': float('inf')
-            }
-
     def _calculate_feature_sparsity(self) -> float:
         """Calculate proportion of meaningful feature weights."""
         try:
@@ -949,43 +903,32 @@ class PreferenceModel:
             logger.error(f"Error checking transitivity: {str(e)}")
             return 0.0
 
-    def _calculate_adaptive_threshold(self, importance_scores: np.ndarray) -> float:
-        """
-        Calculate adaptive threshold for feature importance scores.
-        
-        Args:
-            importance_scores: Array of importance scores
-            
-        Returns:
-            float: Adaptive threshold value
-        """
+    def _calculate_adaptive_threshold(self, combined_scores: List[float]) -> float:
+        """Calculate adaptive threshold for feature selection."""
         try:
-            scores = np.array(importance_scores)
+            scores = np.array(combined_scores)
             if len(scores) == 0:
                 return 0.0
                 
-            # Remove any invalid values
             scores = scores[~np.isnan(scores)]
             
-            # Use various statistical measures to determine threshold
+            # Use mean plus fraction of standard deviation
             mean = np.mean(scores)
             std = np.std(scores)
+            threshold = mean + 0.1 * std  # Adjust 0.1 factor as needed
             
-            # Use simple threshold based on mean and std
-            threshold = mean + 0.1 * std  # Using fixed 0.1 factor
-                    
-            # Ensure threshold is not too extreme
+            # Ensure threshold is reasonable
             min_threshold = np.percentile(scores, 25)
             max_threshold = np.percentile(scores, 75)
             threshold = np.clip(threshold, min_threshold, max_threshold)
-                
-            logger.debug(f"Calculated adaptive threshold: {threshold:.3f}")
+            
+            logger.info(f"Adaptive threshold: {threshold:.3f} (mean: {mean:.3f}, std: {std:.3f})")
             return float(threshold)
-                
+            
         except Exception as e:
-            logger.error(f"Error calculating adaptive threshold: {str(e)}")
-            return 0.1  # Simple default threshold
-        
+            logger.error(f"Error calculating threshold: {str(e)}")
+            return 0.1  # Default threshold
+                
     def _compute_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
         """
         Compute feature values without caching.
@@ -1070,7 +1013,7 @@ class PreferenceModel:
                 'Model Effect': metrics['model_effect'],
                 'Effect Consistency': metrics['effect_consistency'],
                 'Predictive Power': metrics['predictive_power'],
-                'Combined Score': metrics['importance_score']
+                'Combined Score': metrics['combined_score']
             }
             for feature, metrics in metrics_dict.items()
         ])
@@ -1286,53 +1229,6 @@ class PreferenceModel:
     #--------------------------------------------
     # Output and visualization methods
     #--------------------------------------------
-    def save_metrics_csv(self, csv_file: str, 
-                        processed_effects: Dict, 
-                        importance_metrics: Dict,
-                        stability_metrics: Dict,
-                        selected_features: List[str]) -> None:
-        """Save all feature metrics to CSV."""            
-        with open(csv_file, 'w') as f:
-            # Write header
-            header = [
-                "feature_name",
-                "selected",
-                "combined_score",
-                "model_effect_mean",
-                "model_effect_std",
-                "effect_cv",
-                "relative_range",
-                "sign_consistency"
-            ]
-            f.write(','.join(header) + '\n')
-            
-            # Get all features (base + interactions)
-            all_features = sorted(processed_effects.keys(), 
-                                key=lambda x: (1 if '_x_' in x else 0, x))
-            
-            # Write data for each feature
-            for feature in all_features:
-                effects = processed_effects.get(feature, {})
-                importance = importance_metrics.get(feature, {})
-                stability = stability_metrics.get(feature, {})
-                
-                # Determine if feature was selected based on importance threshold
-                selected = "1" if feature in selected_features else "0"
-                
-                values = [
-                    feature,
-                    selected,
-                    f"{importance.get('combined_score', 0.0):.6f}",
-                    f"{effects.get('mean', 0.0):.6f}",
-                    f"{effects.get('std', 0.0):.6f}",
-                    f"{stability.get('effect_cv', 0.0):.6f}",
-                    f"{stability.get('relative_range', 0.0):.6f}",
-                    f"{stability.get('sign_consistency', 0.0):.6f}"
-                ]
-                f.write(','.join(values) + '\n')
-            
-            logger.info(f"Saved feature metrics to {csv_file}")
-
     def save(self, path: Path) -> None:
         """Save model state to file."""
         save_dict = {

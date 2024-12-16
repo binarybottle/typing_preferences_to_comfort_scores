@@ -70,17 +70,31 @@ class FeatureImportanceCalculator:
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
         """Calculate all metrics for a feature."""
         try:
+            # Check for zero variance
+            feature_data = model._get_feature_data(feature, dataset)
+            if np.std(feature_data['values']) == 0:
+                logger.warning(f"Feature {feature} has zero variance - skipping evaluation")
+                return {
+                    'combined_score': 0.0,
+                    'model_effect': 0.0,
+                    'effect_consistency': 0.0,
+                    'predictive_power': 0.0
+                }
+
             logger.debug(f"\nEvaluating feature: {feature}")
             metrics = {}
             
             # Model Effect (normalized by max observed effect)
             try:
-                weights = model.get_feature_weights()
+                # Create temporary model to evaluate this feature alone
+                temp_model = type(model)(config=model.config)
+                temp_model.feature_extractor = model.feature_extractor
+                temp_model.fit(dataset, [feature])
+                
+                weights = temp_model.get_feature_weights()
                 effect = abs(weights.get(feature, (0.0, 0.0))[0])
-                max_effect = max(abs(w[0]) for w in weights.values())
-                effect_norm = effect / max_effect if max_effect > 0 else 0.0
-                metrics['model_effect'] = effect_norm
-                logger.debug(f"Model effect: {effect_norm:.4f}")
+                metrics['model_effect'] = effect
+                logger.debug(f"Model effect: {effect:.4f}")
             except Exception as e:
                 logger.error(f"Error calculating model effect for {feature}: {str(e)}")
                 metrics['model_effect'] = 0.0
@@ -103,99 +117,108 @@ class FeatureImportanceCalculator:
                 logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
                 metrics['predictive_power'] = 0.0
 
-            # Calculate importance score using normalized metrics
+            # Calculate combined score using normalized metrics
             try:
-                importance_score = self._calculate_combined_score(**metrics)
-                metrics['importance_score'] = importance_score
-                logger.debug(f"Final importance score: {importance_score:.4f}")
+                combined_score = self._calculate_combined_score(**metrics)
+                metrics['combined_score'] = combined_score
+                logger.debug(f"Final combined score: {combined_score:.4f}")
             except Exception as e:
-                logger.error(f"Error calculating importance score for {feature}: {str(e)}")
-                metrics['importance_score'] = 0.0
+                logger.error(f"Error calculating combined score for {feature}: {str(e)}")
+                metrics['combined_score'] = 0.0
 
             return metrics
 
         except Exception as e:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
-
-    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
-        """
-        Calculate how much a feature improves model predictions.
-        """
-        try:
-            # Get current feature set and performance
-            current_features = model.selected_features
-            if feature in current_features:
-                features_without = [f for f in current_features if f != feature]
-                features_with = current_features
-            else:
-                features_without = current_features
-                features_with = current_features + [feature]
-
-            # Ensure we have at least one feature
-            if not features_without:
-                features_without = [feature]
-            if not features_with:
-                features_with = [feature]
-
-            # Validate feature lists
-            if len(features_without) == 0 or len(features_with) == 0:
-                logger.error(f"Invalid feature sets: without={features_without}, with={features_with}")
-                return 0.0
-
-            try:
-                # Measure performance without feature
-                model_without = type(model)(config=model.config)
-                model_without.feature_extractor = model.feature_extractor
-                model_without.feature_names = features_without  # Set feature names before fitting
-                model_without.fit(dataset, features_without)
-                metrics_without = model_without.evaluate(dataset)
-                acc_without = metrics_without.get('accuracy', 0.0)
-
-                # Measure performance with feature
-                model_with = type(model)(config=model.config)
-                model_with.feature_extractor = model.feature_extractor
-                model_with.feature_names = features_with  # Set feature names before fitting
-                model_with.fit(dataset, features_with)
-                metrics_with = model_with.evaluate(dataset)
-                acc_with = metrics_with.get('accuracy', 0.0)
-
-                # Calculate improvement
-                improvement = acc_with - acc_without
-                
-                # Normalize improvement to [0,1] range
-                max_improvement = 0.5  # Maximum expected improvement from one feature
-                normalized_improvement = np.clip(improvement / max_improvement, 0, 1)
-
-                return float(normalized_improvement)
-
-            except Exception as e:
-                logger.error(f"Error during model fitting: {str(e)}")
-                return 0.0
-            finally:
-                # Clean up
-                if 'model_without' in locals():
-                    del model_without
-                if 'model_with' in locals():
-                    del model_with
-
-        except Exception as e:
-            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
-            return 0.0
-                                
+        
     def _calculate_combined_score(self, **metrics) -> float:
-        """Calculate combined importance score."""
+        """
+        Calculate combined score from individual metrics for feature importance evaluation.
+        
+        Args:
+            **metrics: Keyword arguments containing:
+                - model_effect: Absolute effect size
+                - effect_consistency: Cross-validation based consistency
+                - predictive_power: Improvement in model predictions
+                
+        Returns:
+            float: Combined score between 0 and 1, used to evaluate feature importance
+        """
         try:
-            weights = self.config.metric_weights
-            return (
-                weights['model_effect'] * metrics.get('model_effect', 0.0) +
-                weights['effect_consistency'] * (1.0 - metrics.get('effect_consistency', 0.0)) +
-                weights['predictive_power'] * metrics.get('predictive_power', 0.0)
+            # Get individual components with defaults
+            effect = metrics.get('model_effect', 0.0)
+            consistency = metrics.get('effect_consistency', 0.0)
+            predictive = metrics.get('predictive_power', 0.0)
+            
+            # Normalize effect size
+            max_effect = 1.0  # Adjust based on your data
+            normalized_effect = min(abs(effect) / max_effect, 1.0)
+            
+            # Calculate weighted score
+            weights = {
+                'effect': 0.4,      # Weight for effect size
+                'consistency': 0.3,  # Weight for consistency
+                'predictive': 0.3    # Weight for predictive power
+            }
+            
+            score = (
+                weights['effect'] * normalized_effect +
+                weights['consistency'] * max(0, consistency) +  # Clip negative consistency
+                weights['predictive'] * predictive
             )
+            
+            return float(np.clip(score, 0, 1))
+            
         except Exception as e:
             logger.error(f"Error calculating combined score: {str(e)}")
             return 0.0
-
+                                        
+    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
+        """Calculate how much a feature improves model predictions over random chance."""
+        try:
+            logger.info(f"\nCalculating predictive power for feature: {feature}")
+            
+            # Create new model instance for this feature
+            model_single = type(model)(config=model.config)
+            model_single.feature_extractor = model.feature_extractor
+            
+            try:
+                logger.info("Fitting single feature model...")
+                # Fit and evaluate with single feature
+                model_single.fit(dataset, [feature])
+                
+                logger.info("Evaluating single feature model...")
+                metrics_single = model_single.evaluate(dataset)
+                logger.info(f"Single feature evaluation metrics: {metrics_single}")
+                
+                acc_single = metrics_single.get('accuracy', 0.5)
+                logger.info(f"Single feature accuracy: {acc_single:.4f}")
+                
+                # Calculate improvement over random chance (0.5)
+                improvement = acc_single - 0.5
+                logger.info(f"Raw improvement over random: {improvement:.4f}")
+                
+                # Normalize improvement to [0,1] range
+                normalized_improvement = np.clip(improvement / 0.5, 0, 1)
+                logger.info(f"Normalized improvement: {normalized_improvement:.4f}")
+                
+                if normalized_improvement == 0.0:
+                    logger.warning(f"Got zero improvement for feature {feature}. Check if model evaluation succeeded.")
+                
+                return float(normalized_improvement)
+                
+            finally:
+                # Clean up
+                if hasattr(model_single, 'fit_result'):
+                    del model_single.fit_result
+                del model_single
+                
+        except Exception as e:
+            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            return 0.0
+                        
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset) -> float:
         """Calculate consistency of feature effect across cross-validation splits."""
         try:
@@ -226,7 +249,7 @@ class FeatureImportanceCalculator:
             'model_effect': 0.0,
             'effect_consistency': 0.0,
             'predictive_power': 0.0,
-            'importance_score': 0.0
+            'combined_score': 0.0
         }
  
         

@@ -167,26 +167,19 @@ MIT License. See LICENSE file for details.
 
 
 ## Feature selection process
-One feature is selected at each iteration if it meets ALL these criteria:
-  1. highest importance_score among remaining features
-  2. importance_score >= adaptive threshold
-
-  One feature is selected due to interaction effects 
-  (adding one can change the importance of others, etc.).
-
-The adaptive threshold is calculated as:
-  - threshold = mean + importance_threshold * std
-  - threshold = np.clip(threshold, min_threshold, max_threshold)
-where:
-  - importance_threshold set in config.yaml (feature_selection:threshold:importance)
-  - threshold range is fixed between min_threshold and max_threshold (25th and 75th percentiles), 
-    so that it stays within reasonable bounds based on the distribution of the importance scores
+Start with no selected features.
+For all remaining unselected features:
+  1. Calculate their combined scores
+  2. Calculate an adaptive threshold as: mean + 0.1*std of all feature scores, clipped to be between 25th and 75th percentiles
+  3. Select the feature with highest combined score that exceeds this threshold
+  4. If no features pass threshold, stop
+  5. Otherwise, add best feature to selected set, refit model with updated feature set, and repeat
 
 ## Feature selection output
   - feature_name: Name of the feature or interaction feature being evaluated
   - n_components: Number of components in the feature (1 for base features, 2+ for interaction features)
   - selected: Binary indicator (1 or 0) showing if the feature was selected in the final model
-  - importance_score: Combined score from the prediction and variation metrics below, indicating overall feature importance
+  - combined_score: Combined score from the prediction and variation metrics below, indicating overall feature importance
   - Prediction/Effect measures: 
     - model_effect: Absolute size of the feature's effect in the model
     - predictive_power: Model performance improvement from feature
@@ -203,7 +196,6 @@ For recommendation, both model weights and the feature selection metrics are use
   - prediction uncertainty
   - comfort score uncertainty
   - feature space coverage
-  - MI differences
   - stability
   - interaction effects
   - transitivity

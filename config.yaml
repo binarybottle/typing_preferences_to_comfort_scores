@@ -21,10 +21,6 @@ data:                                   # Path to processed preference data
             z, x, c, v, b]    # for symmetric analysis
 
 feature_selection:
-  n_iterations: 1 #5                       # Number of feature selection iterations
-  thresholds:
-    importance: 0.05                    # Minimum importance score for feature selection
-    stability: 0.8                      # Minimum stability score across iterations
   metric_weights:                       # Weights for combining different metrics (must sum to 1)
     model_effect: 0.4                   # Weight for feature's effect in model
     effect_consistency: 0.3             # Weight for consistency of effect across splits (cross-validation stability)
@@ -43,12 +39,24 @@ recommendations:
   max_candidates: 5000                  # Maximum number of candidate pairs to evaluate
   recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
+# Model slow vs. fast settings
+__slow_settings: &slow
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+
+__fast_settings: &fast  
+  chains: 1                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 50                            # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 100                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.7                      # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 3                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+
 model:                                  # Bayesian model parameters (Stan)
-  chains: 1 #4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 30 #00                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 70 #00                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  adapt_delta: 0.7 #0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
-  max_treedepth: 5 #15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  #<<: *slow                             # Change to *fast for fast settings
+  <<: *fast                             # Change to *slow for slow settings
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
@@ -56,6 +64,7 @@ model:                                  # Bayesian model parameters (Stan)
 
 features:
   base_features:                        # Core features for analysis
+    - typing_time                       # Time taken to type bigram
     - same_finger                       # Whether bigram uses same finger
     - sum_finger_values                 # Combined finger load values
   interactions:

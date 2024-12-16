@@ -51,8 +51,9 @@ class Preference:
         """Return detailed string representation."""
         return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
 
+#------------------------------------------------
 # feature_extraction.py
-
+#------------------------------------------------
 @dataclass
 class FeatureConfig:
     """Configuration for feature extraction"""
@@ -69,7 +70,6 @@ class FeatureConfig:
 class FeatureSelectionConfig(BaseModel):
     """Validate feature selection configuration."""
     metric_weights: Dict[str, float]
-    thresholds: Dict[str, float]
 
     @validator('metric_weights')
     def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
@@ -77,39 +77,9 @@ class FeatureSelectionConfig(BaseModel):
         if not np.isclose(total, 1.0, rtol=1e-5):
             raise ValueError(f"Metric weights must sum to 1.0, got {total}")
         return v
-    
-    @validator('thresholds')
-    def thresholds_must_be_positive(cls, v: Dict[str, float]) -> Dict[str, float]:
-        if any(t <= 0 for t in v.values()):
-            raise ValueError("All thresholds must be positive")
-        return v
 
     class Config:
         validate_assignment = True
-    
-class FeatureSelectionMetricWeights(BaseModel):
-    """Configuration for feature importance metric weights."""
-    model_effect: float = Field(gt=0, lt=1)
-    effect_consistency: float = Field(gt=0, lt=1)
-    predictive_power: float = Field(gt=0, lt=1)  # Add this line
-    
-    @field_validator('*')
-    def weights_must_sum_to_one(cls, values):
-        total = sum(values.values())
-        if not np.isclose(total, 1.0, rtol=1e-5):
-            raise ValueError(f"Metric weights must sum to 1.0, got {total}")
-        return values
-
-class FeatureSelectionThresholds(BaseModel):
-    importance: float = Field(gt=0)
-    stability: float = Field(gt=0)
-    predictive_power: float = Field(gt=0)  # Add this line
-
-class MetricWeights(TypedDict):
-    """Type definition for metric weights."""
-    model_effect: float
-    effect_consistency: float
-    predictive_power: float  # Add this line
 
 #------------------------------------------------
 # feature_visualization.py
@@ -117,15 +87,6 @@ class MetricWeights(TypedDict):
 class VisualizationConfig(BaseModel):
     """Visualization settings."""
     dpi: int = 300
-
-@dataclass
-class VisualizationSettings:
-    """Runtime settings for visualization."""
-    output_dir: Path
-    save_plots: bool = True
-    dpi: int = 300
-    figure_size: Tuple[int, int] = (12, 8)
-    color_map: str = 'viridis'
 
 #------------------------------------------------
 # model.py
@@ -149,17 +110,6 @@ class ModelPrediction:
     uncertainty: float
     features_used: List[str]
     computation_time: float
-
-class FeatureMetrics(TypedDict):
-    """Type definition for feature metrics."""
-    importance_score: float
-    effect_size: float
-
-class FeatureEffect(NamedTuple):
-    """Feature effect statistics."""
-    mean: float
-    std: float
-    values: np.ndarray
 
 class StabilityMetrics(TypedDict):
     """Stability metric results."""
@@ -187,8 +137,6 @@ class ModelSettings(BaseModel):
     
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
-    n_iterations: int = Field(gt=0)
-    thresholds: Dict[str, float]
     metric_weights: Dict[str, float]
     metrics_file: str
     model_file: str
