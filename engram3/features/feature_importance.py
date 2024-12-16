@@ -70,10 +70,10 @@ class FeatureImportanceCalculator:
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
         """Calculate all metrics for a feature."""
         try:
-            # Check for zero variance
+            # Check for discriminative power using differences
             feature_data = model._get_feature_data(feature, dataset)
-            if np.std(feature_data['values']) == 0:
-                logger.warning(f"Feature {feature} has zero variance - skipping evaluation")
+            if np.std(feature_data['differences']) == 0:
+                logger.warning(f"Feature {feature} shows no discrimination between preferences - skipping evaluation")
                 return {
                     'combined_score': 0.0,
                     'model_effect': 0.0,
@@ -131,7 +131,7 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
-        
+                
     def _calculate_combined_score(self, **metrics) -> float:
         """
         Calculate combined score from individual metrics for feature importance evaluation.

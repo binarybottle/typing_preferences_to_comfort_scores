@@ -165,6 +165,23 @@ MIT License. See LICENSE file for details.
 
 
 
+Looking at feature differences rather than values makes more sense 
+since our training data consists of preferences between pairs, and these differences are what inform the feature weights that ultimately determine individual bigram comfort scores
+
+Times normalized by computing relative time differences:
+For each preference pair, compute (time1 - time2)/(time1 + time2):
+- Bounds the differences to [-1, 1]
+- Makes differences comparable across participants
+- Is symmetric around 0
+- Accounts for different baseline typing speeds
+
+
+I would recommend option 3 since:
+
+It naturally handles per-participant differences in typing speed
+Works directly with paired preferences
+Gives us bounded differences that are comparable across participants
+Is less sensitive to outliers than raw time differences
 
 ## Feature selection process
 Start with no selected features.

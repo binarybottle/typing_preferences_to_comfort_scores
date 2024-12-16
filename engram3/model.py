@@ -506,16 +506,6 @@ class PreferenceModel:
     def _get_feature_data(self, feature: str, dataset: Optional[PreferenceDataset] = None) -> Dict[str, np.ndarray]:
         """
         Centralized method for getting feature data with caching.
-        
-        Args:
-            feature: Feature name to extract
-            dataset: Optional dataset, defaults to self.dataset
-            
-        Returns:
-            Dict containing:
-                'values': Feature values array
-                'differences': Feature differences array
-                'raw_features': Raw feature dictionary
         """
         dataset = dataset or self.dataset
         cache_key = f"{dataset.file_path}_{feature}"
@@ -531,39 +521,58 @@ class PreferenceModel:
             
             values = data1['values'] * data2['values']
             differences = data1['differences'] * data2['differences']
-            
-            # Compute raw_features for interactions
             raw_features = {}
-            raw1 = data1['raw_features']
-            raw2 = data2['raw_features']
-            for bigram in set(raw1.keys()) | set(raw2.keys()):
-                raw_features[bigram] = raw1.get(bigram, 0.0) * raw2.get(bigram, 0.0)
-
+            for bigram in set(data1['raw_features']) | set(data2['raw_features']):
+                raw_features[bigram] = data1['raw_features'].get(bigram, 0.0) * data2['raw_features'].get(bigram, 0.0)
+            
         else:
             # Handle base features
             values = []
             differences = []
             raw_features = {}
             
-            for pref in dataset.preferences:
-                feat1 = self.feature_extractor.extract_bigram_features(
-                    pref.bigram1[0], pref.bigram1[1]).get(feature, 0.0)
-                feat2 = self.feature_extractor.extract_bigram_features(
-                    pref.bigram2[0], pref.bigram2[1]).get(feature, 0.0)
-                
-                values.append(feat1)
-                values.append(feat2)
-                differences.append(feat1 - feat2)
-                raw_features[pref.bigram1] = feat1
-                raw_features[pref.bigram2] = feat2
-                
+            if feature == 'typing_time':
+                # Times are normalized by computing relative time differences for each preference pair:
+                # time1 - time2)/(time1 + time2)
+                #   - bounds the differences to [-1, 1]
+                #   - makes differences comparable across participants
+                #   - is symmetric around 0
+                #   - accounts for different baseline typing speeds
+                for pref in dataset.preferences:
+                    time1 = pref.typing_time1 or 0.0  # Handle None values
+                    time2 = pref.typing_time2 or 0.0
+                    
+                    # Compute relative time difference
+                    time_sum = time1 + time2
+                    if time_sum > 0:  # Avoid division by zero
+                        rel_diff = (time1 - time2) / time_sum
+                    else:
+                        rel_diff = 0.0
+                    
+                    values.extend([time1, time2])
+                    differences.append(rel_diff)
+                    raw_features[pref.bigram1] = time1
+                    raw_features[pref.bigram2] = time2
+                    
+            else:
+                # Normal handling for other features
+                for pref in dataset.preferences:
+                    feat1 = self.feature_extractor.extract_bigram_features(
+                        pref.bigram1[0], pref.bigram1[1]).get(feature, 0.0)
+                    feat2 = self.feature_extractor.extract_bigram_features(
+                        pref.bigram2[0], pref.bigram2[1]).get(feature, 0.0)
+                    
+                    values.extend([feat1, feat2])
+                    differences.append(feat1 - feat2)
+                    raw_features[pref.bigram1] = feat1
+                    raw_features[pref.bigram2] = feat2
+                    
         result = {
             'values': np.array(values),
             'differences': np.array(differences),
             'raw_features': raw_features
         }
         
-        # Cache with size limit
         if not hasattr(self, '_feature_data_cache'):
             self._feature_data_cache = {}
         self._add_to_cache(self._feature_data_cache, cache_key, result)
