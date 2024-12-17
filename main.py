@@ -49,6 +49,7 @@ import pandas as pd
 from typing import Dict, Any, Tuple
 from pathlib import Path
 import matplotlib.pyplot as plt
+from itertools import combinations
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
@@ -215,7 +216,7 @@ def main():
             # Get all features including interactions
             base_features = config.features.base_features
             interaction_features = [f"{f1}_x_{f2}" 
-                                for f1, f2 in itertools.combinations(base_features, 2)]
+                                for f1, f2 in combinations(base_features, 2)]
             all_features = base_features + interaction_features
             
             logger.info(f"Features to evaluate:")
