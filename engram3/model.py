@@ -438,84 +438,6 @@ class PreferenceModel:
             'fold_uncertainties': dict(metrics['mean_uncertainty'])
         }
 
-    def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """
-        Select features using round-robin comparison, evaluating each candidate
-        in the context of previously selected features.
-        
-        Args:
-            dataset: Dataset to use for selection
-            all_features: List of all possible features to consider
-        """
-        self.selected_features = []
-        
-        while True:
-            remaining_features = [f for f in all_features 
-                                if f not in self.selected_features]
-            
-            if not remaining_features:
-                break
-                
-            logger.info(f"\nEvaluating {len(remaining_features)} remaining features...")
-            logger.info(f"Current feature set: {self.selected_features}")
-            
-            # Evaluate all remaining features in context of current feature set
-            feature_metrics = {}
-            for feature in remaining_features:
-                # Create candidate feature set with current feature
-                candidate_features = self.selected_features + [feature]
-                
-                # Fit model with candidate feature set
-                self.fit(dataset, candidate_features)
-                
-                # Evaluate this feature in context of current set
-                metrics = self.importance_calculator.evaluate_feature(
-                    feature=feature,
-                    dataset=dataset,
-                    model=self
-                )
-                feature_metrics[feature] = metrics
-            
-            # Compare each feature against all others
-            win_counts = {f: 0 for f in remaining_features}
-            for f1, f2 in combinations(remaining_features, 2):
-                if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
-                    win_counts[f1] += 1
-                else:
-                    win_counts[f2] += 1
-                    
-            # Select feature with most wins
-            best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
-            best_metrics = feature_metrics[best_feature]
-            
-            logger.info(f"\nFeature comparison results:")
-            for feature, wins in win_counts.items():
-                metrics = feature_metrics[feature]
-                logger.info(f"\n{feature}:")
-                logger.info(f"  Wins: {wins}")
-                logger.info(f"  Effect: {metrics['model_effect']:.3f}")
-                logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
-                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
-            
-            # Add best feature if it meets minimum criteria
-            if (best_metrics['effect_consistency'] > 0.5 or 
-                best_metrics['predictive_power'] > 0.1):
-                self.selected_features.append(best_feature)
-                # Final fit with new feature set
-                self.fit(dataset, self.selected_features)
-                logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
-                
-                # Log current model state
-                logger.info("\nCurrent model state:")
-                weights = self.get_feature_weights()
-                for feat in self.selected_features:
-                    w, s = weights.get(feat, (0.0, 0.0))
-                    logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
-            else:
-                break
-        
-        return self.selected_features
-            
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
@@ -888,6 +810,114 @@ class PreferenceModel:
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------                          
+    def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
+        """
+        Select features using round-robin comparison, evaluating each candidate
+        in the context of previously selected features.
+        
+        Args:
+            dataset: Dataset to use for selection
+            all_features: List of all possible features to consider
+        """
+        self.selected_features = []
+        
+        while True:
+            remaining_features = [f for f in all_features 
+                                if f not in self.selected_features]
+            
+            if not remaining_features:
+                break
+                
+            logger.info(f"\nEvaluating {len(remaining_features)} remaining features...")
+            logger.info(f"Current feature set: {self.selected_features}")
+            
+            # Evaluate all remaining features in context of current feature set
+            feature_metrics = {}
+            for feature in remaining_features:
+                # Create candidate feature set with current feature
+                candidate_features = self.selected_features + [feature]
+                
+                # Fit model with candidate feature set
+                self.fit(dataset, candidate_features)
+                
+                # Evaluate this feature in context of current set
+                metrics = self.importance_calculator.evaluate_feature(
+                    feature=feature,
+                    dataset=dataset,
+                    model=self
+                )
+                feature_metrics[feature] = metrics
+            
+            # Compare each feature against all others
+            win_counts = {f: 0 for f in remaining_features}
+            for f1, f2 in combinations(remaining_features, 2):
+                if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
+                    win_counts[f1] += 1
+                else:
+                    win_counts[f2] += 1
+                    
+            # Select feature with most wins
+            best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
+            best_metrics = feature_metrics[best_feature]
+            
+            logger.info(f"\nFeature comparison results:")
+            for feature, wins in win_counts.items():
+                metrics = feature_metrics[feature]
+                logger.info(f"\n{feature}:")
+                logger.info(f"  Wins: {wins}")
+                logger.info(f"  Effect: {metrics['model_effect']:.3f}")
+                logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
+                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
+            
+            # Add best feature if it meets minimum criteria
+            if (best_metrics['effect_consistency'] > 0.5 or 
+                best_metrics['predictive_power'] > 0.1):
+                self.selected_features.append(best_feature)
+                # Final fit with new feature set
+                self.fit(dataset, self.selected_features)
+                logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
+                
+                # Log current model state
+                logger.info("\nCurrent model state:")
+                weights = self.get_feature_weights()
+                for feat in self.selected_features:
+                    w, s = weights.get(feat, (0.0, 0.0))
+                    logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
+            else:
+                break
+        
+        return self.selected_features
+
+    def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
+        """
+        Compare two features based on their metrics.
+        Returns True if feature A is better than feature B.
+        
+        Args:
+            metrics_a: Dictionary of metrics for feature A
+            metrics_b: Dictionary of metrics for feature B
+            
+        Returns:
+            bool: True if feature A wins the comparison
+        """
+        effect_a = abs(metrics_a['model_effect'])
+        effect_b = abs(metrics_b['model_effect'])
+        
+        consistency_a = metrics_a['effect_consistency']
+        consistency_b = metrics_b['effect_consistency']
+        
+        predictive_a = metrics_a['predictive_power']
+        predictive_b = metrics_b['predictive_power']
+        
+        # Count how many measures are better
+        better_measures = 0
+        if effect_a > effect_b: better_measures += 1
+        if consistency_a > consistency_b: better_measures += 1
+        if predictive_a > predictive_b: better_measures += 1
+        
+        # Feature A is better if it wins on majority of measures
+        return better_measures >= 2
+            
     def _calculate_feature_sparsity(self) -> float:
         """Calculate proportion of meaningful feature weights."""
         try:
