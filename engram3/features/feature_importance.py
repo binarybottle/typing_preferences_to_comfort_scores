@@ -2,13 +2,14 @@
 """
 Feature importance calculation module for keyboard layout preference analysis.
 
-Provides comprehensive feature evaluation through:
-  - Calculation of multiple importance metrics:
-    - model_effect: Feature's normalized impact based on model weights
-    - effect_consistency: Feature's stability across cross-validation splits  
-    - predictive_power: Model performance improvement from feature
+Provides comprehensive feature evaluation through three independent metrics:
+  - model_effect: Feature's impact based on model weights
+  - effect_consistency: Feature's stability across cross-validation splits  
+  - predictive_power: Model performance improvement from feature
 
 Key functionality:
+  - Pairwise feature comparison using all three metrics
+  - Round-robin tournament selection in context of previously selected features
   - Efficient caching of feature computations
   - Special handling for interaction features
   - Support for typing time and other keyboard-specific features
@@ -17,7 +18,8 @@ Key functionality:
   - Error handling and fallback mechanisms
 
 The module centers around the FeatureImportanceCalculator class which:
-  - Evaluates individual features using multiple metrics
+  - Evaluates individual features using multiple independent metrics
+  - Compares features based on wins across all metrics
   - Handles feature value computation and caching
   - Generates detailed metrics reports
   - Provides robust error handling

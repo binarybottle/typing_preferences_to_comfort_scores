@@ -10,11 +10,14 @@ Core functionality:
     - Stan backend integration
 
 Key components:
-  1. Feature Management:
-    - Dynamic feature extraction and caching
-    - Interaction feature computation
-    - Feature selection with cross-validation
-    - Comfort score estimation
+  1. Sequential Feature Selection:
+    - Round-robin comparison of features
+    - Context-aware evaluation with previously selected features
+    - Three independent metrics:
+      * Model effect magnitude
+      * Effect consistency across cross-validation
+      * Predictive power
+    - Feature interaction handling
 
   2. Model Operations:
     - Efficient data preparation for Stan
@@ -33,6 +36,7 @@ Key components:
     - Effect size estimation
     - Cross-validation stability
     - Model diagnostics
+    - Transitivity checks
 
   5. Output Handling:
     - Detailed metric reporting
@@ -47,12 +51,12 @@ proper error handling.
 Example:
     >>> model = PreferenceModel(config)
     >>> model.fit(dataset)
-    >>> prob, unc = model.predict_preference("th", "he")
-    >>> print(f"Preference probability: {prob:.2f} ± {unc:.2f}")
+    >>> prediction = model.predict_preference("th", "he")
+    >>> print(f"Preference probability: {prediction.probability:.2f} ± {prediction.uncertainty:.2f}")
 
 Notes:
-    - Uses LRU caching for feature computations
-    - Lazy feature computation
+    - Features are pre-normalized except typing_time
+    - Uses participant-based cross-validation splits
     - Thread-safe Stan implementation
     - Comprehensive error handling
     - Detailed logging system
@@ -63,14 +67,13 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import KFold
 from collections import defaultdict
 from pathlib import Path
-from typing import (
-    Dict, List, Optional, Tuple, Any, Union
-)
+from typing import Dict, List, Optional, Tuple, Any, Union
 import pandas as pd
 import time  # Needed for computation_time in predict_preference
 import pickle
 import copy
 from pathlib import Path
+from itertools import combinations
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -435,10 +438,14 @@ class PreferenceModel:
             'fold_uncertainties': dict(metrics['mean_uncertainty'])
         }
 
-    def select_features(self, dataset: PreferenceDataset) -> List[str]:
+    def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """
         Select features using round-robin comparison, evaluating each candidate
         in the context of previously selected features.
+        
+        Args:
+            dataset: Dataset to use for selection
+            all_features: List of all possible features to consider
         """
         self.selected_features = []
         
@@ -468,10 +475,10 @@ class PreferenceModel:
                     model=self
                 )
                 feature_metrics[feature] = metrics
-                
+            
             # Compare each feature against all others
             win_counts = {f: 0 for f in remaining_features}
-            for f1, f2 in itertools.combinations(remaining_features, 2):
+            for f1, f2 in combinations(remaining_features, 2):
                 if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
                     win_counts[f1] += 1
                 else:

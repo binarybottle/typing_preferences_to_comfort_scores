@@ -212,64 +212,22 @@ def main():
             logger.info(f"Split dataset: {len(train_data.preferences)} train, "
                     f"{len(holdout_data.preferences)} holdout preferences")
             
-            # Get base features
+            # Get all features including interactions
             base_features = config.features.base_features
-            logger.info(f"Base features: {len(base_features)}")
+            interaction_features = [f"{f1}_x_{f2}" 
+                                for f1, f2 in itertools.combinations(base_features, 2)]
+            all_features = base_features + interaction_features
             
-            # Initialize model and fit with base features first
+            logger.info(f"Features to evaluate:")
+            logger.info(f"  Base features: {len(base_features)} - {base_features}")
+            logger.info(f"  Interaction features: {len(interaction_features)} - {interaction_features}")
+            logger.info(f"  Total features: {len(all_features)}")
+            
+            # Initialize model
             model = PreferenceModel(config=config)
-            model.fit(train_data, base_features)
             
-            # First evaluate base features
-            logger.info("Evaluating base features...")
-            base_metrics = {}
-            for feature in base_features:
-                try:
-                    metrics = model.importance_calculator.evaluate_feature(
-                        feature=feature,
-                        dataset=train_data,
-                        model=model
-                    )
-                    if all(isinstance(v, (int, float)) and v in (0, 1) for v in metrics.values()):
-                        logger.warning(f"Got constant metrics for base feature {feature}")
-                    base_metrics[feature] = metrics
-                except Exception as e:
-                    logger.warning(f"Error evaluating base feature {feature}: {str(e)}")
-                    base_metrics[feature] = model.importance_calculator._get_default_metrics()
-
-            # Generate and evaluate interactions
-            logger.info("Evaluating feature interactions...")
-            interaction_metrics = {}
-
-            # Get interactions from config
-            logger.info("Processing configured feature interactions...")
-            all_features = config.features.get_all_features()
-            interaction_features = [f for f in all_features if '_x_' in f]
-
-            # Use the same evaluation method for interactions
-            for interaction_name in interaction_features:
-                try:
-                    metrics = model.importance_calculator.evaluate_feature(
-                        feature=interaction_name,
-                        dataset=train_data,
-                        model=model
-                    )
-                    if all(isinstance(v, (int, float)) and v in (0, 1) for v in metrics.values()):
-                        logger.warning(f"Got constant metrics for interaction {interaction_name}")
-                    interaction_metrics[interaction_name] = metrics
-                except Exception as e:
-                    logger.warning(f"Error evaluating interaction {interaction_name}: {str(e)}")
-                    interaction_metrics[interaction_name] = model.importance_calculator._get_default_metrics()
-
-            logger.info(f"Processed {len(interaction_features)} configured interactions")
-
-            # Combine all metrics
-            all_features = base_features + list(interaction_metrics.keys())
-            all_metrics = {**base_metrics, **interaction_metrics}
-            
-            # Select features
-            logger.info(f"Selecting from {len(all_features)} total features...")
-            selected_features = model.select_features(train_data)
+            # Select features using round-robin tournament
+            selected_features = model.select_features(train_data, all_features)
             
             # Final fit with selected features
             model.fit(train_data, selected_features)
@@ -278,18 +236,20 @@ def main():
             model_save_path = Path(config.feature_selection.model_file)
             model.save(model_save_path)
             
-            # Get feature weights
+            # Get final weights and metrics
             feature_weights = model.get_feature_weights()
             
             # Create comprehensive results DataFrame
             results = []
             for feature_name in all_features:
-                metrics = all_metrics[feature_name]
+                # Get metrics for this feature in context of selected features
+                metrics = model.importance_calculator.evaluate_feature(
+                    feature=feature_name,
+                    dataset=train_data,
+                    model=model
+                )
                 
-                # Get feature weights from the full model, not just selected features
-                feature_weights = model.get_feature_weights()  # This gets ALL weights
                 weight, std = feature_weights.get(feature_name, (0.0, 0.0))
-                
                 components = feature_name.split('_x_')
                 
                 results.append({
@@ -311,19 +271,23 @@ def main():
             logger.info("\nFeature selection summary:")
             logger.info(f"Total features evaluated: {len(all_features)}")
             logger.info(f"Base features: {len(base_features)}")
-            logger.info(f"Interaction features: {len(interaction_metrics)}")
+            logger.info(f"Interaction features: {len(interaction_features)}")
             logger.info(f"Features selected: {len(selected_features)}")
             
             logger.info("\nSelected features:")
             for feature in selected_features:
                 weight, std = feature_weights[feature]
-                metrics = all_metrics[feature]
+                metrics = model.importance_calculator.evaluate_feature(
+                    feature=feature,
+                    dataset=train_data,
+                    model=model
+                )
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
                 logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
                 logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
-
+                                
         #---------------------------------
         # Visualize feature space
         #---------------------------------
