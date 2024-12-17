@@ -62,7 +62,7 @@ class FeatureConfig:
     finger_map: Dict[str, int]
     engram_position_values: Dict[str, float]
     row_position_values: Dict[str, float]
-    key_metrics: Dict[str, Dict[str, float]]
+    angles: Dict[Tuple[str, str], float]
 
 #------------------------------------------------
 # feature_importance.py

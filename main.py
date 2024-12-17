@@ -56,7 +56,7 @@ from engram3.model import PreferenceModel
 from engram3.recommendations import BigramRecommender
 from engram3.utils.visualization import plot_feature_space
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
-from engram3.features.features import key_metrics
+from engram3.features.features import angles
 from engram3.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
@@ -175,7 +175,7 @@ def main():
             finger_map=finger_map,
             engram_position_values=engram_position_values,
             row_position_values=row_position_values,
-            key_metrics=key_metrics
+            angles=angles
         )
         feature_extractor = FeatureExtractor(feature_config)
         
@@ -344,7 +344,7 @@ def main():
                 finger_map=finger_map,
                 engram_position_values=engram_position_values,
                 row_position_values=row_position_values,
-                key_metrics=key_metrics
+                angles=angles
             )
             feature_extractor = FeatureExtractor(feature_config)
             

@@ -7,7 +7,7 @@ Implements binary [0,1] or normalized (0-1) metrics such as:
   - Angle between keys
 Used by feature extraction system.
 """
-from math import atan2, degrees, sqrt
+from math import atan2, degrees
 
 from engram3.features.keymaps import *
 from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
@@ -172,7 +172,7 @@ def columns_apart(char1, char2, column_map):
     else:
         return 0
 
-def angle_apart(char1, char2, column_map, key_metrics):
+def angle_apart(char1, char2, column_map, angles):
     """Measure angle between the two QWERTY characters' keys (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
         return angles[(char1, char2)] / 90.0
