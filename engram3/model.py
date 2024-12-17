@@ -517,7 +517,6 @@ class PreferenceModel:
         for feature in selected_features:
             metrics = importance_metrics.get(feature, {})
             logger.info(f"  {feature}:")
-            logger.info(f"    Score: {metrics.get('combined_score', 0.0):.3f}")
 
     #--------------------------------------------
     # Data preparation and feature methods
@@ -1029,14 +1028,10 @@ class PreferenceModel:
                 'Feature': feature,
                 'Model Effect': metrics['model_effect'],
                 'Effect Consistency': metrics['effect_consistency'],
-                'Predictive Power': metrics['predictive_power'],
-                'Combined Score': metrics['combined_score']
+                'Predictive Power': metrics['predictive_power']
             }
             for feature, metrics in metrics_dict.items()
         ])
-        
-        # Sort by combined score
-        report_df = report_df.sort_values('Combined Score', ascending=False)
         
         # Save to CSV
         report_df.to_csv(output_file, index=False)

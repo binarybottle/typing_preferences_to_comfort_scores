@@ -7,7 +7,6 @@ Provides comprehensive feature evaluation through:
     - model_effect: Feature's normalized impact based on model weights
     - effect_consistency: Feature's stability across cross-validation splits  
     - predictive_power: Model performance improvement from feature
-    - combined importance score: Weighted combination of metrics
 
 Key functionality:
   - Efficient caching of feature computations
@@ -75,7 +74,6 @@ class FeatureImportanceCalculator:
             if np.std(feature_data['differences']) == 0:
                 logger.warning(f"Feature {feature} shows no discrimination between preferences - skipping evaluation")
                 return {
-                    'combined_score': 0.0,
                     'model_effect': 0.0,
                     'effect_consistency': 0.0,
                     'predictive_power': 0.0
@@ -117,62 +115,12 @@ class FeatureImportanceCalculator:
                 logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
                 metrics['predictive_power'] = 0.0
 
-            # Calculate combined score using normalized metrics
-            try:
-                combined_score = self._calculate_combined_score(**metrics)
-                metrics['combined_score'] = combined_score
-                logger.debug(f"Final combined score: {combined_score:.4f}")
-            except Exception as e:
-                logger.error(f"Error calculating combined score for {feature}: {str(e)}")
-                metrics['combined_score'] = 0.0
-
             return metrics
 
         except Exception as e:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
-                
-    def _calculate_combined_score(self, **metrics) -> float:
-        """
-        Calculate combined score from individual metrics for feature importance evaluation.
-        
-        Args:
-            **metrics: Keyword arguments containing:
-                - model_effect: Absolute effect size
-                - effect_consistency: Cross-validation based consistency
-                - predictive_power: Improvement in model predictions
-                
-        Returns:
-            float: Combined score between 0 and 1, used to evaluate feature importance
-        """
-        try:
-            # Get individual components with defaults
-            effect = metrics.get('model_effect', 0.0)
-            consistency = metrics.get('effect_consistency', 0.0)
-            predictive = metrics.get('predictive_power', 0.0)
-            
-            # Normalize effect size
-            normalized_effect = min(abs(effect), 1.0)
-            
-            # Calculate weighted score
-            weights = {
-                'effect': 0.4,      # Weight for effect size
-                'consistency': 0.3,  # Weight for consistency
-                'predictive': 0.3    # Weight for predictive power
-            }
-            
-            score = (
-                weights['effect'] * normalized_effect +
-                weights['consistency'] * max(0, consistency) +  # Clip negative consistency
-                weights['predictive'] * predictive
-            )
-            
-            return float(np.clip(score, 0, 1))
-            
-        except Exception as e:
-            logger.error(f"Error calculating combined score: {str(e)}")
-            return 0.0
-                                        
+                                                        
     def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
         """Calculate how much a feature improves model predictions over random chance."""
         try:
@@ -261,8 +209,7 @@ class FeatureImportanceCalculator:
         return {
             'model_effect': 0.0,
             'effect_consistency': 0.0,
-            'predictive_power': 0.0,
-            'combined_score': 0.0
+            'predictive_power': 0.0
         }
  
         

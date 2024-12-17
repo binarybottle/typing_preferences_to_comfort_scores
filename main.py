@@ -296,7 +296,6 @@ def main():
                     'feature_name': feature_name,
                     'n_components': len(components),
                     'selected': 1 if feature_name in selected_features else 0,
-                    'combined_score': metrics.get('combined_score', 0.0),
                     'model_effect': metrics.get('model_effect', 0.0),
                     'effect_consistency': metrics.get('effect_consistency', 0.0),
                     'predictive_power': metrics.get('predictive_power', 0.0),
@@ -321,7 +320,6 @@ def main():
                 metrics = all_metrics[feature]
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                logger.info(f"  Combined score: {metrics.get('combined_score', 0.0):.3f}")
                 logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
                 logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")

@@ -197,7 +197,6 @@ For each remaining feature:
   - feature_name: Name of the feature or interaction feature being evaluated
   - n_components: Number of components in the feature (1 for base features, 2+ for interaction features)
   - selected: Binary indicator (1 or 0) showing if the feature was selected in the final model
-  - combined_score: Combined score from the prediction and variation metrics below, indicating overall feature importance
   - Prediction/Effect measures: 
     - model_effect: Absolute size of the feature's effect in the model
     - predictive_power: Model performance improvement from feature
