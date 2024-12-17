@@ -506,6 +506,7 @@ class PreferenceModel:
     def _get_feature_data(self, feature: str, dataset: Optional[PreferenceDataset] = None) -> Dict[str, np.ndarray]:
         """
         Centralized method for getting feature data with caching.
+        Only normalizes typing_time, assumes other features are pre-normalized.
         """
         dataset = dataset or self.dataset
         cache_key = f"{dataset.file_path}_{feature}"
@@ -514,7 +515,7 @@ class PreferenceModel:
             return self._feature_data_cache[cache_key]
             
         if '_x_' in feature:
-            # Handle interaction features
+            # Handle interaction features (already normalized through components)
             feat1, feat2 = feature.split('_x_')
             data1 = self._get_feature_data(feat1, dataset)
             data2 = self._get_feature_data(feat2, dataset)
@@ -532,30 +533,39 @@ class PreferenceModel:
             raw_features = {}
             
             if feature == 'typing_time':
-                # Times are normalized by computing relative time differences for each preference pair:
-                # time1 - time2)/(time1 + time2)
-                #   - bounds the differences to [-1, 1]
-                #   - makes differences comparable across participants
-                #   - is symmetric around 0
-                #   - accounts for different baseline typing speeds
+                # First collect all valid times for normalization
+                all_times = []
                 for pref in dataset.preferences:
-                    time1 = pref.typing_time1 or 0.0  # Handle None values
-                    time2 = pref.typing_time2 or 0.0
+                    if pref.typing_time1 is not None:
+                        all_times.append(pref.typing_time1)
+                    if pref.typing_time2 is not None:
+                        all_times.append(pref.typing_time2)
+                
+                time_mean = np.mean(all_times)
+                time_std = np.std(all_times)
+                
+                for pref in dataset.preferences:
+                    time1 = pref.typing_time1
+                    time2 = pref.typing_time2
                     
-                    # Compute relative time difference
-                    time_sum = time1 + time2
-                    if time_sum > 0:  # Avoid division by zero
-                        rel_diff = (time1 - time2) / time_sum
-                    else:
-                        rel_diff = 0.0
+                    # Use mean for None values
+                    if time1 is None or time2 is None:
+                        valid_times = [t for t in [time1, time2] if t is not None]
+                        mean_time = np.mean(valid_times) if valid_times else time_mean
+                        time1 = mean_time if time1 is None else time1
+                        time2 = mean_time if time2 is None else time2
                     
-                    values.extend([time1, time2])
-                    differences.append(rel_diff)
-                    raw_features[pref.bigram1] = time1
-                    raw_features[pref.bigram2] = time2
+                    # Z-score normalize timing values
+                    time1_norm = (time1 - time_mean) / time_std
+                    time2_norm = (time2 - time_mean) / time_std
+                    
+                    values.extend([time1_norm, time2_norm])
+                    differences.append(time1_norm - time2_norm)
+                    raw_features[pref.bigram1] = time1_norm
+                    raw_features[pref.bigram2] = time2_norm
                     
             else:
-                # Normal handling for other features
+                # Other features are already normalized
                 for pref in dataset.preferences:
                     feat1 = self.feature_extractor.extract_bigram_features(
                         pref.bigram1[0], pref.bigram1[1]).get(feature, 0.0)
@@ -591,16 +601,7 @@ class PreferenceModel:
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
         """
         Prepare data for Stan model with proper validation and cleaning.
-        
-        Args:
-            dataset: PreferenceDataset containing preferences
-            features: Optional list of features to use. If None, uses all features.
-            
-        Returns:
-            Dictionary containing data formatted for Stan model
-            
-        Raises:
-            ValueError: If feature dimensions don't match or data is invalid
+        Only normalizes typing_time feature as all other features are pre-normalized.
         """
         try:
             # Get feature names
@@ -614,6 +615,18 @@ class PreferenceModel:
             # Create participant ID mapping
             participant_ids = sorted(list(dataset.participants))
             participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
+            
+            # If typing_time is a feature, collect all valid times for normalization
+            if 'typing_time' in self.feature_names:
+                all_times = []
+                for pref in dataset.preferences:
+                    if pref.typing_time1 is not None:
+                        all_times.append(pref.typing_time1)
+                    if pref.typing_time2 is not None:
+                        all_times.append(pref.typing_time2)
+                time_mean = np.mean(all_times)
+                time_std = np.std(all_times)
+                logger.info(f"Typing time normalization parameters - mean: {time_mean:.3f}, std: {time_std:.3f}")
             
             # Initialize arrays
             X1 = []  # Features for first bigram in each preference
@@ -637,18 +650,20 @@ class PreferenceModel:
                             if feat1 is None or feat2 is None:
                                 # Get mean of valid times from this preference
                                 valid_times = [t for t in [pref.typing_time1, pref.typing_time2] if t is not None]
-                                mean_time = np.mean(valid_times) if valid_times else 0.0
+                                mean_time = np.mean(valid_times) if valid_times else time_mean
                                 feat1 = mean_time if feat1 is None else feat1
                                 feat2 = mean_time if feat2 is None else feat2
+                            # Normalize timing values
+                            feat1 = (feat1 - time_mean) / time_std
+                            feat2 = (feat2 - time_mean) / time_std
                         
-                        # For other features, use 0.0 for None
+                        # For other features, use 0.0 for None (they're already normalized)
                         else:
                             feat1 = 0.0 if feat1 is None else feat1
                             feat2 = 0.0 if feat2 is None else feat2
                         
                         features1.append(feat1)
                         features2.append(feat2)
-
                     X1.append(features1)
                     X2.append(features2)
                     participant.append(participant_map[pref.participant_id])
@@ -715,7 +730,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error preparing data: {str(e)}")
             raise
-                
+                        
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.

@@ -1,7 +1,7 @@
 # features/features.py
 """
 Individual feature calculations for typing mechanics.
-Implements specific metrics like:
+Implements binary [0,1] or normalized (0-1) metrics such as:
   - Same-finger usage
   - Row transitions
   - Angle between keys
@@ -14,11 +14,11 @@ from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_arra
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
-#-----------------------------------#
-# Angles and distances between keys #
-#-----------------------------------#
-def calculate_metrics(pos1, pos2):
-    """Calculate angle (0-90 degrees) and distance between two positions"""
+#---------------------#
+# Angles between keys #
+#---------------------#
+def calculate_angle(pos1, pos2):
+    """Calculate angle (0-90 degrees) between two positions"""
     dx = pos2[0] - pos1[0]
     dy = pos2[1] - pos1[1]
     
@@ -27,90 +27,22 @@ def calculate_metrics(pos1, pos2):
     if angle > 90:
         angle = 180 - angle
         
-    # Calculate Euclidean distance
-    distance = sqrt(dx*dx + dy*dy)
-    
-    return {
-        'angle': round(angle, 1),
-        'distance': round(distance, 1)
-    }
+    return round(angle, 3)
 
 # Create the metrics map with both directions
-key_metrics = {}
+angles = {}
 letters = 'qwertyuiopasdfghjkl;zxcvbnm,./'
 
-# Calculate metrics between all possible keys, storing both directions
+# Calculate angles between all possible keys, storing both directions
 for c1 in letters:
     for c2 in letters:
         if c1 != c2:
             pos1 = staggered_position_map[c1]
             pos2 = staggered_position_map[c2]
-            metrics = calculate_metrics(pos1, pos2)
+            angle = calculate_angle(pos1, pos2)
             # Store both directions
-            key_metrics[(c1, c2)] = metrics
-            key_metrics[(c2, c1)] = metrics
-
-verbose = False
-if verbose:
-    # Example lookups showing typical patterns
-    examples = [
-        ('q', 'w'),  # same row adjacent
-        ('q', 'a'),  # vertical adjacent
-        ('q', 's'),  # diagonal adjacent
-        ('a', 'z'),  # vertical with larger stagger
-        ('q', 'p'),  # far horizontal
-        ('z', 'p'),  # far diagonal
-        ('f', 'j'),  # home row medium distance
-    ]
-    print("Example key pair metrics:")
-    for c1, c2 in examples:
-        metrics = key_metrics[(c1, c2)]
-        print(f"{c1}->{c2}:")
-        print(f"  Angle: {metrics['angle']}°")
-        print(f"  Distance: {metrics['distance']}mm")
-        print()
-
-    # Some interesting statistics
-    angles = [m['angle'] for m in key_metrics.values()]
-    distances = [m['distance'] for m in key_metrics.values()]
-
-    print("Statistics:")
-    print(f"Number of pairs: {len(key_metrics)}")
-    print(f"Shortest distance: {min(distances)}mm")
-    print(f"Longest distance: {max(distances)}mm")
-    print(f"Average distance: {sum(distances)/len(distances):.1f}mm")
-    print(f"Most common angle: {max(set(angles), key=angles.count)}°")
-
-#---------------------------------#
-# Qwerty bigram frequency feature #
-#---------------------------------#
-def qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array):
-    """
-    Look up normalized frequency of a bigram from Norvig's analysis.
-    Normalizes by dividing by the maximum frequency ("th" = 0.0356).
-    
-    Parameters:
-    - char1: First character of bigram (case-insensitive)
-    - char2: Second character of bigram (case-insensitive)
-    - bigrams: List of bigrams ordered by frequency
-    - bigram_frequencies_array: Array of corresponding frequency values
-    
-    Returns:
-    - float: Normalized frequency of the bigram if found, 0.0 if not found
-             (value between 0 and 1, where "th" = 1.0)
-    """
-    # Maximum frequency is the first value in the array (corresponds to "th")
-    max_freq = bigram_frequencies_array[0]  # ~0.0356
-    
-    # Create bigram string and convert to lowercase
-    bigram = (char1 + char2).lower()
-    
-    # Look up bigram index in list and normalize
-    try:
-        idx = bigrams.index(bigram)
-        return float(bigram_frequencies_array[idx] / max_freq)
-    except ValueError:
-        return 0.0
+            angles[(c1, c2)] = angle
+            angles[(c2, c1)] = angle
     
 #------------------------#
 # Same/adjacent features #
@@ -204,11 +136,11 @@ def rows_apart(char1, char2, column_map, row_map):
     """
     Measure how many rows apart the two characters are (typed by the same hand).
       0: same row
-      1: 1 row apart
-      2: 2 rows apart
+      1/2: 1 row apart
+      2/2: 2 rows apart
     """
     if same_hand(char1, char2, column_map) == 1:
-        return abs(row_map[char2] - row_map[char1])
+        return abs(row_map[char2] - row_map[char1]) / 2.0
     else:
         return 0
 
@@ -230,29 +162,20 @@ def columns_apart(char1, char2, column_map):
     """
     Measure how many columns apart the two characters are (typed by the same hand).
       0: same column
-      1: 1 column apart
-      2: 2 columns apart
-      3: 3 columns apart
-      4: 4 columns apart
+      1/4: 1 column apart
+      2/4: 2 columns apart
+      3/4: 3 columns apart
+      4/4: 4 columns apart
     """
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return abs(column_map[char2] - column_map[char1])
-    else:
-        return 0
-
-def distance_apart(char1, char2, column_map, key_metrics):
-    """Measure distance between the two QWERTY characters' keys (typed by the same hand)."""
-    if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        metrics = key_metrics[(char1, char2)]
-        return metrics['distance']
+        return abs(column_map[char2] - column_map[char1]) / 4.0
     else:
         return 0
 
 def angle_apart(char1, char2, column_map, key_metrics):
     """Measure angle between the two QWERTY characters' keys (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        metrics = key_metrics[(char1, char2)]
-        return metrics['angle']
+        return angles[(char1, char2)] / 90.0
     else:
         return 0
 
@@ -327,14 +250,14 @@ def middle_column(char1, char2, column_map):
 def sum_engram_position_values(char1, char2, column_map, engram_position_values):
     """Sum engram_position_values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return engram_position_values[char1] + engram_position_values[char2]
+        return (engram_position_values[char1] + engram_position_values[char2]) / (2 * max_engram_position_value)
     else:
         return 0
 
 def sum_row_position_values(char1, char2, column_map, row_position_values):
     """Sum row_position_values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return row_position_values[char1] + row_position_values[char2]
+        return (row_position_values[char1] + row_position_values[char2]) / (2 * max_row_position_value)
     else:
         return 0
 
@@ -344,7 +267,7 @@ def sum_row_position_values(char1, char2, column_map, row_position_values):
 def sum_finger_values(char1, char2, finger_map):
     """Sum finger_map values for the two characters (typed by the same hand)."""
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
-        return finger_map[char1] + finger_map[char2]
+        return (finger_map[char1] + finger_map[char2]) / (2 * max_finger_map_value)
     else:
         return 0
 

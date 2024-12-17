@@ -28,6 +28,7 @@ finger_map = {
     'h': 1, 'j': 1, 'k': 2, 'l': 3, ';': 4, 
     'n': 1, 'm': 1, ',': 2, '.': 3, '/': 4
 }
+max_finger_map_value = 4.0
 
 row_map = {
     'q': 3, 'w': 3, 'e': 3, 'r': 3, 't': 3, 
@@ -85,6 +86,7 @@ engram_position_values = {
     'h': 2, 'j': 0, 'k': 0, 'l': 0, ';': 0, 
     'n': 2, 'm': 0, ',': 1, '.': 1, '/': 0
 }
+max_engram_position_value = 2.0
 
 # position values determined by row (home=0, top=1, bottom=2), without penalizing middle columns:
 row_position_values = {
@@ -95,4 +97,5 @@ row_position_values = {
     'h': 0, 'j': 0, 'k': 0, 'l': 0, ';': 0, 
     'n': 2, 'm': 2, ',': 2, '.': 2, '/': 2
 }
+max_row_position_value = 2.0
 
