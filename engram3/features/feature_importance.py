@@ -39,12 +39,14 @@ logger = LoggingManager.getLogger(__name__)
 
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
-
     def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
+            self.features = config.get('features', {})
         else:
             feature_selection_config = config.feature_selection.dict()
+            self.features = config.features.dict()
+            
         self.config = FeatureSelectionConfig(**feature_selection_config)
         
         # Store model reference
@@ -63,7 +65,7 @@ class FeatureImportanceCalculator:
                     os.chmod(str(exe_path), 0o755)
             except Exception as e:
                 logger.warning(f"Could not set Stan model executable permissions: {str(e)}")
-                
+                                
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):

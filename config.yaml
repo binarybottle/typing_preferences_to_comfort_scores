@@ -31,16 +31,26 @@ feature_selection:
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
+features:
+  base_features:                      # Core features for analysis
+    - typing_time                     # Time taken to type bigram
+    - same_finger                     # Whether bigram uses same finger
+    - sum_finger_values
+  interactions:
+    - [same_finger, sum_finger_values]
+  control_features:                   # Features to control for but not analyze
+    - bigram_frequency                  # Bigram frequency in the English language
+
 #-----------------------------------------------------------------------
 # Bigram pair recommendations
 #-----------------------------------------------------------------------
 recommendations:
   weights:                              # Weights for recommendation scoring (must sum to 1)
-    prediction_uncertainty: 0.2         # Weight for model prediction uncertainty (prioritize pairs where model is uncertain)
-    comfort_uncertainty: 0.2            # Weight for comfort score uncertainty (focus on uncertain comfort predictions)
-    feature_space: 0.2                  # Weight for coverage of feature space (ensure good coverage of feature space)
-    transitivity: 0.2                   # Weight for transitivity validation (Bradley-Terry models assume transitivity in preferences)
-    stability: 0.2                      # Weight for feature stability
+    prediction_uncertainty: 0.25        # Weight for model prediction uncertainty (prioritize pairs where model is uncertain)
+    comfort_uncertainty: 0.25           # Weight for comfort score uncertainty (focus on uncertain comfort predictions)
+    feature_space: 0.25                 # Weight for coverage of feature space (ensure good coverage of feature space)
+    transitivity: 0.15                  # Weight for transitivity validation (Bradley-Terry models assume transitivity in preferences)
+    stability: 0.10                     # Weight for feature stability
   n_recommendations: 50                 # Number of bigram pairs to recommend
   max_candidates: 5000                  # Maximum number of candidate pairs to evaluate
   recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
@@ -50,20 +60,19 @@ recommendations:
 #-----------------------------------------------------------------------
 # Model slow vs. fast settings
 __model_slow: &slow
-  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 __model_fast: &fast  
-  chains: 1                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 100                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 200                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 5                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration)
+  max_treedepth: 8                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 model:                                  # Bayesian model parameters (Stan)
   #<<: *slow                             # Change to *fast for fast settings
   <<: *fast                             # Change to *slow for slow settings
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
@@ -71,20 +80,7 @@ model:                                  # Bayesian model parameters (Stan)
   model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
 
 #-----------------------------------------------------------------------
-# Features and feature interactions
-#-----------------------------------------------------------------------
-features:
-  base_features:                        # Core features for analysis
-    - typing_time                       # Time taken to type bigram
-    - same_finger                       # Whether bigram uses same finger
-    - sum_finger_values
-  interactions:
-    - [same_finger, sum_finger_values]
-  control_features:                     # Features to control for but not analyze
-    - bigram_frequency
-
-#-----------------------------------------------------------------------
-# Visualization, logging, and poths
+# Visualization, logging, and paths
 #-----------------------------------------------------------------------
 visualization:
   dpi: 300                              # Resolution of saved plots (dots per inch)

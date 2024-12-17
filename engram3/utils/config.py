@@ -72,14 +72,16 @@ class FeatureConfig:
 class FeatureSelectionConfig(BaseModel):
     """Validate feature selection configuration."""
     metric_weights: Dict[str, float]
-
+    metrics_file: str
+    model_file: str
+    
     @validator('metric_weights')
     def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
         total = sum(v.values())
         if not np.isclose(total, 1.0, rtol=1e-5):
             raise ValueError(f"Metric weights must sum to 1.0, got {total}")
         return v
-
+    
     class Config:
         validate_assignment = True
 

@@ -924,10 +924,7 @@ class PreferenceModel:
         """
         # Initialize with control features - these are always included
         self.selected_features = list(self.config.features.control_features)
-        
-        # Only consider main features for selection
-        main_features = [f for f in all_features 
-                        if f not in self.config.features.control_features]
+        main_features = [f for f in all_features if f not in self.config.features.control_features]
         
         while True:
             remaining_features = [f for f in main_features 
@@ -938,12 +935,11 @@ class PreferenceModel:
                 
             logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
             logger.info(f"Current feature set: {self.selected_features}")
-            logger.info(f"Control features always included: {self.config.features.control_features}")
             
             # Evaluate all remaining features in context of current set
             feature_metrics = {}
             for feature in remaining_features:
-                # Create candidate feature set including control features
+                # Create candidate feature set with current feature
                 candidate_features = self.selected_features + [feature]
                 
                 # Fit model with candidate feature set
@@ -957,7 +953,7 @@ class PreferenceModel:
                 )
                 feature_metrics[feature] = metrics
             
-            # Rest of selection process remains the same
+            # Compare each feature against all others
             win_counts = {f: 0 for f in remaining_features}
             for f1, f2 in combinations(remaining_features, 2):
                 if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
@@ -965,6 +961,7 @@ class PreferenceModel:
                 else:
                     win_counts[f2] += 1
                     
+            # Select feature with most wins
             best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
             best_metrics = feature_metrics[best_feature]
             
@@ -991,6 +988,15 @@ class PreferenceModel:
                     logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
             else:
                 break
+        
+        # Ensure at least one main feature is selected
+        if not any(f not in self.config.features.control_features 
+                for f in self.selected_features):
+            logger.warning("No main features selected, forcing selection of best main feature")
+            best_main = max(feature_metrics.items(), 
+                        key=lambda x: x[1]['model_effect'])[0]
+            self.selected_features.append(best_main)
+            self.fit(dataset, self.selected_features)
         
         return self.selected_features
 
