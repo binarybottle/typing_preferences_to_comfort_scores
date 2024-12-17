@@ -302,3 +302,34 @@ def finger2or3_bottom_below(char1, char2, column_map, row_map):
             return 0
     else:
         return 0
+
+#---------------------------------#
+# Qwerty bigram frequency feature #
+#---------------------------------#
+def qwerty_bigram_frequency(char1, char2, bigrams, bigram_frequencies_array):
+    """
+    Look up normalized frequency of a bigram from Norvig's analysis.
+    Normalizes by dividing by the maximum frequency ("th" = 0.0356).
+    
+    Parameters:
+    - char1: First character of bigram (case-insensitive)
+    - char2: Second character of bigram (case-insensitive)
+    - bigrams: List of bigrams ordered by frequency
+    - bigram_frequencies_array: Array of corresponding frequency values
+    
+    Returns:
+    - float: Normalized frequency of the bigram if found, 0.0 if not found
+             (value between 0 and 1, where "th" = 1.0)
+    """
+    # Maximum frequency is the first value in the array (corresponds to "th")
+    max_freq = bigram_frequencies_array[0]  # ~0.0356
+    
+    # Create bigram string and convert to lowercase
+    bigram = (char1 + char2).lower()
+    
+    # Look up bigram index in list and normalize
+    try:
+        idx = bigrams.index(bigram)
+        return float(bigram_frequencies_array[idx] / max_freq)
+    except ValueError:
+        return 0.0

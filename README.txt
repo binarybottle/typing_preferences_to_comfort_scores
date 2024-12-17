@@ -1,125 +1,96 @@
 Engram3: Keyboard Layout Optimization via Preference Learning
-==========================================================
-
+=============================================================
 A system for optimizing keyboard layouts using Bayesian preference learning and active sampling.
+https://github.com/yourname/engram3.git
+
+Author: Arno Klein (binarybottle.com)
 
 Project Structure
 ----------------
-engram3/                            # Root project directory
-├── pyproject.toml                  # Project metadata and dependencies
-├── config.yaml                     # Configuration settings
-├── main.py                         # CLI and pipeline orchestration
-└── engram3/                        # Package directory
-    ├── features/                   # Feature computation and analysis
-    │   ├── __init__.py
-    │   ├── bigram_frequencies.py   # Bigram frequency data
-    │   ├── extraction.py           # Feature extraction pipeline
-    │   ├── features.py            # Core feature calculations
-    │   ├── importance.py          # Feature importance analysis
-    │   └── keymaps.py             # Keyboard layout definitions
-    ├── utils/                      # Utility modules
-    │   ├── __init__.py
-    │   ├── config.py              # Configuration management
-    │   ├── visualization.py       # Plotting utilities
-    │   └── logging.py            # Logging system
-    ├── data.py                    # Dataset management
+engram3/                           
+├── config.yaml                    # Main configuration file
+├── main.py                        # CLI and pipeline orchestration
+└── engram3/                       
+    ├── features/                  
+        ├── feature_extraction.py  # Core feature computation
+        ├── feature_importance.py  # Feature evaluation metrics
+        ├── keymaps.py             # Keyboard layout mappings
+    ├── utils/                     
+        ├── config.py              # Configuration handling
+        ├── logging.py             # Logging system
+        └── caching.py             # Feature and prediction caching
+    ├── data.py                    # Dataset and preference handling
     ├── model.py                   # Bayesian preference model
     └── recommendations.py         # Bigram pair recommendations
 
 Core Components
 --------------
-1. Feature System
-   - Extraction of physical and ergonomic typing features
-   - Feature importance analysis and selection
-   - Interaction detection and evaluation
-   - Dynamic feature computation and caching
-
-2. Preference Model
-   - Hierarchical Bayesian model using Stan
-   - Bradley-Terry preference structure
-   - Participant-level random effects
-   - Full posterior uncertainty quantification
 
 3. Recommendation Engine
-   - Information-theoretic pair selection
-   - Multi-criteria scoring system
-   - Feature space coverage optimization
+   - Multi-criteria pair scoring
+   - Configurable scoring weights
+   - Feature space coverage analysis
    - Transitivity validation
+   - Recommendation visualization
 
 Operation Modes
 --------------
 1. Feature Selection (select_features)
    $ python main.py --config config.yaml --mode select_features
-   - Evaluates base features and interactions
-   - Uses adaptive thresholding
-   - Performs stability analysis
-   - Outputs comprehensive metrics
+   - Evaluates features using three metrics
+   - Handles feature interactions
+   - Performs cross-validation stability analysis
+   - Generates comprehensive metrics report
 
 2. Model Training (train_model)
    $ python main.py --config config.yaml --mode train_model
-   - Trains on selected features
-   - Handles participant grouping
-   - Includes cross-validation
-   - Provides detailed diagnostics
+   - Trains using selected features
+   - Maintains participant separation in splits
+   - Performs cross-validation
+   - Saves model state for reuse
 
 3. Bigram Recommendations (recommend_bigram_pairs)
    $ python main.py --config config.yaml --mode recommend_bigram_pairs
-   - Generates candidate pairs
-   - Optimizes information gain
-   - Visualizes recommendations
-   - Exports for data collection
+   - Scores candidate pairs using multiple criteria
+   - Visualizes recommendations in feature space
+   - Validates transitivity
+   - Exports recommendations for data collection
 
 4. Comfort Prediction (predict_bigram_scores)
    $ python main.py --config config.yaml --mode predict_bigram_scores
-   - Scores all possible bigrams
-   - Includes uncertainty estimates
-   - Provides detailed metrics
-   - Exports comprehensive results
+   - Predicts comfort scores for all bigrams
+   - Includes uncertainty quantification
+   - Exports detailed scoring results
 
 Configuration
 ------------
 The config.yaml file controls all aspects of the system:
 
-1. Data Management
-   - Input/output paths
-   - Train/test splits
-   - Data validation rules
+1. Data Configuration
+   - Input file paths
+   - Train/test split ratio
+   - Layout character definitions
 
 2. Feature Selection
-   - Base features list
-   - Interaction parameters
-   - Selection thresholds
-   - Stability criteria
+   - Metric weights for selection
+   - Base features and interactions
+   - Output file paths
 
 3. Model Parameters
-   - MCMC settings
-   - Prior specifications
-   - Diagnostic thresholds
+   - MCMC settings (fast/slow options)
+   - Chains and samples configuration
+   - Adaptation parameters
 
 4. Recommendation Settings
-   - Scoring weights
-   - Candidate generation
-   - Visualization options
+   - Scoring weights for different criteria
+   - Number of recommendations
+   - Maximum candidate pairs
+   - Visualization parameters
 
-Implementation Details
---------------------
-1. Feature Selection Process
-   - Iterative selection with interaction consideration
-   - Adaptive thresholding using distribution statistics
-   - Multiple testing correction
-   - Stability assessment
-
-2. Model Architecture
-   - Stan-based implementation
-   - Efficient MCMC sampling
-   - Comprehensive diagnostics
-   - Uncertainty propagation
-
-3. Output Metrics
-   - Feature importance scores
-   - Model effect sizes
-   - Stability measures
-   - Statistical significance
+5. Logging Configuration
+   - Console and file logging levels
+   - Output directory structure
+   - Logging format
 
 Workflow
 --------
@@ -129,91 +100,6 @@ Workflow
 4. Generate bigram comfort scores
 5. Use scores for layout optimization
 
-The system produces detailed CSVs and visualizations at each stage to guide the 
-optimization process.
-
-Requirements
------------
-- Python 3.8+
-- Stan 2.26+
-- NumPy
-- Pandas
-- Matplotlib
-- PyYAML
-- Scikit-learn
-
-Installation
------------
-1. Clone the repository:
-   git clone https://github.com/yourname/engram3.git
-
-2. Install dependencies:
-   pip install -r requirements.txt
-
-3. Install Stan:
-   Follow instructions at https://mc-stan.org/users/interfaces/cmdstan
-
-4. Configure:
-   Copy config.yaml.example to config.yaml and adjust settings
-
-5. Run:
-   python main.py --config config.yaml --mode select_features
-
 License
 -------
 MIT License. See LICENSE file for details.
-
-
-
-Looking at feature differences rather than values makes more sense 
-since our training data consists of preferences between pairs, and these differences are what inform the feature weights that ultimately determine individual bigram comfort scores
-
-Times normalized by computing relative time differences:
-For each preference pair, compute (time1 - time2)/(time1 + time2):
-- Bounds the differences to [-1, 1]
-- Makes differences comparable across participants
-- Is symmetric around 0
-- Accounts for different baseline typing speeds
-
-
-I would recommend option 3 since:
-
-It naturally handles per-participant differences in typing speed
-Works directly with paired preferences
-Gives us bounded differences that are comparable across participants
-Is less sensitive to outliers than raw time differences
-
-## Feature selection process
-Start with empty feature set
-For each remaining feature:
-  1. Try adding it to current feature set
-  2. Fit full model with candidate feature set
-  3. Evaluate feature's contribution in this context
-  4. Select best feature that meets minimum criteria
-  5. Update model with new feature set
-  6. Repeat until no remaining features are helpful
-
-## Feature selection output
-  - feature_name: Name of the feature or interaction feature being evaluated
-  - n_components: Number of components in the feature (1 for base features, 2+ for interaction features)
-  - selected: Binary indicator (1 or 0) showing if the feature was selected in the final model
-  - Prediction/Effect measures: 
-    - model_effect: Absolute size of the feature's effect in the model
-    - predictive_power: Model performance improvement from feature
-  - Variation/Stability measures: 
-    - effect_consistency: How consistent the feature's effect is across cross-validation splits
-      - (1 - coefficient of variation: 1 - std_effect / abs(mean_effect)
-  - Resulting model weights: 
-    - weight: Mean weight/coefficient of the feature in the model
-    - weight_std: Standard deviation of the feature's weight (uncertainty measure)
-
-For prediction, only the trained model weights (mean and std) are needed.
-
-For recommendation, both model weights and the feature selection metrics are used to help identify informative pairs:
-  - prediction uncertainty
-  - comfort score uncertainty
-  - feature space coverage
-  - stability
-  - interaction effects
-  - transitivity
-

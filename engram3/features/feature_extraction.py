@@ -25,7 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import yaml
 
+from engram3.features.features import qwerty_bigram_frequency
 from engram3.utils.config import FeatureConfig
+from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
@@ -39,22 +41,32 @@ class FeatureExtractor:
     def precompute_all_features(self, layout_chars: List[str]) -> Tuple[List[Tuple[str, str]], Dict]:
         """
         Precompute features for all possible bigrams in layout.
-        
-        Args:
-            layout_chars: List of characters in keyboard layout
-            
-        Returns:
-            Tuple of (all_bigrams, bigram_features)
         """
         all_bigrams = []
         bigram_features = {}
+        
+        # Debug log the configuration
+        logger.debug(f"Precomputing features with config attributes: {vars(self.config)}")
+        
+        # Process first bigram with detailed logging
+        first_chars = (layout_chars[0], layout_chars[0])
+        logger.debug(f"Computing features for first bigram {first_chars}")
+        first_features = self.extract_bigram_features(*first_chars)
+        logger.debug(f"Features computed for first bigram: {list(first_features.keys())}")
         
         for char1 in layout_chars:
             for char2 in layout_chars:
                 bigram = (char1, char2)
                 all_bigrams.append(bigram)
-                bigram_features[bigram] = self.extract_bigram_features(char1, char2)
-                
+                features = self.extract_bigram_features(char1, char2)
+                if 'bigram_frequency' not in features:
+                    logger.warning(f"bigram_frequency missing for bigram {bigram}")
+                bigram_features[bigram] = features
+        
+        # Debug log final results
+        logger.debug(f"Computed features for {len(all_bigrams)} bigrams")
+        logger.debug(f"Feature keys in first bigram: {list(bigram_features[all_bigrams[0]].keys())}")
+        
         return all_bigrams, bigram_features
 
     def extract_bigram_features(self, char1: str, char2: str) -> Dict[str, float]:
@@ -85,41 +97,67 @@ class FeatureExtractor:
 
     def _extract_different_letter_features(self, char1: str, char2: str) -> Dict[str, float]:
         """Extract features for different-letter bigrams"""
-        features = {
-            'typing_time': 0.0,  # Placeholder for actual timing data
-            
-            # Finger usage features
-            'same_finger': self._calc_same_finger(char1, char2),
-            'sum_finger_values': self._calc_sum_finger_values(char1, char2),
-            'adj_finger_diff_row': self._calc_adj_finger_diff_row(char1, char2),
-            
-            # Spatial features
-            'rows_apart': self._calc_rows_apart(char1, char2),
-            'angle_apart': self._calc_angle_apart(char1, char2),
-            'outward_roll': self._calc_outward_roll(char1, char2),
-            'middle_column': self._calc_middle_column(char1, char2),
-            
-            # Position values
-            'sum_engram_position_values': self._calc_sum_engram_position_values(char1, char2),
-            'sum_row_position_values': self._calc_sum_row_position_values(char1, char2)
-        }
-        return features
+        try:
+            # Create string bigram
+            bigram_str = char1 + char2
 
+            features = {
+                'typing_time': 0.0,  # Placeholder for actual timing data
+                
+                # Finger usage features
+                'same_finger': self._calc_same_finger(char1, char2),
+                'sum_finger_values': self._calc_sum_finger_values(char1, char2),
+                'adj_finger_diff_row': self._calc_adj_finger_diff_row(char1, char2),
+                
+                # Spatial features
+                'rows_apart': self._calc_rows_apart(char1, char2),
+                'angle_apart': self._calc_angle_apart(char1, char2),
+                'outward_roll': self._calc_outward_roll(char1, char2),
+                'middle_column': self._calc_middle_column(char1, char2),
+                
+                # Position values
+                'sum_engram_position_values': self._calc_sum_engram_position_values(char1, char2),
+                'sum_row_position_values': self._calc_sum_row_position_values(char1, char2),
+                
+                # Control feature
+                'bigram_frequency': qwerty_bigram_frequency(
+                    char1, char2,
+                    self.config.bigrams,
+                    self.config.bigram_frequencies_array
+                )
+            }
+            return features
+        except Exception as e:
+            logger.error(f"Error computing features for bigram {char1}{char2}: {str(e)}")
+            raise
+        
     def _extract_same_letter_features(self, char: str) -> Dict[str, float]:
         """Extract features for same-letter bigrams"""
-        return {
-            'typing_time': 0.0,
-            'same_finger': 1.0,
-            'sum_finger_values': self.config.finger_map.get(char, 0) * 2,
-            'adj_finger_diff_row': 0.0,
-            'rows_apart': 0,
-            'angle_apart': 0.0,
-            'outward_roll': 0.0,
-            'middle_column': 1.0 if self._is_middle_column(char) else 0.0,
-            'sum_engram_position_values': self.config.engram_position_values.get(char, 0) * 2,
-            'sum_row_position_values': self.config.row_position_values.get(char, 0) * 2
-        }
-
+        try:
+            features = {
+                'typing_time': 0.0,
+                'same_finger': 1.0,
+                'sum_finger_values': self.config.finger_map.get(char, 0) * 2,
+                'adj_finger_diff_row': 0.0,
+                'rows_apart': 0,
+                'angle_apart': 0.0,
+                'outward_roll': 0.0,
+                'middle_column': 1.0 if self._is_middle_column(char) else 0.0,
+                'sum_engram_position_values': self.config.engram_position_values.get(char, 0) * 2,
+                'sum_row_position_values': self.config.row_position_values.get(char, 0) * 2,
+                
+                # Control feature
+                'bigram_frequency': qwerty_bigram_frequency(
+                    char, char,
+                    self.config.bigrams,
+                    self.config.bigram_frequencies_array
+                )
+            }
+            return features
+        except Exception as e:
+            logger.error(f"Error computing features for same-letter bigram {char}: {str(e)}")
+            raise
+        
     def _calc_same_finger(self, char1: str, char2: str) -> float:
         """Calculate if bigram uses same finger"""
         return float(self.config.finger_map.get(char1) == self.config.finger_map.get(char2))

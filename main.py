@@ -62,6 +62,7 @@ from engram3.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
+from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
@@ -170,13 +171,18 @@ def main():
         
         # Initialize feature extraction
         logger.info("Initializing feature extraction...")
+        # Debug to check the values are imported
+        logger.debug(f"Loaded bigrams: {len(bigrams)} items")
+        logger.debug(f"Loaded bigram frequencies: {bigram_frequencies_array.shape}")
         feature_config = FeatureConfig(
             column_map=column_map,
             row_map=row_map,
             finger_map=finger_map,
             engram_position_values=engram_position_values,
             row_position_values=row_position_values,
-            angles=angles
+            angles=angles,
+            bigrams=bigrams,
+            bigram_frequencies_array=bigram_frequencies_array
         )
         feature_extractor = FeatureExtractor(feature_config)
         
@@ -185,7 +191,12 @@ def main():
         all_bigrams, all_bigram_features = feature_extractor.precompute_all_features(
             config.data.layout['chars']
         )
-        
+        # Debug:
+        logger.debug("First bigram features:")
+        first_bigram = next(iter(all_bigram_features))
+        logger.debug(f"  bigram: {first_bigram}")
+        logger.debug(f"  features: {all_bigram_features[first_bigram]}")
+
         # Get feature names from first computed features
         feature_names = list(next(iter(all_bigram_features.values())).keys())
         
@@ -216,9 +227,9 @@ def main():
             # Get all features including interactions
             base_features = config.features.base_features
             interaction_features = [f"{f1}_x_{f2}" 
-                                for f1, f2 in combinations(base_features, 2)]
+                                    for f1, f2 in config.features.interactions]
             all_features = base_features + interaction_features
-            
+                        
             logger.info(f"Features to evaluate:")
             logger.info(f"  Base features: {len(base_features)} - {base_features}")
             logger.info(f"  Interaction features: {len(interaction_features)} - {interaction_features}")
@@ -301,13 +312,18 @@ def main():
             
             # Initialize feature extraction
             logger.info("Initializing feature extraction...")
+            # Debug to check the values are imported
+            logger.debug(f"Loaded bigrams: {len(bigrams)} items")
+            logger.debug(f"Loaded bigram frequencies: {bigram_frequencies_array.shape}")
             feature_config = FeatureConfig(
                 column_map=column_map,
                 row_map=row_map,
                 finger_map=finger_map,
                 engram_position_values=engram_position_values,
                 row_position_values=row_position_values,
-                angles=angles
+                angles=angles,
+                bigrams=bigrams,
+                bigram_frequencies_array=bigram_frequencies_array
             )
             feature_extractor = FeatureExtractor(feature_config)
             
@@ -360,67 +376,93 @@ def main():
                 # 2. Feature Impacts Plot from metrics
                 fig_impacts = plt.figure(figsize=(12, 6))
                 ax = fig_impacts.add_subplot(111)
-                
-                # Sort features by absolute weight value
-                sorted_metrics = metrics_df.sort_values('weight', key=abs, ascending=False)
-                
-                # Plot horizontal bar chart with error bars
-                y_pos = np.arange(len(sorted_metrics))
+
+                # Separate main and control features
+                control_features = config.features.control_features
+                main_metrics = sorted_metrics[~sorted_metrics['feature_name'].isin(control_features)]
+                control_metrics = sorted_metrics[sorted_metrics['feature_name'].isin(control_features)]
+
+                # Plot main features
+                y_pos = np.arange(len(main_metrics))
                 ax.barh(y_pos,
-                        sorted_metrics['weight'],
-                        xerr=sorted_metrics['weight_std'],
+                        main_metrics['weight'],
+                        xerr=main_metrics['weight_std'],
                         alpha=0.6,
                         capsize=5,
-                        color=['blue' if s else 'lightgray' for s in sorted_metrics['selected']])
-                
+                        color=['blue' if s else 'lightgray' for s in main_metrics['selected']],
+                        label='Main Features')
+
+                # Plot control features differently
+                if len(control_metrics) > 0:
+                    control_y_pos = np.arange(len(main_metrics), len(sorted_metrics))
+                    ax.barh(control_y_pos,
+                            control_metrics['weight'],
+                            xerr=control_metrics['weight_std'],
+                            alpha=0.4,
+                            capsize=5,
+                            color='gray',
+                            label='Control Features')
+
                 # Customize plot
-                ax.set_yticks(y_pos)
+                all_y_pos = np.arange(len(sorted_metrics))
+                ax.set_yticks(all_y_pos)
                 ax.set_yticklabels(sorted_metrics['feature_name'])
-                ax.set_xlabel('Feature Weight')
-                ax.set_title('Feature Impact Analysis\n(blue = selected features)')
+                ax.set_xlabel('Feature Weight\n(Effects shown after controlling for bigram frequency)')
+                ax.set_title('Feature Impact Analysis\n(blue = selected features, gray = control features)')
                 ax.grid(True, alpha=0.3)
                 ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
-                
-                plt.tight_layout()
-                fig_impacts.savefig(Path(config.paths.plots_dir) / 'feature_impacts_metrics.png')
-                plt.close()
-                available_plots.append('feature_impacts_metrics.png')
-                
-                # 3. Feature Impacts Plot from model weights
-                feature_weights = feature_selection_model.get_feature_weights()
+                ax.legend()
+
+                # Similarly update the model weights plot
+                feature_weights = feature_selection_model.get_feature_weights(include_control=True)
                 if feature_weights:
                     fig_weights = plt.figure(figsize=(12, 6))
                     ax = fig_weights.add_subplot(111)
                     
-                    # Sort features by absolute weight
-                    sorted_features = sorted(
-                        feature_weights.items(),
-                        key=lambda x: abs(x[1][0]),
-                        reverse=True
-                    )
+                    # Separate main and control features
+                    main_features = {k: v for k, v in feature_weights.items() 
+                                    if k not in control_features}
+                    control_features_weights = {k: v for k, v in feature_weights.items() 
+                                            if k in control_features}
                     
-                    features = [f for f, _ in sorted_features]
-                    means = [w[0] for _, w in sorted_features]
-                    stds = [w[1] for _, w in sorted_features]
+                    # Sort and plot main features
+                    sorted_main = sorted(main_features.items(), key=lambda x: abs(x[1][0]), reverse=True)
+                    main_y_pos = np.arange(len(sorted_main))
                     
-                    # Plot horizontal bar chart
-                    y_pos = np.arange(len(features))
-                    ax.barh(y_pos, means, xerr=stds,
-                        alpha=0.6, capsize=5,
-                        color=['blue' if m > 0 else 'red' for m in means])
+                    features = [f for f, _ in sorted_main]
+                    means = [w[0] for _, w in sorted_main]
+                    stds = [w[1] for _, w in sorted_main]
                     
+                    ax.barh(main_y_pos, means, xerr=stds,
+                            alpha=0.6, capsize=5,
+                            color=['blue' if m > 0 else 'red' for m in means],
+                            label='Main Features')
+                    
+                    # Plot control features
+                    if control_features_weights:
+                        sorted_control = sorted(control_features_weights.items(), 
+                                            key=lambda x: abs(x[1][0]), reverse=True)
+                        control_y_pos = np.arange(len(main_y_pos), 
+                                                len(main_y_pos) + len(sorted_control))
+                        
+                        control_features = [f for f, _ in sorted_control]
+                        control_means = [w[0] for _, w in sorted_control]
+                        control_stds = [w[1] for _, w in sorted_control]
+                        
+                        ax.barh(control_y_pos, control_means, xerr=control_stds,
+                                alpha=0.4, capsize=5, color='gray',
+                                label='Control Features')
+                        
+                        features.extend(control_features)
+                        
                     # Customize plot
-                    ax.set_yticks(y_pos)
+                    ax.set_yticks(np.arange(len(features)))
                     ax.set_yticklabels(features)
-                    ax.set_xlabel('Feature Weight')
+                    ax.set_xlabel('Feature Weight\n(Effects shown after controlling for bigram frequency)')
                     ax.set_title('Feature Weights from Model')
                     ax.grid(True, alpha=0.3)
                     ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
-                    
-                    plt.tight_layout()
-                    fig_weights.savefig(Path(config.paths.plots_dir) / 'feature_impacts_weights.png')
-                    plt.close()
-                    available_plots.append('feature_impacts_weights.png')
+                    ax.legend()
                 
                 logger.info(f"Generated the following plots: {', '.join(available_plots)}")
                 

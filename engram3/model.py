@@ -116,8 +116,9 @@ class PreferenceModel:
         self.feature_weights = None
         self.feature_extractor = None
                 
-        # Initialize caches
-        self.feature_cache = CacheManager()
+        # Initialize separate caches for main and control features
+        self.main_feature_cache = CacheManager()
+        self.control_feature_cache = CacheManager()
         self.prediction_cache = CacheManager()
         
         try:
@@ -236,28 +237,58 @@ class PreferenceModel:
         )
 
     def _update_feature_weights(self) -> None:
-        """Update feature weights from fitted model."""
+        """Update feature weights from fitted model for both main and control features."""
         try:
             self.feature_weights = {}
             
             if hasattr(self, 'fit'):  # Stan backend
+                # Get main feature weights (beta)
                 beta = self.fit_result.stan_variable('beta')
-                for i, feature in enumerate(self.feature_names):
+                main_features = [f for f in self.feature_names 
+                            if f not in self.config.features.control_features]
+                for i, feature in enumerate(main_features):
                     self.feature_weights[feature] = (
                         float(np.mean(beta[:, i])),
                         float(np.std(beta[:, i]))
                     )
+                
+                # Get control feature weights (gamma)
+                if self.config.features.control_features:
+                    gamma = self.fit_result.stan_variable('gamma')
+                    for i, feature in enumerate(self.config.features.control_features):
+                        self.feature_weights[feature] = (
+                            float(np.mean(gamma[:, i])),
+                            float(np.std(gamma[:, i]))
+                        )
+                
+                logger.debug("Updated weights:")
+                for feature, (mean, std) in self.feature_weights.items():
+                    feature_type = "control" if feature in self.config.features.control_features else "main"
+                    logger.debug(f"  {feature} ({feature_type}): {mean:.4f} ± {std:.4f}")
+                    
             elif hasattr(self, 'trace'):  # PyMC backend
-                for i, feature in enumerate(self.feature_names):
+                # Note: PyMC backend would need similar separation of main/control features
+                main_features = [f for f in self.feature_names 
+                            if f not in self.config.features.control_features]
+                for i, feature in enumerate(main_features):
                     weights = self.trace.get_values('feature_weights')[:, i]
                     self.feature_weights[feature] = (
                         float(np.mean(weights)),
                         float(np.std(weights))
                     )
-                    
+                
+                if self.config.features.control_features:
+                    for i, feature in enumerate(self.config.features.control_features):
+                        weights = self.trace.get_values('control_weights')[:, i]
+                        self.feature_weights[feature] = (
+                            float(np.mean(weights)),
+                            float(np.std(weights))
+                        )
+                        
         except Exception as e:
             logger.error(f"Error updating feature weights: {str(e)}")
-                        
+            logger.error("Traceback:", exc_info=True)
+                                    
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         try:
@@ -453,7 +484,7 @@ class PreferenceModel:
     def _get_feature_data(self, feature: str, dataset: Optional[PreferenceDataset] = None) -> Dict[str, np.ndarray]:
         """
         Centralized method for getting feature data with caching.
-        Only normalizes typing_time, assumes other features are pre-normalized.
+        Only normalizes typing_time, assumes other features (including control features) are pre-normalized.
         """
         dataset = dataset or self.dataset
         cache_key = f"{dataset.file_path}_{feature}"
@@ -480,7 +511,7 @@ class PreferenceModel:
             raw_features = {}
             
             if feature == 'typing_time':
-                # First collect all valid times for normalization
+                # Only typing_time needs normalization
                 all_times = []
                 for pref in dataset.preferences:
                     if pref.typing_time1 is not None:
@@ -512,7 +543,7 @@ class PreferenceModel:
                     raw_features[pref.bigram2] = time2_norm
                     
             else:
-                # Other features are already normalized
+                # All other features (including control features) are already normalized
                 for pref in dataset.preferences:
                     feat1 = self.feature_extractor.extract_bigram_features(
                         pref.bigram1[0], pref.bigram1[1]).get(feature, 0.0)
@@ -548,22 +579,32 @@ class PreferenceModel:
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
         """
         Prepare data for Stan model with proper validation and cleaning.
-        Only normalizes typing_time feature as all other features are pre-normalized.
+        Handles both main features and control features separately.
         """
         try:
-            # Get feature names
+            # Get feature names and separate control features
             self.feature_names = features if features is not None else dataset.get_feature_names()
+            control_features = self.config.features.control_features
+            main_features = [f for f in self.feature_names if f not in control_features]
             
-            # Log feature information
-            logger.info(f"Preparing data with {len(self.feature_names)} features:")
-            for f in self.feature_names:
-                logger.info(f"  - {f}")
-            
+            logger.info(f"Preparing data:")
+            logger.info(f"  Main features ({len(main_features)}): {main_features}")
+            logger.info(f"  Control features ({len(control_features)}): {control_features}")
+
+            # Debug logging for interaction features
+            for feature in self.feature_names:
+                if '_x_' in feature:
+                    feature_data = self._compute_feature_values(feature, dataset)
+                    logger.debug(f"Interaction feature {feature} stats:")
+                    logger.debug(f"  mean: {np.mean(feature_data):.4f}")
+                    logger.debug(f"  std: {np.std(feature_data):.4f}")
+                    logger.debug(f"  range: [{np.min(feature_data):.4f}, {np.max(feature_data):.4f}]")
+
             # Create participant ID mapping
             participant_ids = sorted(list(dataset.participants))
             participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
-            
-            # If typing_time is a feature, collect all valid times for normalization
+
+            # Handle typing_time normalization
             if 'typing_time' in self.feature_names:
                 all_times = []
                 for pref in dataset.preferences:
@@ -574,110 +615,119 @@ class PreferenceModel:
                 time_mean = np.mean(all_times)
                 time_std = np.std(all_times)
                 logger.info(f"Typing time normalization parameters - mean: {time_mean:.3f}, std: {time_std:.3f}")
-            
-            # Initialize arrays
-            X1 = []  # Features for first bigram in each preference
-            X2 = []  # Features for second bigram in each preference
-            participant = []  # Participant IDs
-            y = []  # Preference outcomes (1 if first bigram preferred, 0 otherwise)
-            
+
+            # Initialize arrays for both main and control features
+            X1, X2 = [], []  # Main feature matrices
+            C1, C2 = [], []  # Control feature matrices
+            participant = []
+            y = []
+
             skipped_count = 0
-            # Extract feature values and preferences
             for pref in dataset.preferences:
                 try:
-                    # Get features for both bigrams
-                    features1 = []
-                    features2 = []
-                    for feature in self.feature_names:
+                    # Process main features
+                    features1_main, features2_main = [], []
+                    for feature in main_features:
                         feat1 = pref.features1.get(feature)
                         feat2 = pref.features2.get(feature)
-                        
-                        # Special handling for typing_time
+
                         if feature == 'typing_time':
                             if feat1 is None or feat2 is None:
-                                # Get mean of valid times from this preference
                                 valid_times = [t for t in [pref.typing_time1, pref.typing_time2] if t is not None]
                                 mean_time = np.mean(valid_times) if valid_times else time_mean
                                 feat1 = mean_time if feat1 is None else feat1
                                 feat2 = mean_time if feat2 is None else feat2
-                            # Normalize timing values
                             feat1 = (feat1 - time_mean) / time_std
                             feat2 = (feat2 - time_mean) / time_std
-                        
-                        # For other features, use 0.0 for None (they're already normalized)
                         else:
                             feat1 = 0.0 if feat1 is None else feat1
                             feat2 = 0.0 if feat2 is None else feat2
-                        
-                        features1.append(feat1)
-                        features2.append(feat2)
-                    X1.append(features1)
-                    X2.append(features2)
+
+                        features1_main.append(feat1)
+                        features2_main.append(feat2)
+
+                    # Process control features
+                    features1_control, features2_control = [], []
+                    for feature in control_features:
+                        feat1 = pref.features1.get(feature, 0.0)
+                        feat2 = pref.features2.get(feature, 0.0)
+                        features1_control.append(feat1)
+                        features2_control.append(feat2)
+
+                    X1.append(features1_main)
+                    X2.append(features2_main)
+                    C1.append(features1_control)
+                    C2.append(features2_control)
                     participant.append(participant_map[pref.participant_id])
-                    y.append(1 if pref.preferred else 0)  # Integer values for Stan
-                    
+                    y.append(1 if pref.preferred else 0)
+
                 except Exception as e:
                     logger.warning(f"Skipping preference due to error: {str(e)}")
                     skipped_count += 1
                     continue
-            
+
             if skipped_count > 0:
                 logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
-            
+
             if not X1:
                 raise ValueError("No valid preferences after data preparation")
-            
+
             # Convert to numpy arrays
             X1 = np.array(X1, dtype=np.float64)
             X2 = np.array(X2, dtype=np.float64)
+            C1 = np.array(C1, dtype=np.float64)
+            C2 = np.array(C2, dtype=np.float64)
             participant = np.array(participant, dtype=np.int32)
             y = np.array(y, dtype=np.int32)
-            
-            # Validate dimensions and types
-            if X1.shape[1] != len(self.feature_names):
-                raise ValueError(f"Feature dimension mismatch: {X1.shape[1]} != {len(self.feature_names)}")
-            
-            if not np.issubdtype(y.dtype, np.integer):
-                raise ValueError(f"y must be integer type, got {y.dtype}")
-            
-            # Check for NaN values
-            if np.any(np.isnan(X1)) or np.any(np.isnan(X2)):
+
+            # Validation
+            if X1.shape[1] != len(main_features):
+                raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
+            if C1.shape[1] != len(control_features):
+                raise ValueError(f"Control feature dimension mismatch: {C1.shape[1]} != {len(control_features)}")
+            if np.any(np.isnan(X1)) or np.any(np.isnan(X2)) or np.any(np.isnan(C1)) or np.any(np.isnan(C2)):
                 raise ValueError("NaN values found in feature matrices")
-            
-            # Log data dimensions
+
+            # Log dimensions
             logger.info(f"Data dimensions:")
             logger.info(f"  N (preferences): {len(y)}")
             logger.info(f"  P (participants): {len(participant_ids)}")
-            logger.info(f"  F (features): {len(self.feature_names)}")
-            logger.info(f"  X1 shape: {X1.shape}")
-            logger.info(f"  X2 shape: {X2.shape}")
-            
+            logger.info(f"  F (main features): {len(main_features)}")
+            logger.info(f"  C (control features): {len(control_features)}")
+
             # Prepare Stan data
             stan_data = {
                 'N': len(y),
                 'P': len(participant_ids),
-                'F': len(self.feature_names),
+                'F': len(main_features),
+                'C': len(control_features),
                 'X1': X1,
                 'X2': X2,
+                'C1': C1,
+                'C2': C2,
                 'participant': participant,
                 'y': y,
                 'feature_scale': self.config.model.feature_scale,
                 'participant_scale': self.config.model.participant_scale
             }
-            
-            # Log summary statistics
+
+            # Log statistics
             logger.info("\nFeature summary statistics:")
-            for i, feature in enumerate(self.feature_names):
-                logger.info(f"{feature}:")
+            for i, feature in enumerate(main_features):
+                logger.info(f"{feature} (main):")
                 logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
                 logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
-            
+            for i, feature in enumerate(control_features):
+                logger.info(f"{feature} (control):")
+                logger.info(f"  C1 - mean: {np.mean(C1[:, i]):.3f}, std: {np.std(C1[:, i]):.3f}")
+                logger.info(f"  C2 - mean: {np.mean(C2[:, i]):.3f}, std: {np.std(C2[:, i]):.3f}")
+
             return stan_data
-            
+
         except Exception as e:
             logger.error(f"Error preparing data: {str(e)}")
             raise
-                        
+                                
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -742,6 +792,7 @@ class PreferenceModel:
     def get_bigram_comfort_scores(self, bigram: str) -> Tuple[float, float]:
         """
         Get comfort score and uncertainty for a single bigram.
+        Accounts for both main features and control features.
         
         Returns:
             Tuple of (mean score, standard deviation)
@@ -750,33 +801,64 @@ class PreferenceModel:
             # Extract features for bigram
             features = self._extract_features(bigram)
             
-            # Get feature weights from posterior
-            weights = self.get_feature_weights()
+            # Get feature weights from posterior, including control features
+            weights = self.get_feature_weights(include_control=True)
             
-            # Calculate comfort score
-            score = 0.0
-            uncertainty = 0.0
+            # Separate main and control features
+            main_features = [f for f in self.selected_features 
+                            if f not in self.config.features.control_features]
+            control_features = self.config.features.control_features
             
-            for feature, value in features.items():
+            # Calculate main feature contribution
+            main_score = 0.0
+            main_uncertainty = 0.0
+            for feature in main_features:
                 if feature in weights:
+                    value = features.get(feature, 0.0)
                     weight_mean, weight_std = weights[feature]
-                    score += value * weight_mean
-                    uncertainty += (value * weight_std) ** 2
-                    
-            uncertainty = np.sqrt(uncertainty)
+                    main_score += value * weight_mean
+                    main_uncertainty += (value * weight_std) ** 2
             
-            return float(score), float(uncertainty)
+            # Calculate control feature contribution
+            control_score = 0.0
+            control_uncertainty = 0.0
+            for feature in control_features:
+                if feature in weights:
+                    value = features.get(feature, 0.0)
+                    weight_mean, weight_std = weights[feature]
+                    control_score += value * weight_mean
+                    control_uncertainty += (value * weight_std) ** 2
+            
+            # Combine scores and uncertainties
+            total_score = main_score + control_score
+            total_uncertainty = np.sqrt(main_uncertainty + control_uncertainty)
+            
+            return float(total_score), float(total_uncertainty)
             
         except Exception as e:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
-
-    def get_feature_weights(self) -> Dict[str, Tuple[float, float]]:
+        
+    def get_feature_weights(self, include_control: bool = False) -> Dict[str, Tuple[float, float]]:
+        """
+        Get feature weights from fitted model.
+        
+        Args:
+            include_control: Whether to include control feature weights in output
+            
+        Returns:
+            Dictionary mapping feature names to (mean, std) tuples
+        """
         if not self.fit_result:
             raise NotFittedError("Model must be fit before getting weights")
             
         if self.feature_weights is not None:
-            return self.feature_weights.copy()
+            if include_control:
+                return self.feature_weights.copy()
+            else:
+                # Filter out control features
+                return {k: v for k, v in self.feature_weights.items() 
+                    if k not in self.config.features.control_features}
             
         try:
             summary = self.fit_result.summary()
@@ -785,56 +867,83 @@ class PreferenceModel:
             
             weights: Dict[str, Tuple[float, float]] = {}
             
-            # Look at all features, not just selected ones
-            logger.info("\nProcessing features:")
-            for feature in self.feature_names:
-                logger.info(f"Processing feature: {feature}")
-                if feature in summary.index:
-                    mean_val = float(summary.loc[feature, 'mean'])
-                    std_val = float(summary.loc[feature, 'sd'])
+            # Process main features (beta parameters)
+            logger.info("\nProcessing main features:")
+            main_features = [f for f in self.feature_names 
+                            if f not in self.config.features.control_features]
+            for feature in main_features:
+                logger.info(f"Processing main feature: {feature}")
+                param_name = f"beta[{main_features.index(feature) + 1}]"
+                if param_name in summary.index:
+                    mean_val = float(summary.loc[param_name, 'mean'])
+                    std_val = float(summary.loc[param_name, 'sd'])
                     logger.info(f"Found weights - mean: {mean_val}, std: {std_val}")
                     weights[feature] = (mean_val, std_val)
                 else:
-                    logger.warning(f"Feature {feature} not found in model summary. Available columns: {list(summary.columns)}")
-                    
+                    logger.warning(f"Feature {feature} not found in model summary")
+            
+            # Process control features (gamma parameters) if requested
+            if include_control:
+                logger.info("\nProcessing control features:")
+                control_features = self.config.features.control_features
+                for feature in control_features:
+                    logger.info(f"Processing control feature: {feature}")
+                    param_name = f"gamma[{control_features.index(feature) + 1}]"
+                    if param_name in summary.index:
+                        mean_val = float(summary.loc[param_name, 'mean'])
+                        std_val = float(summary.loc[param_name, 'sd'])
+                        logger.info(f"Found weights - mean: {mean_val}, std: {std_val}")
+                        weights[feature] = (mean_val, std_val)
+                    else:
+                        logger.warning(f"Control feature {feature} not found in model summary")
+            
             # Cache the results
             logger.info(f"\nFinal weights dictionary: {weights}")
             self.feature_weights = weights
-            return weights.copy()
+            
+            if include_control:
+                return weights.copy()
+            else:
+                # Filter out control features for return
+                return {k: v for k, v in weights.items() 
+                    if k not in self.config.features.control_features}
             
         except Exception as e:
             logger.error(f"Error extracting feature weights: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise FeatureError(f"Failed to extract feature weights: {str(e)}")
-                                    
+                                            
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------                          
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """
         Select features using round-robin comparison, evaluating each candidate
-        in the context of previously selected features.
-        
-        Args:
-            dataset: Dataset to use for selection
-            all_features: List of all possible features to consider
+        in the context of previously selected features plus control features.
+        Control features are always included but not selected.
         """
-        self.selected_features = []
+        # Initialize with control features - these are always included
+        self.selected_features = list(self.config.features.control_features)
+        
+        # Only consider main features for selection
+        main_features = [f for f in all_features 
+                        if f not in self.config.features.control_features]
         
         while True:
-            remaining_features = [f for f in all_features 
+            remaining_features = [f for f in main_features 
                                 if f not in self.selected_features]
             
             if not remaining_features:
                 break
                 
-            logger.info(f"\nEvaluating {len(remaining_features)} remaining features...")
+            logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
             logger.info(f"Current feature set: {self.selected_features}")
+            logger.info(f"Control features always included: {self.config.features.control_features}")
             
-            # Evaluate all remaining features in context of current feature set
+            # Evaluate all remaining features in context of current set
             feature_metrics = {}
             for feature in remaining_features:
-                # Create candidate feature set with current feature
+                # Create candidate feature set including control features
                 candidate_features = self.selected_features + [feature]
                 
                 # Fit model with candidate feature set
@@ -848,7 +957,7 @@ class PreferenceModel:
                 )
                 feature_metrics[feature] = metrics
             
-            # Compare each feature against all others
+            # Rest of selection process remains the same
             win_counts = {f: 0 for f in remaining_features}
             for f1, f2 in combinations(remaining_features, 2):
                 if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
@@ -856,7 +965,6 @@ class PreferenceModel:
                 else:
                     win_counts[f2] += 1
                     
-            # Select feature with most wins
             best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
             best_metrics = feature_metrics[best_feature]
             
@@ -869,18 +977,16 @@ class PreferenceModel:
                 logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
                 logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
             
-            # Add best feature if it meets minimum criteria
             if (best_metrics['effect_consistency'] > 0.5 or 
                 best_metrics['predictive_power'] > 0.1):
                 self.selected_features.append(best_feature)
-                # Final fit with new feature set
                 self.fit(dataset, self.selected_features)
                 logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
                 
-                # Log current model state
                 logger.info("\nCurrent model state:")
                 weights = self.get_feature_weights()
-                for feat in self.selected_features:
+                for feat in [f for f in self.selected_features 
+                            if f not in self.config.features.control_features]:
                     w, s = weights.get(feat, (0.0, 0.0))
                     logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
             else:
@@ -1022,42 +1128,47 @@ class PreferenceModel:
         Compute values for a single (non-interaction) feature.
         
         Args:
-            feature: Feature name
+            feature: Feature name (e.g., 'typing_time', 'same_finger', etc.)
             dataset: PreferenceDataset containing preferences
             
         Returns:
             np.ndarray of feature differences between bigram pairs
         """
-        values = []
-        
-        # Special handling for typing_time
-        if feature == 'typing_time':
-            # Calculate mean typing time once
-            valid_times = []
-            for pref in dataset.preferences:
-                if pref.typing_time1 is not None:
-                    valid_times.append(pref.typing_time1)
-                if pref.typing_time2 is not None:
-                    valid_times.append(pref.typing_time2)
-            mean_time = np.mean(valid_times) if valid_times else 0.0
+        try:
+            # Initialize array for feature differences
+            feature_diffs = np.zeros(len(dataset.preferences))
             
-            # Use mean time for None values
-            for pref in dataset.preferences:
-                val1 = mean_time if pref.typing_time1 is None else pref.typing_time1
-                val2 = mean_time if pref.typing_time2 is None else pref.typing_time2
-                values.append(val1 - val2)
+            # For each preference, compute feature difference
+            for i, pref in enumerate(dataset.preferences):
+                # Get feature values for both bigrams
+                value1 = pref.features1.get(feature, 0.0)
+                value2 = pref.features2.get(feature, 0.0)
                 
-        # All other features
-        else:
-            for pref in dataset.preferences:
-                val1 = pref.features1.get(feature, 0.0)
-                val2 = pref.features2.get(feature, 0.0)
-                val1 = 0.0 if val1 is None else val1
-                val2 = 0.0 if val2 is None else val2
-                values.append(val1 - val2)
+                # Special handling for typing_time
+                if feature == 'typing_time':
+                    # Use mean time if either value is None
+                    if value1 is None or value2 is None:
+                        valid_times = [t for t in [pref.typing_time1, pref.typing_time2] 
+                                    if t is not None]
+                        mean_time = np.mean(valid_times) if valid_times else 0.0
+                        value1 = mean_time if value1 is None else value1
+                        value2 = mean_time if value2 is None else value2
                 
-        return np.array(values)
-                                                                                                                     
+                # Compute difference
+                feature_diffs[i] = value1 - value2
+                
+            # Debug logging
+            logger.debug(f"Feature {feature} difference stats:")
+            logger.debug(f"  mean: {np.mean(feature_diffs):.4f}")
+            logger.debug(f"  std: {np.std(feature_diffs):.4f}")
+            logger.debug(f"  range: [{np.min(feature_diffs):.4f}, {np.max(feature_diffs):.4f}]")
+            
+            return feature_diffs
+            
+        except Exception as e:
+            logger.error(f"Error computing single feature values for {feature}: {str(e)}")
+            return np.zeros(len(dataset.preferences))
+                                                                                                                            
     def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
         """Generate and save a detailed metrics report."""
         report_df = pd.DataFrame([
@@ -1079,6 +1190,7 @@ class PreferenceModel:
     def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
         """
         Predict preference probability and uncertainty for a bigram pair.
+        Accounts for both main features and control features.
         
         Args:
             bigram1: First bigram to compare
@@ -1105,27 +1217,47 @@ class PreferenceModel:
             if cached_prediction is not None:
                 return cached_prediction
                 
-            # Get comfort scores
+            # Get comfort scores (these now include control features)
             start_time = time.perf_counter()
             score1, unc1 = self.get_bigram_comfort_scores(bigram1)
             score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
-            # Get posterior samples
+            # Separate main and control feature effects
+            main_features = [f for f in self.selected_features 
+                            if f not in self.config.features.control_features]
+            control_features = self.config.features.control_features
+            
+            # Extract all features
+            features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
+            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
+            
+            # Get posterior samples for both main and control effects
             n_samples = self.config.model.n_samples
-            samples = np.random.normal(
-                loc=score1 - score2,
-                scale=np.sqrt(unc1**2 + unc2**2),
-                size=n_samples
-            )
+            
+            # Get main feature effects
+            beta_samples = self.fit_result.stan_variable('beta')
+            main_diffs = np.array([features1[f] - features2[f] for f in main_features])
+            main_effects = np.dot(main_diffs, beta_samples.T)
+            
+            # Get control feature effects
+            if control_features:
+                gamma_samples = self.fit_result.stan_variable('gamma')
+                control_diffs = np.array([features1[f] - features2[f] for f in control_features])
+                control_effects = np.dot(control_diffs, gamma_samples.T)
+                
+                # Combine effects
+                total_effects = main_effects + control_effects
+            else:
+                total_effects = main_effects
             
             # Transform to probabilities
-            probs = 1 / (1 + np.exp(-samples))
+            probs = 1 / (1 + np.exp(-total_effects))
             
             # Create prediction object
             prediction = ModelPrediction(
                 probability=float(np.mean(probs)),
                 uncertainty=float(np.std(probs)),
-                features_used=list(self.selected_features),
+                features_used=list(self.selected_features),  # Includes both main and control features
                 computation_time=time.perf_counter() - start_time
             )
             
@@ -1142,7 +1274,7 @@ class PreferenceModel:
                 features_used=[],
                 computation_time=0.0
             )
-
+        
     def _check_diagnostics(self) -> None:
         """Check MCMC diagnostics with proper type handling."""
         try:

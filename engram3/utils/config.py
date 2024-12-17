@@ -63,6 +63,8 @@ class FeatureConfig:
     engram_position_values: Dict[str, float]
     row_position_values: Dict[str, float]
     angles: Dict[Tuple[str, str], float]
+    bigrams: List[str]  # List of English bigrams ordered by frequency
+    bigram_frequencies_array: np.ndarray  # Array of corresponding frequency values
 
 #------------------------------------------------
 # feature_importance.py
@@ -142,42 +144,40 @@ class FeatureSelectionSettings(BaseModel):
     model_file: str
 
 class FeaturesConfig(BaseModel):
-    """Features configuration."""
+    """Configuration for features and their interactions."""
     base_features: List[str]
-    interactions: List[List[str]] = []
+    control_features: List[str]
+    interactions: List[List[str]]
 
     @validator('interactions')
     def validate_interactions(cls, v: List[List[str]], values: Dict[str, Any]) -> List[List[str]]:
-        """Validate interaction features."""
+        """Validate that interaction features only use base features."""
         if 'base_features' not in values:
             raise ValueError("base_features must be defined before interactions")
         
         base_features = values['base_features']
         for interaction in v:
-            # Check each interaction is a list
-            if not isinstance(interaction, list):
-                raise ValueError(f"Interaction must be a list: {interaction}")
-            
-            # Check interaction has at least 2 features
-            if len(interaction) < 2:
-                raise ValueError(f"Interaction must have at least 2 features: {interaction}")
-            
-            # Check all features exist in base_features
+            if len(interaction) != 2:
+                raise ValueError(f"Each interaction must have exactly 2 features: {interaction}")
             for feature in interaction:
                 if feature not in base_features:
-                    raise ValueError(f"Feature {feature} in interaction not found in base_features")
-        
+                    raise ValueError(f"Interaction feature {feature} not in base_features")
         return v
 
-    def get_all_features(self) -> List[str]:
-        """Get list of all features including interactions."""
-        features = self.base_features.copy()
+    @validator('control_features')
+    def validate_control_features(cls, v: List[str], values: Dict[str, Any]) -> List[str]:
+        """Validate that control features don't overlap with base features."""
+        if 'base_features' not in values:
+            raise ValueError("base_features must be defined before control_features")
         
-        # Interaction features
-        for interaction in self.interactions:
-            features.append('_x_'.join(interaction))
-            
-        return features
+        base_features = values['base_features']
+        overlap = set(v) & set(base_features)
+        if overlap:
+            raise ValueError(f"Control features overlap with base features: {overlap}")
+        return v
+
+    class Config:
+        validate_assignment = True
 
 class DataConfig(BaseModel):
     """Data configuration."""
@@ -239,6 +239,19 @@ class Config(BaseModel):
     recommendations: RecommendationsConfig
     logging: LoggingConfig
     visualization: VisualizationConfig
+
+    @validator('features')
+    def validate_feature_config(cls, v: FeaturesConfig) -> FeaturesConfig:
+        """Additional validation for feature configuration."""
+        # Ensure we have at least one base feature
+        if not v.base_features:
+            raise ValueError("Must specify at least one base feature")
+        
+        # Ensure control features are specified (empty list is ok)
+        if not hasattr(v, 'control_features'):
+            v.control_features = []
+        
+        return v
 
     class Config:
         arbitrary_types_allowed = True

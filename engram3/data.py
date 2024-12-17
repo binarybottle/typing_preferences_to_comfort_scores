@@ -17,6 +17,7 @@ import numpy as np
 from engram3.utils.config import Preference
 from engram3.features.keymaps import *
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
+from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from engram3.utils.logging import LoggingManager
 logger = logging.getLogger(__name__)
     
@@ -52,10 +53,18 @@ class PreferenceDataset:
         self.preferences: List[Preference] = []
         self.participants: Set[str] = set()
         
+        # Store the config
+        self.config = config
+
         # Initialize logging
         if config:
             self.logging_manager = LoggingManager(config)
             logger.info(f"Loading data from {self.file_path}")
+            
+            # Store control features configuration
+            self.control_features = config.features.control_features
+        else:
+            self.control_features = []
         
         # Handle feature extraction setup
         if feature_extractor:
@@ -69,12 +78,28 @@ class PreferenceDataset:
                 self.finger_map = feature_extractor.config.finger_map
                 self.engram_position_values = feature_extractor.config.engram_position_values
                 self.row_position_values = feature_extractor.config.row_position_values
+                self.angles = feature_extractor.config.angles
+                self.bigrams = feature_extractor.config.bigrams
+                self.bigram_frequencies_array = feature_extractor.config.bigram_frequencies_array
         
         # Handle precomputed features
         if precomputed_features:
             self.all_bigrams = precomputed_features['all_bigrams']
             self.all_bigram_features = precomputed_features['all_bigram_features']
             self.feature_names = precomputed_features['feature_names']
+            
+            # Debug before validation
+            logger.debug(f"Precomputed feature names: {self.feature_names}")
+            logger.debug(f"Control features to check: {self.config.features.control_features}")
+            # Sample of bigram features
+            first_bigram = next(iter(self.all_bigram_features))
+            logger.debug(f"Sample features for bigram {first_bigram}: {self.all_bigram_features[first_bigram].keys()}")
+
+            # Validate that control features are present in precomputed features
+            missing_controls = [f for f in self.control_features 
+                              if f not in self.feature_names]
+            if missing_controls:
+                raise ValueError(f"Control features missing from precomputed features: {missing_controls}")
             
             # Don't create new feature extractor if one was already provided
             if not feature_extractor and config:
@@ -83,21 +108,29 @@ class PreferenceDataset:
                     row_map=self.row_map,
                     finger_map=self.finger_map,
                     engram_position_values=self.engram_position_values,
-                    row_position_values=self.row_position_values
+                    row_position_values=self.row_position_values,
+                    angles=self.angles,
+                    bigrams=self.bigrams,
+                    bigram_frequencies_array=self.bigram_frequencies_array
                 )
                 self.feature_extractor = FeatureExtractor(self.feature_config)
         
         # Load and process data
         self._load_csv()
-                
-    def get_feature_names(self) -> List[str]:
-        """Get list of all feature names including interactions."""
-        if hasattr(self, 'feature_names'):
-            return self.feature_names  # This should include interaction features from precompute
-        elif self.preferences:
-            return list(self.preferences[0].features1.keys())
-        return []
 
+    def get_feature_names(self, include_control: bool = True) -> List[str]:
+        """Get list of all feature names, optionally including control features."""
+        if hasattr(self, 'feature_names'):
+            if include_control:
+                return self.feature_names
+            return [f for f in self.feature_names if f not in self.control_features]
+        elif self.preferences:
+            features = list(self.preferences[0].features1.keys())
+            if include_control:
+                return features
+            return [f for f in features if f not in self.control_features]
+        return []
+    
     def split_by_participants(self, test_fraction: float = 0.2) -> Tuple['PreferenceDataset', 'PreferenceDataset']:
         """Split into train/test keeping participants separate."""
         # Randomly select participants for test set

@@ -1,49 +1,72 @@
+// Hierarchical Bayesian model for keyboard layout preferences
+// Includes main features and control features (e.g., bigram frequency)
 data {
-    int<lower=1> N;                     // number of comparisons
-    int<lower=1> P;                     // number of participants
-    int<lower=1> F;                     // number of features
-    matrix[N, F] X1;                    // features for first bigram in each comparison
-    matrix[N, F] X2;                    // features for second bigram in each comparison
-    array[N] int<lower=1> participant;  // participant ID for each comparison
-    array[N] int<lower=0, upper=1> y;   // observed preferences (1 if first bigram preferred)
-    // Hyperparameters
-    real<lower=0> feature_scale;        // prior scale for feature weights
-    real<lower=0> participant_scale;    // prior scale for participant effects
+    int<lower=1> N;                     // Number of preferences
+    int<lower=1> P;                     // Number of participants
+    int<lower=1> F;                     // Number of main features
+    int<lower=0> C;                     // Number of control features
+    matrix[N, F] X1;                    // Main features for first bigram
+    matrix[N, F] X2;                    // Main features for second bigram
+    matrix[N, C] C1;                    // Control features for first bigram
+    matrix[N, C] C2;                    // Control features for second bigram
+    array[N] int<lower=1,upper=P> participant;  // Participant IDs
+    array[N] int<lower=0,upper=1> y;    // Preferences (1 if first bigram preferred)
+    real<lower=0> feature_scale;        // Prior scale for feature weights
+    real<lower=0> participant_scale;     // Prior scale for participant effects
 }
 
 parameters {
-    vector[F] beta;                     // feature weights
-    vector[P] participant_raw;          // participant effects (non-centered)
-    real<lower=0> tau;                  // participant effect scale
+    vector[F] beta;                     // Main feature weights
+    vector[C] gamma;                    // Control feature weights (nuisance parameters)
+    vector[P] z;                        // Participant random effects (standardized)
+    real<lower=0> tau;                  // Random effects scale
 }
 
 transformed parameters {
-    vector[P] participant_effect = participant_raw * tau;  // centered participant effects
-    vector[N] comfort_diff;             // difference in comfort scores
+    vector[P] participant_effects;       // Scaled participant effects
+    vector[N] mu;                       // Linear predictor
+    
+    // Scale participant effects
+    participant_effects = tau * z;
+    
+    // Compute linear predictor
     for (n in 1:N) {
-        real comfort1 = dot_product(X1[n], beta) + participant_effect[participant[n]];
-        real comfort2 = dot_product(X2[n], beta) + participant_effect[participant[n]];
-        comfort_diff[n] = comfort1 - comfort2;
+        // Main features contribution
+        mu[n] = dot_product(X1[n], beta) - dot_product(X2[n], beta);
+        
+        // Add control features contribution (if any)
+        if (C > 0) {
+            mu[n] = mu[n] + dot_product(C1[n], gamma) - dot_product(C2[n], gamma);
+        }
+        
+        // Add participant effect
+        mu[n] = mu[n] + participant_effects[participant[n]];
     }
 }
 
 model {
-    // Priors
-    beta ~ normal(0, feature_scale);            // prior on feature weights
-    participant_raw ~ std_normal();             // non-centered participant effects
-    tau ~ cauchy(0, participant_scale);         // prior on participant effect scale
+    // Priors for main feature weights
+    beta ~ normal(0, feature_scale);
+    
+    // Tighter priors for control features (nuisance parameters)
+    if (C > 0) {
+        gamma ~ normal(0, feature_scale * 0.5);  // Tighter prior for control features
+    }
+    
+    // Priors for participant effects
+    z ~ std_normal();                   // Standardized random effects
+    tau ~ exponential(1/participant_scale);  // Scale of random effects
+    
     // Likelihood
-    y ~ bernoulli_logit(comfort_diff);         // logistic model for preferences
+    y ~ bernoulli_logit(mu);
 }
 
 generated quantities {
-    // Predicted probabilities
-    vector[N] p_pred = inv_logit(comfort_diff);
-    // Log likelihood for model comparison
-    vector[N] log_lik;
+    vector[N] log_lik;                  // Log likelihood for each observation
+    vector[N] y_pred;                   // Predicted probabilities
+    
     for (n in 1:N) {
-        log_lik[n] = bernoulli_logit_lpmf(y[n] | comfort_diff[n]);
+        log_lik[n] = bernoulli_logit_lpmf(y[n] | mu[n]);
+        y_pred[n] = inv_logit(mu[n]);
     }
-    // Comfort score function for new bigrams
-    // (implemented in Python wrapper)
 }

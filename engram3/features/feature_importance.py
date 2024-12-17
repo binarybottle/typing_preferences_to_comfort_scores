@@ -26,6 +26,7 @@ The module centers around the FeatureImportanceCalculator class which:
 """
 import numpy as np
 from typing import Dict, Union
+from pathlib import Path
 
 from engram3.utils.config import (Config, FeatureSelectionConfig)
 from typing import TYPE_CHECKING
@@ -69,34 +70,38 @@ class FeatureImportanceCalculator:
             self.feature_values_cache.clear()
 
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
-        """Calculate all metrics for a feature."""
+        """Calculate all metrics for a feature, accounting for control features."""
         try:
+            if feature in self.config.features.control_features:
+                logger.warning(f"Feature {feature} is a control feature - should not be evaluated")
+                return self._get_default_metrics()
+                
+            # Always include control features in evaluation
+            control_features = self.config.features.control_features
+            
             # Check for discriminative power using differences
             feature_data = model._get_feature_data(feature, dataset)
             if np.std(feature_data['differences']) == 0:
-                logger.warning(f"Feature {feature} shows no discrimination between preferences - skipping evaluation")
-                return {
-                    'model_effect': 0.0,
-                    'effect_consistency': 0.0,
-                    'predictive_power': 0.0
-                }
+                logger.warning(f"Feature {feature} shows no discrimination between preferences")
+                return self._get_default_metrics()
 
             logger.debug(f"\nEvaluating feature: {feature}")
             metrics = {}
             
+            # Create temporary model with control features plus this feature
+            temp_model = type(model)(config=model.config)
+            temp_model.feature_extractor = model.feature_extractor
+            features_to_test = list(control_features) + [feature]
+            
             # Model Effect (normalized by max observed effect)
             try:
-                # Create temporary model to evaluate this feature alone
-                temp_model = type(model)(config=model.config)
-                temp_model.feature_extractor = model.feature_extractor
-                temp_model.fit(dataset, [feature])
-                
+                temp_model.fit(dataset, features_to_test)
                 weights = temp_model.get_feature_weights()
                 effect = abs(weights.get(feature, (0.0, 0.0))[0])
                 metrics['model_effect'] = effect
                 logger.debug(f"Model effect: {effect:.4f}")
             except Exception as e:
-                logger.error(f"Error calculating model effect for {feature}: {str(e)}")
+                logger.error(f"Error calculating model effect: {str(e)}")
                 metrics['model_effect'] = 0.0
 
             # Effect Consistency
@@ -118,7 +123,7 @@ class FeatureImportanceCalculator:
                 metrics['predictive_power'] = 0.0
 
             return metrics
-
+            
         except Exception as e:
             logger.error(f"Error evaluating feature {feature}: {str(e)}")
             return self._get_default_metrics()
