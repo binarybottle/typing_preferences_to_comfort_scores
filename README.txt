@@ -184,13 +184,14 @@ Gives us bounded differences that are comparable across participants
 Is less sensitive to outliers than raw time differences
 
 ## Feature selection process
-Start with no selected features.
-For all remaining unselected features:
-  1. Calculate their combined scores
-  2. Calculate an adaptive threshold as: mean + 0.1*std of all feature scores, clipped to be between 25th and 75th percentiles
-  3. Select the feature with highest combined score that exceeds this threshold
-  4. If no features pass threshold, stop
-  5. Otherwise, add best feature to selected set, refit model with updated feature set, and repeat
+Start with empty feature set
+For each remaining feature:
+  1. Try adding it to current feature set
+  2. Fit full model with candidate feature set
+  3. Evaluate feature's contribution in this context
+  4. Select best feature that meets minimum criteria
+  5. Update model with new feature set
+  6. Repeat until no remaining features are helpful
 
 ## Feature selection output
   - feature_name: Name of the feature or interaction feature being evaluated

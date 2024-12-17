@@ -436,60 +436,79 @@ class PreferenceModel:
         }
 
     def select_features(self, dataset: PreferenceDataset) -> List[str]:
-        """Select features using importance scores derived from combined metrics."""
-        logger.info("Starting feature selection...")
-        self.selected_features = []  # Start empty
-        base_features = self.config.features.base_features
-        all_features = self.config.features.get_all_features()
+        """
+        Select features using round-robin comparison, evaluating each candidate
+        in the context of previously selected features.
+        """
+        self.selected_features = []
         
-        # Initial model fit with base features to get started
-        self.fit(dataset, base_features)
-        
-        while True:  # Keep selecting features until none pass threshold
-            # Evaluate remaining features
-            feature_metrics = {}
-            remaining_features = [f for f in all_features if f not in self.selected_features]
+        while True:
+            remaining_features = [f for f in all_features 
+                                if f not in self.selected_features]
             
             if not remaining_features:
-                logger.info("No more features to evaluate")
                 break
                 
-            logger.info(f"\nEvaluating {len(remaining_features)} remaining features")
+            logger.info(f"\nEvaluating {len(remaining_features)} remaining features...")
+            logger.info(f"Current feature set: {self.selected_features}")
             
+            # Evaluate all remaining features in context of current feature set
+            feature_metrics = {}
             for feature in remaining_features:
+                # Create candidate feature set with current feature
+                candidate_features = self.selected_features + [feature]
+                
+                # Fit model with candidate feature set
+                self.fit(dataset, candidate_features)
+                
+                # Evaluate this feature in context of current set
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
                     model=self
                 )
-                combined_score = metrics.get('combined_score', 0.0)
-                logger.info(f"Feature {feature}: combined score = {combined_score:.3f}")
                 feature_metrics[feature] = metrics
-                                        
-            # Get scores and threshold
-            scores = [m.get('combined_score', 0.0) for m in feature_metrics.values()]
-            threshold = self._calculate_adaptive_threshold(scores)
-            
-            # Select best feature that passes criteria
-            passing_features = [
-                (f, m.get('combined_score', 0.0)) 
-                for f, m in feature_metrics.items()
-                if m.get('combined_score', 0.0) >= threshold
-            ]
-            
-            if not passing_features:
-                logger.info("No features passed threshold - stopping selection")
-                break
                 
-            best_feature, best_score = max(passing_features, key=lambda x: x[1])
-            logger.info(f"Selected feature: {best_feature} (score: {best_score:.3f})")
-            self.selected_features.append(best_feature)
+            # Compare each feature against all others
+            win_counts = {f: 0 for f in remaining_features}
+            for f1, f2 in itertools.combinations(remaining_features, 2):
+                if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
+                    win_counts[f1] += 1
+                else:
+                    win_counts[f2] += 1
+                    
+            # Select feature with most wins
+            best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
+            best_metrics = feature_metrics[best_feature]
             
-            # Refit model with updated feature set
-            self.fit(dataset, self.selected_features)
+            logger.info(f"\nFeature comparison results:")
+            for feature, wins in win_counts.items():
+                metrics = feature_metrics[feature]
+                logger.info(f"\n{feature}:")
+                logger.info(f"  Wins: {wins}")
+                logger.info(f"  Effect: {metrics['model_effect']:.3f}")
+                logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
+                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
             
+            # Add best feature if it meets minimum criteria
+            if (best_metrics['effect_consistency'] > 0.5 or 
+                best_metrics['predictive_power'] > 0.1):
+                self.selected_features.append(best_feature)
+                # Final fit with new feature set
+                self.fit(dataset, self.selected_features)
+                logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
+                
+                # Log current model state
+                logger.info("\nCurrent model state:")
+                weights = self.get_feature_weights()
+                for feat in self.selected_features:
+                    w, s = weights.get(feat, (0.0, 0.0))
+                    logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
+            else:
+                break
+        
         return self.selected_features
-              
+            
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
@@ -926,32 +945,6 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error checking transitivity: {str(e)}")
             return 0.0
-
-    def _calculate_adaptive_threshold(self, combined_scores: List[float]) -> float:
-        """Calculate adaptive threshold for feature selection."""
-        try:
-            scores = np.array(combined_scores)
-            if len(scores) == 0:
-                return 0.0
-                
-            scores = scores[~np.isnan(scores)]
-            
-            # Use mean plus fraction of standard deviation
-            mean = np.mean(scores)
-            std = np.std(scores)
-            threshold = mean + 0.1 * std  # Adjust 0.1 factor as needed
-            
-            # Ensure threshold is reasonable
-            min_threshold = np.percentile(scores, 25)
-            max_threshold = np.percentile(scores, 75)
-            threshold = np.clip(threshold, min_threshold, max_threshold)
-            
-            logger.info(f"Adaptive threshold: {threshold:.3f} (mean: {mean:.3f}, std: {std:.3f})")
-            return float(threshold)
-            
-        except Exception as e:
-            logger.error(f"Error calculating threshold: {str(e)}")
-            return 0.1  # Default threshold
                 
     def _compute_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
         """

@@ -149,8 +149,8 @@ class FeatureExtractor:
         c2 = self.config.column_map.get(char2)
         if c1 is None or c2 is None:
             return 0.0
-        metrics = self.config.angles
-        return metrics.get((char1, char2), 0.0)  # Use tuple key directly
+        angles = self.config.angles
+        return angles.get((char1, char2), 0.0)  # Use tuple key directly
 
     def _calc_outward_roll(self, char1: str, char2: str) -> float:
         """Calculate if bigram involves outward rolling motion"""

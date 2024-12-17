@@ -152,8 +152,7 @@ class FeatureImportanceCalculator:
             predictive = metrics.get('predictive_power', 0.0)
             
             # Normalize effect size
-            max_effect = 1.0  # Adjust based on your data
-            normalized_effect = min(abs(effect) / max_effect, 1.0)
+            normalized_effect = min(abs(effect), 1.0)
             
             # Calculate weighted score
             weights = {
@@ -220,12 +219,14 @@ class FeatureImportanceCalculator:
             return 0.0
                         
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset) -> float:
-        """Calculate consistency of feature effect across cross-validation splits."""
+        """
+        Calculate consistency of feature effect across cross-validation splits.
+        Returns a value between 0 (inconsistent) and 1 (consistent).
+        """
         try:
-            n_splits = 5  # Could move to config if needed
+            n_splits = 5
             effects = []
             
-            # Use model's CV splitting method
             for train_idx, val_idx in self.model._get_cv_splits(dataset, n_splits):
                 train_data = dataset._create_subset_dataset(train_idx)
                 self.model.fit(train_data, [feature])
@@ -236,13 +237,25 @@ class FeatureImportanceCalculator:
             if not effects:
                 return 0.0
                 
-            # Calculate consistency as 1 - coefficient of variation
-            return 1.0 - (np.std(effects) / (abs(np.mean(effects)) + 1e-10))
+            effects = np.array(effects)
+            
+            # Calculate consistency using absolute values
+            mean_abs_effect = np.mean(np.abs(effects))
+            if mean_abs_effect == 0:
+                return 0.0
+                
+            # Use mean absolute deviation instead of std
+            mad = np.mean(np.abs(effects - np.mean(effects)))
+            
+            # Normalize to [0,1] range
+            consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+            
+            return float(consistency)
             
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-
+        
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {
