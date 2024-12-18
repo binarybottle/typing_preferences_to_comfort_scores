@@ -44,15 +44,10 @@ class FeatureExtractor:
         """
         all_bigrams = []
         bigram_features = {}
-        
-        # Debug log the configuration
-        logger.debug(f"Precomputing features with config attributes: {vars(self.config)}")
-        
+                
         # Process first bigram with detailed logging
         first_chars = (layout_chars[0], layout_chars[0])
-        logger.debug(f"Computing features for first bigram {first_chars}")
         first_features = self.extract_bigram_features(*first_chars)
-        logger.debug(f"Features computed for first bigram: {list(first_features.keys())}")
         
         for char1 in layout_chars:
             for char2 in layout_chars:

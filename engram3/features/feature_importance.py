@@ -28,7 +28,7 @@ import numpy as np
 from typing import Dict, Union
 from pathlib import Path
 
-from engram3.utils.config import (Config, FeatureSelectionConfig)
+from engram3.utils.config import Config, FeatureSelectionConfig
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from engram3.model import PreferenceModel
@@ -39,15 +39,19 @@ logger = LoggingManager.getLogger(__name__)
 
 class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
+    
     def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):
+        logger.debug("Initializing FeatureImportanceCalculator")
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
             self.features = config.get('features', {})
         else:
             feature_selection_config = config.feature_selection.dict()
-            self.features = config.features.dict()
-            
+            self.features = config.features
+        
+        logger.debug(f"Features from config: {self.features}")
         self.config = FeatureSelectionConfig(**feature_selection_config)
+        logger.debug(f"Feature selection config: {self.config}")
         
         # Store model reference
         self.model = model
@@ -72,14 +76,25 @@ class FeatureImportanceCalculator:
             self.feature_values_cache.clear()
 
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
-        """Calculate all metrics for a feature, accounting for control features."""
+        """Calculate all metrics for a feature."""
         try:
-            if feature in self.config.features.control_features:
-                logger.warning(f"Feature {feature} is a control feature - should not be evaluated")
-                return self._get_default_metrics()
+            # Debug the features structure
+            logger.debug(f"Feature being evaluated: {feature}")
+            logger.debug(f"self.features type: {type(self.features)}")
+            if hasattr(self.features, 'dict'):
+                logger.debug(f"self.features as dict: {self.features.dict()}")
+            else:
+                logger.debug(f"self.features content: {self.features}")
                 
-            # Always include control features in evaluation
-            control_features = self.config.features.control_features
+            # Get control features safely
+            if hasattr(self.features, 'control_features'):
+                control_features = self.features.control_features
+            elif isinstance(self.features, dict):
+                control_features = self.features.get('control_features', [])
+            else:
+                control_features = []
+                
+            logger.debug(f"Control features: {control_features}")
             
             # Check for discriminative power using differences
             feature_data = model._get_feature_data(feature, dataset)
