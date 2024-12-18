@@ -249,8 +249,8 @@ def main():
             model.save(model_save_path)
             
             # Get final weights and metrics
-            feature_weights = model.get_feature_weights()
-            
+            feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
+
             # Create comprehensive results DataFrame
             results = []
             for feature_name in all_features:
@@ -261,7 +261,7 @@ def main():
                     model=model
                 )
                 
-                weight, std = feature_weights.get(feature_name, (0.0, 0.0))
+                weight, std = feature_weights.get(feature_name, (0.0, 0.0))  # Use .get() with default
                 components = feature_name.split('_x_')
                 
                 results.append({
@@ -285,10 +285,12 @@ def main():
             logger.info(f"Base features: {len(base_features)}")
             logger.info(f"Interaction features: {len(interaction_features)}")
             logger.info(f"Features selected: {len(selected_features)}")
-            
+
             logger.info("\nSelected features:")
+            # Change this part
+            feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
             for feature in selected_features:
-                weight, std = feature_weights[feature]
+                weight, std = feature_weights.get(feature, (0.0, 0.0))  # Use .get() with default
                 metrics = model.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=train_data,
@@ -299,7 +301,7 @@ def main():
                 logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
                 logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
                 logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
-                                
+
         #---------------------------------
         # Visualize feature space
         #---------------------------------
@@ -374,6 +376,13 @@ def main():
                 available_plots.append('feature_space_pca.png')
                 
                 # 2. Feature Impacts Plot from metrics
+                metrics_df = pd.read_csv(metrics_file)
+                # Get all features including control features
+                sorted_metrics = pd.concat([
+                    metrics_df[~metrics_df['feature_name'].isin(control_features)],
+                    metrics_df[metrics_df['feature_name'].isin(control_features)]
+                ]).sort_values('weight', key=abs, ascending=False)
+
                 fig_impacts = plt.figure(figsize=(12, 6))
                 ax = fig_impacts.add_subplot(111)
 
@@ -475,15 +484,15 @@ def main():
         #---------------------------------
         elif args.mode == 'recommend_bigram_pairs':
             logger.info("Starting recommendation of bigram pairs...")
-
             # Load feature selection trained model
             logger.info("Loading feature selection trained model...")
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
-
-            # Initialize recommender
+            
+            # Initialize recommender with include_control=True
             logger.info("Generating bigram pair recommendations...")
             recommender = BigramRecommender(dataset, feature_selection_model, config)
+            logger.debug(f"Using features (including control): {feature_selection_model.get_feature_weights(include_control=True).keys()}")
             recommended_pairs = recommender.get_recommended_pairs()
             
             # Visualize recommendations
@@ -506,16 +515,16 @@ def main():
         #---------------------------------
         elif args.mode == 'train_model':
             logger.info("Starting model training...")
-
             # Load train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             
-            # Load selected features
+            # Load selected features including control features
             feature_metrics_file = Path(config.feature_selection.metrics_file)
             if not feature_metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
             feature_metrics_df = pd.read_csv(feature_metrics_file)
-            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
+            selected_features = (feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist() + 
+                                list(config.features.control_features))  # Add control features
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
             
@@ -523,12 +532,12 @@ def main():
             logger.info(f"Training model on training data using {len(selected_features)} selected features...")
             model = PreferenceModel(config=config)
             model.fit(train_data, features=selected_features)
-
+            
             # Save the trained model
             model_save_path = Path(config.model.model_file)
             feature_selection_model.save(model_save_path)
-
-            # Evaluate on test data
+            
+            # Evaluate on test data (model.evaluate will use all features including control)
             logger.info("Evaluating model on test data...")
             test_metrics = model.evaluate(test_data)
             
@@ -547,7 +556,9 @@ def main():
             if not feature_metrics_file.exists():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
             feature_metrics_df = pd.read_csv(feature_metrics_file)
-            selected_features = feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist()      
+            # Change to handle control features
+            selected_features = (feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist() + 
+                                list(config.features.control_features))  # Add control features
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
 
