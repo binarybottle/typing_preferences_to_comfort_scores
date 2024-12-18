@@ -115,10 +115,8 @@ class PreferenceModel:
         self.dataset = None
         self.feature_weights = None
         self.feature_extractor = None
-                
-        # Initialize separate caches for main and control features
-        self.main_feature_cache = CacheManager()
-        self.control_feature_cache = CacheManager()
+        # Initialize caches
+        self.feature_cache = CacheManager()  # Single feature cache
         self.prediction_cache = CacheManager()
         
         try:
@@ -179,7 +177,6 @@ class PreferenceModel:
         """Clear all caches to free memory."""
         self.feature_cache.clear()
         self.prediction_cache.clear()
-        self.feature_values_cache.clear()
 
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
         try:
@@ -240,6 +237,7 @@ class PreferenceModel:
         """Update feature weights from fitted model for both main and control features."""
         try:
             self.feature_weights = {}
+            self.selected_features = []  # Reset selected features
             
             if hasattr(self, 'fit'):  # Stan backend
                 # Get main feature weights (beta)
@@ -251,6 +249,7 @@ class PreferenceModel:
                         float(np.mean(beta[:, i])),
                         float(np.std(beta[:, i]))
                     )
+                    self.selected_features.append(feature)  # Add main features
                 
                 # Get control feature weights (gamma)
                 if self.config.features.control_features:
@@ -260,6 +259,7 @@ class PreferenceModel:
                             float(np.mean(gamma[:, i])),
                             float(np.std(gamma[:, i]))
                         )
+                        self.selected_features.append(feature)  # Add control features
                 
                 logger.debug("Updated weights:")
                 for feature, (mean, std) in self.feature_weights.items():
@@ -276,6 +276,7 @@ class PreferenceModel:
                         float(np.mean(weights)),
                         float(np.std(weights))
                     )
+                    self.selected_features.append(feature)  # Add main features
                 
                 if self.config.features.control_features:
                     for i, feature in enumerate(self.config.features.control_features):
@@ -284,11 +285,12 @@ class PreferenceModel:
                             float(np.mean(weights)),
                             float(np.std(weights))
                         )
+                        self.selected_features.append(feature)  # Add control features
                         
         except Exception as e:
             logger.error(f"Error updating feature weights: {str(e)}")
             logger.error("Traceback:", exc_info=True)
-                                    
+                                                
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         try:
@@ -1232,23 +1234,45 @@ class PreferenceModel:
             main_features = [f for f in self.selected_features 
                             if f not in self.config.features.control_features]
             control_features = self.config.features.control_features
-            
-            # Extract all features
+
+            # Extract base features
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
             features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
             
+            # Add interaction features
+            for f1, f2 in self.config.features.interactions:
+
+                # Validate base features exist
+                if f1 not in features1 or f2 not in features1:
+                    logger.warning(f"Missing base features for interaction: {f1}, {f2}")
+                    continue
+
+                # Check both possible orderings of the interaction
+                interaction_name1 = f"{f1}_x_{f2}"
+                interaction_name2 = f"{f2}_x_{f1}"
+                
+                if interaction_name1 in self.selected_features:
+                    features1[interaction_name1] = features1[f1] * features1[f2]
+                    features2[interaction_name1] = features2[f1] * features2[f2]
+                elif interaction_name2 in self.selected_features:
+                    features1[interaction_name2] = features1[f1] * features1[f2]
+                    features2[interaction_name2] = features2[f1] * features2[f2]
+
+            logger.debug(f"Available features in bigram1: {list(features1.keys())}")
+            logger.debug(f"Available features in bigram2: {list(features2.keys())}")
+
             # Get posterior samples for both main and control effects
             n_samples = self.config.model.n_samples
             
             # Get main feature effects
             beta_samples = self.fit_result.stan_variable('beta')
-            main_diffs = np.array([features1[f] - features2[f] for f in main_features])
-            main_effects = np.dot(main_diffs, beta_samples.T)
+            main_diffs = np.array([features1[f] - features2[f] for f in main_features]).reshape(1, -1)  # Add batch dimension
+            main_effects = np.dot(main_diffs, beta_samples.T)  # Now shapes will align correctly
             
             # Get control feature effects
             if control_features:
                 gamma_samples = self.fit_result.stan_variable('gamma')
-                control_diffs = np.array([features1[f] - features2[f] for f in control_features])
+                control_diffs = np.array([features1[f] - features2[f] for f in control_features]).reshape(1, -1)
                 control_effects = np.dot(control_diffs, gamma_samples.T)
                 
                 # Combine effects

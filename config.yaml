@@ -33,7 +33,6 @@ feature_selection:
 
 features:
   base_features:                      # Core features for analysis
-    - typing_time                     # Time taken to type bigram
     - same_finger                     # Whether bigram uses same finger
     - sum_finger_values
   interactions:
@@ -67,7 +66,7 @@ __model_slow: &slow
 __model_fast: &fast  
   warmup: 100                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 200                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 8                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  max_treedepth: 4                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 model:                                  # Bayesian model parameters (Stan)
   #<<: *slow                             # Change to *fast for fast settings
