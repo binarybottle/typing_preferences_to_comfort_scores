@@ -27,6 +27,7 @@ The module centers around the FeatureImportanceCalculator class which:
 import numpy as np
 from typing import Dict, Union
 from pathlib import Path
+from collections import defaultdict
 
 from engram3.utils.config import Config, FeatureSelectionConfig
 from typing import TYPE_CHECKING
@@ -74,97 +75,54 @@ class FeatureImportanceCalculator:
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
-
+                                                            
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
         """Calculate all metrics for a feature."""
         try:
-            # Debug the features structure
             logger.debug(f"Feature being evaluated: {feature}")
-            logger.debug(f"self.features type: {type(self.features)}")
-            if hasattr(self.features, 'dict'):
-                logger.debug(f"self.features as dict: {self.features.dict()}")
-            else:
-                logger.debug(f"self.features content: {self.features}")
-                
-            # Get control features safely
-            if hasattr(self.features, 'control_features'):
-                control_features = self.features.control_features
-            elif isinstance(self.features, dict):
-                control_features = self.features.get('control_features', [])
-            else:
-                control_features = []
-                
-            logger.debug(f"Control features: {control_features}")
             
-            # Check for discriminative power using differences
-            feature_data = model._get_feature_data(feature, dataset)
-            if np.std(feature_data['differences']) == 0:
-                logger.warning(f"Feature {feature} shows no discrimination between preferences")
-                return self._get_default_metrics()
-
-            logger.debug(f"\nEvaluating feature: {feature}")
-            metrics = {}
-            
-            # Create temporary model with control features plus this feature
-            temp_model = type(model)(config=model.config)
-            temp_model.feature_extractor = model.feature_extractor
-            features_to_test = list(control_features) + [feature]
-            
-            # Model Effect (normalized by max observed effect)
-            try:
-                temp_model.fit(dataset, features_to_test)
-                weights = temp_model.get_feature_weights()
-                effect = abs(weights.get(feature, (0.0, 0.0))[0])
-                metrics['model_effect'] = effect
-                logger.debug(f"Model effect: {effect:.4f}")
-            except Exception as e:
-                logger.error(f"Error calculating model effect: {str(e)}")
-                metrics['model_effect'] = 0.0
-
-            # Effect Consistency
-            try:
-                consistency = self._calculate_effect_consistency(feature, dataset)
-                metrics['effect_consistency'] = consistency
-                logger.debug(f"Effect consistency: {consistency:.4f}")
-            except Exception as e:
-                logger.error(f"Error calculating effect consistency for {feature}: {str(e)}")
-                metrics['effect_consistency'] = 0.0
-
-            # Predictive Power
-            try:
-                pred_power = self._calculate_predictive_power(feature, dataset, model)
-                metrics['predictive_power'] = pred_power
-                logger.debug(f"Predictive power: {pred_power:.4f}")
-            except Exception as e:
-                logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
-                metrics['predictive_power'] = 0.0
-
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error evaluating feature {feature}: {str(e)}")
-            return self._get_default_metrics()
-                                                        
-    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
-        """Calculate how much a feature improves model predictions over random chance."""
-        try:
-            logger.info(f"\nCalculating predictive power for feature: {feature}")
-            
-            # Create new model instance for this feature
+            # Create new model instance here, before the try block
             model_single = type(model)(config=model.config)
             model_single.feature_extractor = model.feature_extractor
             
+            # If it's a control feature, return special metrics
+            if feature in model.config.features.control_features:
+                weights = model.get_feature_weights(include_control=True)
+                if feature in weights:
+                    return {
+                        'model_effect': 0.0,
+                        'effect_consistency': 0.0,
+                        'predictive_power': 0.0,
+                        'weight': weights[feature][0],
+                        'weight_std': weights[feature][1]
+                    }
+                return self._get_default_metrics()
+            
+            # For non-control features, determine features to test
+            features_to_test = [feature]  # Start with base feature
+            
+            # Add interactions if any
+            for f1, f2 in model.config.features.interactions:
+                if feature in (f1, f2):
+                    interaction_name = f"{f1}_x_{f2}"
+                    if interaction_name in model.selected_features:
+                        features_to_test.append(interaction_name)
+                    else:
+                        alt_name = f"{f2}_x_{f1}"
+                        if alt_name in model.selected_features:
+                            features_to_test.append(alt_name)
+
             try:
-                logger.info("Fitting single feature model...")
-                # Fit and evaluate with single feature
-                model_single.fit(dataset, [feature])
-                
-                logger.info("Evaluating single feature model...")
+                logger.info("Fitting model with features: %s", features_to_test)
+                # Fit and evaluate with feature(s)
+                model_single.fit(dataset, features_to_test)
+
+                logger.info("Evaluating model...")
                 metrics_single = model_single.evaluate(dataset)
-                logger.info(f"Single feature evaluation metrics: {metrics_single}")
+                logger.info(f"Evaluation metrics: {metrics_single}")
                 
                 acc_single = metrics_single.get('accuracy', 0.5)
-                logger.info(f"Single feature accuracy: {acc_single:.4f}")
+                logger.info(f"Model accuracy: {acc_single:.4f}")
                 
                 # Calculate improvement over random chance (0.5)
                 improvement = acc_single - 0.5
@@ -174,10 +132,12 @@ class FeatureImportanceCalculator:
                 normalized_improvement = np.clip(improvement / 0.5, 0, 1)
                 logger.info(f"Normalized improvement: {normalized_improvement:.4f}")
                 
-                if normalized_improvement == 0.0:
-                    logger.warning(f"Got zero improvement for feature {feature}. Check if model evaluation succeeded.")
-                
-                return float(normalized_improvement)
+                # Return metrics dictionary instead of just the normalized improvement
+                return {
+                    'model_effect': abs(normalized_improvement),
+                    'effect_consistency': normalized_improvement,
+                    'predictive_power': normalized_improvement
+                }
                 
             finally:
                 # Clean up
@@ -188,9 +148,10 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
             logger.error("Traceback:", exc_info=True)
-            return 0.0
-                        
-    def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset) -> float:
+            return self._get_default_metrics()  # Return metrics dictionary instead of float
+            
+    def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
+                                    include_interactions: bool = False) -> float:
         """
         Calculate consistency of feature effect across cross-validation splits.
         Returns a value between 0 (inconsistent) and 1 (consistent).
@@ -198,36 +159,74 @@ class FeatureImportanceCalculator:
         try:
             n_splits = 5
             effects = []
+            interaction_effects = defaultdict(list)
             
             for train_idx, val_idx in self.model._get_cv_splits(dataset, n_splits):
                 train_data = dataset._create_subset_dataset(train_idx)
-                self.model.fit(train_data, [feature])
+                
+                features_to_test = []
+                
+                # Handle control features as main features for testing
+                if feature in self.model.config.features.control_features:
+                    features_to_test.append(feature)
+                else:
+                    features_to_test.append(feature)
+                    if include_interactions:
+                        for f1, f2 in self.model.config.features.interactions:
+                            if feature in (f1, f2):
+                                interaction_name = f"{f1}_x_{f2}"
+                                if interaction_name in self.model.selected_features:
+                                    features_to_test.append(interaction_name)
+                                else:
+                                    alt_name = f"{f2}_x_{f1}"
+                                    if alt_name in self.model.selected_features:
+                                        features_to_test.append(alt_name)
+                                                        
+                self.model.fit(train_data, features_to_test)
                 weights = self.model.get_feature_weights()
+                
+                # Get base feature effect
                 if feature in weights:
                     effects.append(weights[feature][0])
-                    
-            if not effects:
-                return 0.0
                 
+                # Get interaction effects
+                if include_interactions:
+                    for f in features_to_test:
+                        if '_x_' in f and feature in f:
+                            interaction_effects[f].append(weights.get(f, (0.0, 0.0))[0])
+            
+            if not effects and not interaction_effects:
+                return 0.0
+            
+            # Calculate consistency for base feature
             effects = np.array(effects)
+            base_consistency = 0.0
+            if len(effects) > 0:
+                mean_abs_effect = np.mean(np.abs(effects))
+                if mean_abs_effect > 0:
+                    mad = np.mean(np.abs(effects - np.mean(effects)))
+                    base_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
             
-            # Calculate consistency using absolute values
-            mean_abs_effect = np.mean(np.abs(effects))
-            if mean_abs_effect == 0:
-                return 0.0
-                
-            # Use mean absolute deviation instead of std
-            mad = np.mean(np.abs(effects - np.mean(effects)))
+            # Calculate consistency for interactions
+            interaction_consistencies = []
+            for effects in interaction_effects.values():
+                if effects:
+                    effects = np.array(effects)
+                    mean_abs_effect = np.mean(np.abs(effects))
+                    if mean_abs_effect > 0:
+                        mad = np.mean(np.abs(effects - np.mean(effects)))
+                        consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+                        interaction_consistencies.append(consistency)
             
-            # Normalize to [0,1] range
-            consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
-            
-            return float(consistency)
+            # Combine base and interaction consistencies
+            if interaction_consistencies:
+                return float(np.mean([base_consistency] + interaction_consistencies))
+            return float(base_consistency)
             
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-        
+                    
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {

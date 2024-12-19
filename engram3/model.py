@@ -587,7 +587,12 @@ class PreferenceModel:
             # Get feature names and separate control features
             self.feature_names = features if features is not None else dataset.get_feature_names()
             control_features = self.config.features.control_features
+            
+            # Main features are those not in control_features
             main_features = [f for f in self.feature_names if f not in control_features]
+            
+            if not main_features:
+                raise ValueError("No main features provided for model fitting")
             
             logger.info(f"Preparing data:")
             logger.info(f"  Main features ({len(main_features)}): {main_features}")
@@ -1230,15 +1235,17 @@ class PreferenceModel:
             score1, unc1 = self.get_bigram_comfort_scores(bigram1)
             score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
-            # Separate main and control feature effects
+           # Separate main and control feature effects
             main_features = [f for f in self.selected_features 
                             if f not in self.config.features.control_features]
             control_features = self.config.features.control_features
 
+            if not main_features:
+                raise ValueError("No main features available for prediction")
+
             # Extract base features
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
-            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
-            
+            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])            
             # Add interaction features
             for f1, f2 in self.config.features.interactions:
 
