@@ -956,7 +956,9 @@ class PreferenceModel:
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
-                    model=self
+                    model=self,
+                    all_features=all_features,
+                    current_selected_features=self.selected_features
                 )
                 feature_metrics[feature] = metrics
             

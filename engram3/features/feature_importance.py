@@ -25,7 +25,7 @@ The module centers around the FeatureImportanceCalculator class which:
   - Provides robust error handling
 """
 import numpy as np
-from typing import Dict, Union
+from typing import Dict, List, Union
 from pathlib import Path
 from collections import defaultdict
 
@@ -76,80 +76,66 @@ class FeatureImportanceCalculator:
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
                                                             
-    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel') -> Dict[str, float]:
-        """Calculate all metrics for a feature."""
+    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel', 
+                        all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
+        """Calculate globally-normalized metrics that work for both selection and analysis."""
         try:
-            logger.debug(f"Feature being evaluated: {feature}")
-            
-            # Create new model instance here, before the try block
+            # Fit model with current feature set + candidate
+            test_features = current_selected_features + [feature]
             model_single = type(model)(config=model.config)
-            model_single.feature_extractor = model.feature_extractor
+            model_single.fit(dataset, test_features)
             
-            # If it's a control feature, return special metrics
-            if feature in model.config.features.control_features:
-                weights = model.get_feature_weights(include_control=True)
-                if feature in weights:
-                    return {
-                        'model_effect': 0.0,
-                        'effect_consistency': 0.0,
-                        'predictive_power': 0.0,
-                        'weight': weights[feature][0],
-                        'weight_std': weights[feature][1]
-                    }
-                return self._get_default_metrics()
-            
-            # For non-control features, determine features to test
-            features_to_test = [feature]  # Start with base feature
-            
-            # Add interactions if any
-            for f1, f2 in model.config.features.interactions:
-                if feature in (f1, f2):
-                    interaction_name = f"{f1}_x_{f2}"
-                    if interaction_name in model.selected_features:
-                        features_to_test.append(interaction_name)
-                    else:
+            # Get weights for normalization scale across ALL features
+            all_effects = []
+            for f in all_features:
+                # Get raw weight magnitude for feature AND any interactions it's part of
+                f_weight = abs(model_single.get_feature_weights().get(f, (0.0, 0.0))[0])
+                all_effects.append(f_weight)
+                # Add interaction weights if any
+                for f1, f2 in model.config.features.interactions:
+                    if f in (f1, f2):
+                        int_name = f"{f1}_x_{f2}"
                         alt_name = f"{f2}_x_{f1}"
-                        if alt_name in model.selected_features:
-                            features_to_test.append(alt_name)
+                        if int_name in all_features:
+                            int_weight = abs(model_single.get_feature_weights().get(int_name, (0.0, 0.0))[0])
+                            all_effects.append(int_weight)
+                        elif alt_name in all_features:
+                            int_weight = abs(model_single.get_feature_weights().get(alt_name, (0.0, 0.0))[0])
+                            all_effects.append(int_weight)
 
-            try:
-                logger.info("Fitting model with features: %s", features_to_test)
-                # Fit and evaluate with feature(s)
-                model_single.fit(dataset, features_to_test)
-
-                logger.info("Evaluating model...")
-                metrics_single = model_single.evaluate(dataset)
-                logger.info(f"Evaluation metrics: {metrics_single}")
-                
-                acc_single = metrics_single.get('accuracy', 0.5)
-                logger.info(f"Model accuracy: {acc_single:.4f}")
-                
-                # Calculate improvement over random chance (0.5)
-                improvement = acc_single - 0.5
-                logger.info(f"Raw improvement over random: {improvement:.4f}")
-                
-                # Normalize improvement to [0,1] range
-                normalized_improvement = np.clip(improvement / 0.5, 0, 1)
-                logger.info(f"Normalized improvement: {normalized_improvement:.4f}")
-                
-                # Return metrics dictionary instead of just the normalized improvement
-                return {
-                    'model_effect': abs(normalized_improvement),
-                    'effect_consistency': normalized_improvement,
-                    'predictive_power': normalized_improvement
-                }
-                
-            finally:
-                # Clean up
-                if hasattr(model_single, 'fit_result'):
-                    del model_single.fit_result
-                del model_single
-                
-        except Exception as e:
-            logger.error(f"Error calculating predictive power for {feature}: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            return self._get_default_metrics()  # Return metrics dictionary instead of float
+            # Normalize model effect against global maximum
+            raw_effect = abs(model_single.get_feature_weights().get(feature, (0.0, 0.0))[0])
+            max_effect = max(all_effects) if all_effects else 1.0
+            model_effect = raw_effect / max_effect if max_effect > 0 else 0.0
             
+            # Calculate predictive power against global baseline
+            metrics = model_single.evaluate(dataset)
+            accuracy = metrics.get('accuracy', 0.5)
+            baseline_accuracy = 0.5  # Random chance baseline
+            max_possible = 1.0 - baseline_accuracy
+            predictive_power = (accuracy - baseline_accuracy) / max_possible if max_possible > 0 else 0.0
+            
+            # Effect consistency through CV (already globally normalized)
+            effect_consistency = self._calculate_effect_consistency(
+                feature, dataset, current_selected_features)
+            
+            # Get actual weights
+            weights = model_single.get_feature_weights()
+            weight, weight_std = weights.get(feature, (0.0, 0.0))
+            
+            return {
+                'model_effect': model_effect,
+                'effect_consistency': effect_consistency,
+                'predictive_power': predictive_power,
+                'weight': weight,
+                'weight_std': weight_std
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating metrics for {feature}: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            return self._get_default_metrics()
+                                                    
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     include_interactions: bool = False) -> float:
         """
