@@ -589,42 +589,22 @@ class PreferenceModel:
             # Get feature names and separate control features
             self.feature_names = features if features is not None else dataset.get_feature_names()
             control_features = self.config.features.control_features
-            
-            # Main features are those not in control_features
             main_features = [f for f in self.feature_names if f not in control_features]
             
-            if not main_features:
-                raise ValueError("No main features provided for model fitting")
+            # Check if this is a control-only model
+            is_control_only = not main_features and all(f in control_features for f in self.feature_names)
             
+            if not is_control_only and not main_features:
+                raise ValueError("No main features provided for model fitting")
+                
             logger.info(f"Preparing data:")
             logger.info(f"  Main features ({len(main_features)}): {main_features}")
             logger.info(f"  Control features ({len(control_features)}): {control_features}")
-
-            # Debug logging for interaction features
-            for feature in self.feature_names:
-                if '_x_' in feature:
-                    feature_data = self._compute_feature_values(feature, dataset)
-                    logger.debug(f"Interaction feature {feature} stats:")
-                    logger.debug(f"  mean: {np.mean(feature_data):.4f}")
-                    logger.debug(f"  std: {np.std(feature_data):.4f}")
-                    logger.debug(f"  range: [{np.min(feature_data):.4f}, {np.max(feature_data):.4f}]")
-
+            
             # Create participant ID mapping
             participant_ids = sorted(list(dataset.participants))
             participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
-
-            # Handle typing_time normalization
-            if 'typing_time' in self.feature_names:
-                all_times = []
-                for pref in dataset.preferences:
-                    if pref.typing_time1 is not None:
-                        all_times.append(pref.typing_time1)
-                    if pref.typing_time2 is not None:
-                        all_times.append(pref.typing_time2)
-                time_mean = np.mean(all_times)
-                time_std = np.std(all_times)
-                logger.info(f"Typing time normalization parameters - mean: {time_mean:.3f}, std: {time_std:.3f}")
-
+            
             # Initialize arrays for both main and control features
             X1, X2 = [], []  # Main feature matrices
             C1, C2 = [], []  # Control feature matrices
@@ -634,29 +614,22 @@ class PreferenceModel:
             skipped_count = 0
             for pref in dataset.preferences:
                 try:
-                    # Process main features
-                    features1_main, features2_main = [], []
-                    for feature in main_features:
-                        feat1 = pref.features1.get(feature)
-                        feat2 = pref.features2.get(feature)
-
-                        if feature == 'typing_time':
-                            if feat1 is None or feat2 is None:
-                                valid_times = [t for t in [pref.typing_time1, pref.typing_time2] if t is not None]
-                                mean_time = np.mean(valid_times) if valid_times else time_mean
-                                feat1 = mean_time if feat1 is None else feat1
-                                feat2 = mean_time if feat2 is None else feat2
-                            feat1 = (feat1 - time_mean) / time_std
-                            feat2 = (feat2 - time_mean) / time_std
-                        else:
-                            feat1 = 0.0 if feat1 is None else feat1
-                            feat2 = 0.0 if feat2 is None else feat2
-
-                        features1_main.append(feat1)
-                        features2_main.append(feat2)
+                    # Process main features or add dummy feature for control-only case
+                    if is_control_only:
+                        features1_main = [0.0]  # Dummy feature
+                        features2_main = [0.0]
+                    else:
+                        features1_main = []
+                        features2_main = []
+                        for feature in main_features:
+                            feat1 = pref.features1.get(feature, 0.0)
+                            feat2 = pref.features2.get(feature, 0.0)
+                            features1_main.append(feat1)
+                            features2_main.append(feat2)
 
                     # Process control features
-                    features1_control, features2_control = [], []
+                    features1_control = []
+                    features2_control = []
                     for feature in control_features:
                         feat1 = pref.features1.get(feature, 0.0)
                         feat2 = pref.features2.get(feature, 0.0)
@@ -678,7 +651,7 @@ class PreferenceModel:
             if skipped_count > 0:
                 logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
 
-            if not X1:
+            if not (X1 or C1):  # Allow either main or control features to be present
                 raise ValueError("No valid preferences after data preparation")
 
             # Convert to numpy arrays
@@ -689,11 +662,17 @@ class PreferenceModel:
             participant = np.array(participant, dtype=np.int32)
             y = np.array(y, dtype=np.int32)
 
-            # Validation
-            if X1.shape[1] != len(main_features):
-                raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
+            # Adjust validation for control-only case
+            if not is_control_only:
+                if X1.shape[1] != len(main_features):
+                    raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
+            else:
+                if X1.shape[1] != 1:  # Check dummy feature dimension
+                    raise ValueError("Invalid dummy feature dimension for control-only model")
+                    
             if C1.shape[1] != len(control_features):
                 raise ValueError(f"Control feature dimension mismatch: {C1.shape[1]} != {len(control_features)}")
+                
             if np.any(np.isnan(X1)) or np.any(np.isnan(X2)) or np.any(np.isnan(C1)) or np.any(np.isnan(C2)):
                 raise ValueError("NaN values found in feature matrices")
 
@@ -701,14 +680,16 @@ class PreferenceModel:
             logger.info(f"Data dimensions:")
             logger.info(f"  N (preferences): {len(y)}")
             logger.info(f"  P (participants): {len(participant_ids)}")
-            logger.info(f"  F (main features): {len(main_features)}")
+            if is_control_only:
+                logger.info("  Using dummy main feature for control-only model")
+            logger.info(f"  F (main features): {1 if is_control_only else len(main_features)}")
             logger.info(f"  C (control features): {len(control_features)}")
 
             # Prepare Stan data
             stan_data = {
                 'N': len(y),
                 'P': len(participant_ids),
-                'F': len(main_features),
+                'F': 1 if is_control_only else len(main_features),
                 'C': len(control_features),
                 'X1': X1,
                 'X2': X2,
@@ -722,10 +703,11 @@ class PreferenceModel:
 
             # Log statistics
             logger.info("\nFeature summary statistics:")
-            for i, feature in enumerate(main_features):
-                logger.info(f"{feature} (main):")
-                logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
-                logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
+            if not is_control_only:
+                for i, feature in enumerate(main_features):
+                    logger.info(f"{feature} (main):")
+                    logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
+                    logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
             for i, feature in enumerate(control_features):
                 logger.info(f"{feature} (control):")
                 logger.info(f"  C1 - mean: {np.mean(C1[:, i]):.3f}, std: {np.std(C1[:, i]):.3f}")
@@ -736,7 +718,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error preparing data: {str(e)}")
             raise
-                                
+                                        
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -933,6 +915,7 @@ class PreferenceModel:
         """
         # Initialize with control features - these are always included
         self.selected_features = list(self.config.features.control_features)
+        self.importance_calculator.reset_normalization_factors()  # ADD THIS LINE HERE
         main_features = [f for f in all_features if f not in self.config.features.control_features]
         
         while True:

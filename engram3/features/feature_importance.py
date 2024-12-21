@@ -81,6 +81,12 @@ class FeatureImportanceCalculator:
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
                                                             
+    def reset_normalization_factors(self):
+        """Reset global normalization tracking at start of feature selection."""
+        self._max_effect_seen = 0.0
+        self._max_consistency_seen = 0.0
+        self._baseline_accuracy = None  
+
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
                             all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
             try:
@@ -139,6 +145,11 @@ class FeatureImportanceCalculator:
                 # Normalize improvement against fixed baseline
                 predictive_power = (test_accuracy - self._baseline_accuracy) / (1.0 - self._baseline_accuracy) if self._baseline_accuracy < 1.0 else 0.0
                 
+                logger.debug(f"Global normalization factors:")
+                logger.debug(f"  Max effect seen: {self._max_effect_seen:.4f}")
+                logger.debug(f"  Max consistency seen: {self._max_consistency_seen:.4f}")
+                logger.debug(f"  Baseline accuracy: {self._baseline_accuracy:.4f}")
+
                 return {
                     'model_effect': model_effect,
                     'effect_consistency': effect_consistency,
@@ -153,10 +164,18 @@ class FeatureImportanceCalculator:
                 return self._get_default_metrics()
                                                                     
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
-                                    include_interactions: bool = False) -> float:
+                                    current_features: List[str]) -> float:
         """
         Calculate consistency of feature effect across cross-validation splits.
-        Returns a value between 0 (inconsistent) and 1 (consistent).
+        Uses current selected features to capture interaction effects.
+        
+        Args:
+            feature: Feature to evaluate
+            dataset: Dataset for evaluation
+            current_features: List of currently selected features including controls
+            
+        Returns:
+            float: Consistency score between 0 (inconsistent) and 1 (consistent)
         """
         try:
             n_splits = 5
@@ -166,36 +185,22 @@ class FeatureImportanceCalculator:
             for train_idx, val_idx in self.model._get_cv_splits(dataset, n_splits):
                 train_data = dataset._create_subset_dataset(train_idx)
                 
-                features_to_test = []
-                
-                # Handle control features as main features for testing
-                if feature in self.model.config.features.control_features:
+                # Use all current features when evaluating consistency
+                features_to_test = list(current_features)  # Copy to avoid modifying input
+                if feature not in features_to_test:
                     features_to_test.append(feature)
-                else:
-                    features_to_test.append(feature)
-                    if include_interactions:
-                        for f1, f2 in self.model.config.features.interactions:
-                            if feature in (f1, f2):
-                                interaction_name = f"{f1}_x_{f2}"
-                                if interaction_name in self.model.selected_features:
-                                    features_to_test.append(interaction_name)
-                                else:
-                                    alt_name = f"{f2}_x_{f1}"
-                                    if alt_name in self.model.selected_features:
-                                        features_to_test.append(alt_name)
                                                         
                 self.model.fit(train_data, features_to_test)
                 weights = self.model.get_feature_weights()
                 
-                # Get base feature effect
+                # Get feature effect
                 if feature in weights:
                     effects.append(weights[feature][0])
                 
-                # Get interaction effects
-                if include_interactions:
-                    for f in features_to_test:
-                        if '_x_' in f and feature in f:
-                            interaction_effects[f].append(weights.get(f, (0.0, 0.0))[0])
+                # Get interaction effects if any
+                for f in weights:
+                    if '_x_' in f and feature in f:
+                        interaction_effects[f].append(weights[f][0])
             
             if not effects and not interaction_effects:
                 return 0.0
@@ -228,7 +233,7 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-                    
+                            
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {
@@ -237,4 +242,3 @@ class FeatureImportanceCalculator:
             'predictive_power': 0.0
         }
  
-        
