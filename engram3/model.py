@@ -444,7 +444,9 @@ class PreferenceModel:
                 importance_metrics[feature] = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
-                    model=self
+                    model=self,
+                    all_features=feature_names,  # We have this from earlier in the method
+                    current_selected_features=self.selected_features
                 )
 
         # Determine selected features using Bayesian criteria

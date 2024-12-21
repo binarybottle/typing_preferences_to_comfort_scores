@@ -253,12 +253,14 @@ def main():
 
             # Create comprehensive results DataFrame
             results = []
-            for feature_name in all_features:
-                # Get metrics for this feature in context of selected features
+            selectable_features = [f for f in all_features if f not in config.features.control_features]
+            for feature_name in selectable_features:  # Only evaluate non-control features
                 metrics = model.importance_calculator.evaluate_feature(
                     feature=feature_name,
                     dataset=train_data,
-                    model=model
+                    model=model,
+                    all_features=all_features,
+                    current_selected_features=selected_features
                 )
                 
                 weight, std = feature_weights.get(feature_name, (0.0, 0.0))  # Use .get() with default
@@ -294,7 +296,9 @@ def main():
                 metrics = model.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=train_data,
-                    model=model
+                    model=model,
+                    all_features=all_features,  # We have this from earlier
+                    current_selected_features=selected_features
                 )
                 logger.info(f"\n{feature}:")
                 logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")

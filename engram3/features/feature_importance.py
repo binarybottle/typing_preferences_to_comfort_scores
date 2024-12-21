@@ -70,72 +70,88 @@ class FeatureImportanceCalculator:
                     os.chmod(str(exe_path), 0o755)
             except Exception as e:
                 logger.warning(f"Could not set Stan model executable permissions: {str(e)}")
-                                
+
+        # Add global normalization tracking
+        self._max_effect_seen = 0.0
+        self._max_consistency_seen = 0.0
+        self._baseline_accuracy = None  # Will be set on first evaluation
+
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
                                                             
-    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel', 
-                        all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
-        """Calculate globally-normalized metrics that work for both selection and analysis."""
-        try:
-            # Fit model with current feature set + candidate
-            test_features = current_selected_features + [feature]
-            model_single = type(model)(config=model.config)
-            model_single.fit(dataset, test_features)
-            
-            # Get weights for normalization scale across ALL features
-            all_effects = []
-            for f in all_features:
-                # Get raw weight magnitude for feature AND any interactions it's part of
-                f_weight = abs(model_single.get_feature_weights().get(f, (0.0, 0.0))[0])
-                all_effects.append(f_weight)
-                # Add interaction weights if any
+    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
+                            all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
+            try:
+                # Always include control features in addition to features being evaluated
+                control_features = model.config.features.control_features
+                test_features = control_features + [feature]
+                
+                # Include interactions with already selected features
                 for f1, f2 in model.config.features.interactions:
-                    if f in (f1, f2):
-                        int_name = f"{f1}_x_{f2}"
-                        alt_name = f"{f2}_x_{f1}"
-                        if int_name in all_features:
-                            int_weight = abs(model_single.get_feature_weights().get(int_name, (0.0, 0.0))[0])
-                            all_effects.append(int_weight)
-                        elif alt_name in all_features:
-                            int_weight = abs(model_single.get_feature_weights().get(alt_name, (0.0, 0.0))[0])
-                            all_effects.append(int_weight)
+                    if feature in (f1, f2):
+                        interaction_name = f"{f1}_x_{f2}"
+                        if interaction_name in all_features:
+                            test_features.append(interaction_name)
+                        else:
+                            alt_name = f"{f2}_x_{f1}"
+                            if alt_name in all_features:
+                                test_features.append(alt_name)
 
-            # Normalize model effect against global maximum
-            raw_effect = abs(model_single.get_feature_weights().get(feature, (0.0, 0.0))[0])
-            max_effect = max(all_effects) if all_effects else 1.0
-            model_effect = raw_effect / max_effect if max_effect > 0 else 0.0
-            
-            # Calculate predictive power against global baseline
-            metrics = model_single.evaluate(dataset)
-            accuracy = metrics.get('accuracy', 0.5)
-            baseline_accuracy = 0.5  # Random chance baseline
-            max_possible = 1.0 - baseline_accuracy
-            predictive_power = (accuracy - baseline_accuracy) / max_possible if max_possible > 0 else 0.0
-            
-            # Effect consistency through CV (already globally normalized)
-            effect_consistency = self._calculate_effect_consistency(
-                feature, dataset, current_selected_features)
-            
-            # Get actual weights
-            weights = model_single.get_feature_weights()
-            weight, weight_std = weights.get(feature, (0.0, 0.0))
-            
-            return {
-                'model_effect': model_effect,
-                'effect_consistency': effect_consistency,
-                'predictive_power': predictive_power,
-                'weight': weight,
-                'weight_std': weight_std
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating metrics for {feature}: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            return self._get_default_metrics()
-                                                    
+                # Fit model including control features and interactions
+                model_single = type(model)(config=model.config)
+                model_single.feature_extractor = model.feature_extractor
+                model_single.fit(dataset, test_features)
+                
+                # Calculate raw effect (including interactions)
+                weights = model_single.get_feature_weights()
+                raw_effect = abs(weights.get(feature, (0.0, 0.0))[0])
+                
+                # Update global maximum effect if larger
+                self._max_effect_seen = max(self._max_effect_seen, raw_effect)
+                
+                # Normalize effect against global maximum
+                model_effect = raw_effect / self._max_effect_seen if self._max_effect_seen > 0 else 0.0
+                
+                # Calculate raw consistency with current feature set
+                raw_consistency = self._calculate_effect_consistency(
+                    feature, dataset, current_selected_features + control_features)
+                
+                # Update global maximum consistency if larger
+                self._max_consistency_seen = max(self._max_consistency_seen, raw_consistency)
+                
+                # Normalize consistency against global maximum
+                effect_consistency = raw_consistency / self._max_consistency_seen if self._max_consistency_seen > 0 else 0.0
+                
+                # Calculate predictive power against fixed baseline
+                metrics = model_single.evaluate(dataset)
+                test_accuracy = metrics.get('accuracy', 0.5)
+                
+                # Get or set global baseline accuracy
+                if self._baseline_accuracy is None:
+                    # First time: establish baseline with only control features
+                    base_model = type(model)(config=model.config)
+                    base_model.fit(dataset, control_features)
+                    base_metrics = base_model.evaluate(dataset)
+                    self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
+                
+                # Normalize improvement against fixed baseline
+                predictive_power = (test_accuracy - self._baseline_accuracy) / (1.0 - self._baseline_accuracy) if self._baseline_accuracy < 1.0 else 0.0
+                
+                return {
+                    'model_effect': model_effect,
+                    'effect_consistency': effect_consistency,
+                    'predictive_power': predictive_power,
+                    'weight': weights.get(feature, (0.0, 0.0))[0],
+                    'weight_std': weights.get(feature, (0.0, 0.0))[1]
+                }
+                
+            except Exception as e:
+                logger.error(f"Error calculating metrics for {feature}: {str(e)}")
+                logger.error("Traceback:", exc_info=True)
+                return self._get_default_metrics()
+                                                                    
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     include_interactions: bool = False) -> float:
         """
