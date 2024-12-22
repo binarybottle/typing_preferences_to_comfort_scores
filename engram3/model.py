@@ -189,8 +189,9 @@ class PreferenceModel:
             if not features:
                 raise ValueError("No features provided and none available from dataset")
             
-            # Store feature names
+            # Store features and feature names
             self.feature_names = features
+            self.selected_features = features
             
             # Prepare data
             stan_data = self.prepare_data(dataset, features)
@@ -237,19 +238,26 @@ class PreferenceModel:
         """Update feature weights from fitted model for both main and control features."""
         try:
             self.feature_weights = {}
-            self.selected_features = []  # Reset selected features
             
             if hasattr(self, 'fit'):  # Stan backend
                 # Get main feature weights (beta)
                 beta = self.fit_result.stan_variable('beta')
-                main_features = [f for f in self.feature_names 
-                            if f not in self.config.features.control_features]
+                # Deduplicate main features
+                main_features = list(dict.fromkeys(
+                    [f for f in self.feature_names if f not in self.config.features.control_features]
+                ))
+                
+                # Debug logging
+                logger.debug(f"Beta shape: {beta.shape}")
+                logger.debug(f"Main features: {main_features}")
+                
+                # Update weights without modifying selected_features
                 for i, feature in enumerate(main_features):
-                    self.feature_weights[feature] = (
-                        float(np.mean(beta[:, i])),
-                        float(np.std(beta[:, i]))
-                    )
-                    self.selected_features.append(feature)  # Add main features
+                    if i < beta.shape[1]:  # Check array bounds
+                        self.feature_weights[feature] = (
+                            float(np.mean(beta[:, i])),
+                            float(np.std(beta[:, i]))
+                        )
                 
                 # Get control feature weights (gamma)
                 if self.config.features.control_features:
@@ -259,7 +267,6 @@ class PreferenceModel:
                             float(np.mean(gamma[:, i])),
                             float(np.std(gamma[:, i]))
                         )
-                        self.selected_features.append(feature)  # Add control features
                 
                 logger.debug("Updated weights:")
                 for feature, (mean, std) in self.feature_weights.items():
@@ -276,7 +283,6 @@ class PreferenceModel:
                         float(np.mean(weights)),
                         float(np.std(weights))
                     )
-                    self.selected_features.append(feature)  # Add main features
                 
                 if self.config.features.control_features:
                     for i, feature in enumerate(self.config.features.control_features):
@@ -285,12 +291,11 @@ class PreferenceModel:
                             float(np.mean(weights)),
                             float(np.std(weights))
                         )
-                        self.selected_features.append(feature)  # Add control features
                         
         except Exception as e:
             logger.error(f"Error updating feature weights: {str(e)}")
             logger.error("Traceback:", exc_info=True)
-                                                
+                                                            
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         try:
@@ -589,7 +594,11 @@ class PreferenceModel:
             # Get feature names and separate control features
             self.feature_names = features if features is not None else dataset.get_feature_names()
             control_features = self.config.features.control_features
-            main_features = [f for f in self.feature_names if f not in control_features]
+            
+            # Main features are those not in control_features - deduplicate
+            main_features = list(dict.fromkeys(
+                [f for f in self.feature_names if f not in control_features]
+            ))
             
             # Check if this is a control-only model
             is_control_only = not main_features and all(f in control_features for f in self.feature_names)
@@ -622,8 +631,15 @@ class PreferenceModel:
                         features1_main = []
                         features2_main = []
                         for feature in main_features:
-                            feat1 = pref.features1.get(feature, 0.0)
-                            feat2 = pref.features2.get(feature, 0.0)
+                            if '_x_' in feature:
+                                # Handle interaction features
+                                f1, f2 = feature.split('_x_')
+                                feat1 = pref.features1.get(f1, 0.0) * pref.features1.get(f2, 0.0)
+                                feat2 = pref.features2.get(f1, 0.0) * pref.features2.get(f2, 0.0)
+                            else:
+                                # Handle base features
+                                feat1 = pref.features1.get(feature, 0.0)
+                                feat2 = pref.features2.get(feature, 0.0)
                             features1_main.append(feat1)
                             features2_main.append(feat2)
 
@@ -924,16 +940,23 @@ class PreferenceModel:
             
             if not remaining_features:
                 break
-                
+                    
             logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
             logger.info(f"Current feature set: {self.selected_features}")
+            
+            # Add debug logging here:
+            logger.debug(f"Evaluating features: {remaining_features}")
             
             # Evaluate all remaining features in context of current set
             feature_metrics = {}
             for feature in remaining_features:
+                # Add debug logging here:
+                logger.debug(f"\nEvaluating feature: {feature}")
+                
                 # Create candidate feature set with current feature
                 candidate_features = self.selected_features + [feature]
-                
+                logger.debug(f"Candidate feature set: {candidate_features}")
+                                
                 # Fit model with candidate feature set
                 self.fit(dataset, candidate_features)
                 
@@ -945,8 +968,9 @@ class PreferenceModel:
                     all_features=all_features,
                     current_selected_features=self.selected_features
                 )
+                logger.debug(f"Feature {feature} metrics: {metrics}")
                 feature_metrics[feature] = metrics
-            
+
             # Compare each feature against all others
             win_counts = {f: 0 for f in remaining_features}
             for f1, f2 in combinations(remaining_features, 2):
@@ -968,6 +992,16 @@ class PreferenceModel:
                 logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
                 logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
             
+            if (best_metrics['effect_consistency'] > 0.5 or 
+                best_metrics['predictive_power'] > 0.1):
+                logger.debug(f"Feature {best_feature} meets criteria:")
+                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
+                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
+            else:
+                logger.debug(f"Feature {best_feature} fails criteria:")
+                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
+                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
+                
             if (best_metrics['effect_consistency'] > 0.5 or 
                 best_metrics['predictive_power'] > 0.1):
                 self.selected_features.append(best_feature)
@@ -1223,12 +1257,17 @@ class PreferenceModel:
             score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
            # Separate main and control feature effects
+            logger.debug(f"Selected features: {self.selected_features}")
+            logger.debug(f"Control features: {self.config.features.control_features}")
             main_features = [f for f in self.selected_features 
                             if f not in self.config.features.control_features]
+
             control_features = self.config.features.control_features
 
+            if not self.selected_features:
+                raise ValueError("No selected features available")
             if not main_features:
-                raise ValueError("No main features available for prediction")
+                raise ValueError(f"No main features available for prediction. Selected features: {self.selected_features}, Control features: {self.config.features.control_features}")
 
             # Extract base features
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])

@@ -76,17 +76,28 @@ class FeatureImportanceCalculator:
         self._max_consistency_seen = 0.0
         self._baseline_accuracy = None  # Will be set on first evaluation
 
+        # Separate tracking for control vs main feature normalization
+        self._max_effect = {
+            'control': 0.0,  # For normalizing control features
+            'main': 0.0      # For normalizing main features
+        }
+        self._max_consistency = {
+            'control': 0.0,
+            'main': 0.0
+        }
+        self._baseline_accuracy = None
+
+    def reset_normalization_factors(self):
+        """Reset global normalization tracking at start of feature selection."""
+        self._max_effect = {'control': 0.0, 'main': 0.0}
+        self._max_consistency = {'control': 0.0, 'main': 0.0}
+        self._baseline_accuracy = None
+
     def __del__(self):
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
                                                             
-    def reset_normalization_factors(self):
-        """Reset global normalization tracking at start of feature selection."""
-        self._max_effect_seen = 0.0
-        self._max_consistency_seen = 0.0
-        self._baseline_accuracy = None  
-
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
                             all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
             try:
