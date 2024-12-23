@@ -1012,19 +1012,12 @@ class PreferenceModel:
                 logger.info(f"  Effect: {metrics['model_effect']:.3f}")
                 logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
                 logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
-            
-            if (best_metrics['effect_consistency'] > 0.5 or 
+                
+            if (best_metrics['effect_consistency'] > 0.5 and 
                 best_metrics['predictive_power'] > 0.1):
                 logger.debug(f"Feature {best_feature} meets criteria:")
                 logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
                 logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
-            else:
-                logger.debug(f"Feature {best_feature} fails criteria:")
-                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
-                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
-                
-            if (best_metrics['effect_consistency'] > 0.5 or 
-                best_metrics['predictive_power'] > 0.1):
                 self.selected_features.append(best_feature)
                 self.fit(dataset, self.selected_features)
                 logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
@@ -1036,6 +1029,9 @@ class PreferenceModel:
                     w, s = weights.get(feat, (0.0, 0.0))
                     logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
             else:
+                logger.debug(f"Feature {best_feature} fails criteria:")
+                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
+                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
                 break
         
         # Ensure at least one main feature is selected
