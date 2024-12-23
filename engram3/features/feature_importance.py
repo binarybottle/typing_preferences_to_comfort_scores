@@ -1,4 +1,4 @@
-# engram3/features/importance.py
+# engram3/features/feature_importance.py
 """
 Feature importance calculation module for keyboard layout preference analysis.
 
@@ -28,6 +28,7 @@ import numpy as np
 from typing import Dict, List, Union
 from pathlib import Path
 from collections import defaultdict
+import copy
 
 from engram3.utils.config import Config, FeatureSelectionConfig
 from typing import TYPE_CHECKING
@@ -101,40 +102,56 @@ class FeatureImportanceCalculator:
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
                         all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
         try:
-            # Always include control features in addition to features being evaluated
-            control_features = model.config.features.control_features
-            test_features = control_features + [feature]
-            
-            # Include interactions with already selected features
-            for f1, f2 in model.config.features.interactions:
-                if feature in (f1, f2):
-                    interaction_name = f"{f1}_x_{f2}"
-                    if interaction_name in all_features:
-                        test_features.append(interaction_name)
-                    else:
-                        alt_name = f"{f2}_x_{f1}"
-                        if alt_name in all_features:
-                            test_features.append(alt_name)
+            # Get baseline accuracy if needed
+            if self._baseline_accuracy is None:
+                logger.info("Computing baseline with control-only model")
+                base_model = type(model)(config=model.config)
+                base_model.feature_extractor = model.feature_extractor
+                base_model.feature_names = list(model.config.features.control_features)  # Use list to avoid duplicates
+                base_model.selected_features = list(model.config.features.control_features)
+                base_model.is_baseline_model = True  # Mark as baseline model
+                
+                logger.debug(f"Created baseline model:")
+                logger.debug(f"  Features: {base_model.feature_names}")
+                logger.debug(f"  Selected: {base_model.selected_features}")
+                logger.debug(f"  Is baseline: {base_model.is_baseline_model}")
+                
+                base_model.fit(dataset, base_model.selected_features)
+                base_metrics = base_model.evaluate(dataset)
+                self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
+                logger.info(f"Baseline accuracy: {self._baseline_accuracy:.4f}")
 
-            print(f"Testing feature set: {test_features}")  # Debug print
+            # Always include control features in addition to features being evaluated
+            control_features = list(model.config.features.control_features)  # Use list to avoid duplicates
+            test_features = control_features.copy()  # Start with control features
             
-            # Create new model with proper initialization
+            # Check if we're evaluating a non-control feature
+            is_control_feature = feature in control_features
+            if not is_control_feature:
+                test_features.append(feature)  # Add the main feature being tested
+                
+                # Add any relevant interactions
+                for f1, f2 in model.config.features.interactions:
+                    if feature in (f1, f2):
+                        interaction_name = f"{f1}_x_{f2}"
+                        if interaction_name in all_features:
+                            test_features.append(interaction_name)
+
+            # Create evaluation model
             model_single = type(model)(config=model.config)
             model_single.feature_extractor = model.feature_extractor
             model_single.feature_names = test_features
             model_single.selected_features = test_features
+            model_single.is_baseline_model = len(test_features) == len(control_features)
             
-            print(f"New model state before fit:")  # Debug print
-            print(f"  Feature names: {model_single.feature_names}")
-            print(f"  Selected features: {model_single.selected_features}")
+            logger.debug(f"Created evaluation model:")
+            logger.debug(f"  Features: {test_features}")
+            logger.debug(f"  Is baseline: {model_single.is_baseline_model}")
             
-            # Fit model including control features and interactions
+            # Fit and evaluate
             model_single.fit(dataset, test_features)
+            metrics = model_single.evaluate(dataset)
             
-            print(f"New model state after fit:")  # Debug print
-            print(f"  Feature names: {model_single.feature_names}")
-            print(f"  Selected features: {model_single.selected_features}")
-                
             # Calculate raw effect (including interactions)
             weights = model_single.get_feature_weights()
             raw_effect = abs(weights.get(feature, (0.0, 0.0))[0])
@@ -155,28 +172,11 @@ class FeatureImportanceCalculator:
             # Normalize consistency against global maximum
             effect_consistency = raw_consistency / self._max_consistency_seen if self._max_consistency_seen > 0 else 0.0
             
-            # Create baseline model with proper feature initialization
-            if self._baseline_accuracy is None:
-                base_model = type(model)(config=model.config)
-                base_model.feature_extractor = model.feature_extractor
-                base_model.feature_names = control_features
-                base_model.selected_features = control_features
-                base_model.fit(dataset, control_features)
-                base_metrics = base_model.evaluate(dataset)
-                self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
-            
-            # Calculate predictive power against fixed baseline
+            # Calculate predictive power against baseline
             metrics = model_single.evaluate(dataset)
             test_accuracy = metrics.get('accuracy', 0.5)
-            
-            # Normalize improvement against fixed baseline
             predictive_power = (test_accuracy - self._baseline_accuracy) / (1.0 - self._baseline_accuracy) if self._baseline_accuracy < 1.0 else 0.0
-            
-            logger.debug(f"Global normalization factors:")
-            logger.debug(f"  Max effect seen: {self._max_effect_seen:.4f}")
-            logger.debug(f"  Max consistency seen: {self._max_consistency_seen:.4f}")
-            logger.debug(f"  Baseline accuracy: {self._baseline_accuracy:.4f}")
-            
+
             return {
                 'model_effect': model_effect,
                 'effect_consistency': effect_consistency,
@@ -184,12 +184,12 @@ class FeatureImportanceCalculator:
                 'weight': weights.get(feature, (0.0, 0.0))[0],
                 'weight_std': weights.get(feature, (0.0, 0.0))[1]
             }
-            
+                    
         except Exception as e:
             logger.error(f"Error calculating metrics for {feature}: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             return self._get_default_metrics()
-                                                                                
+                                                                                        
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     current_features: List[str]) -> float:
         """

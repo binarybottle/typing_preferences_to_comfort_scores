@@ -116,8 +116,10 @@ class PreferenceModel:
         self.dataset = None
         self.feature_weights = None
         self.feature_extractor = None
+        self.is_baseline_model = False  # Add baseline flag
+        
         # Initialize caches
-        self.feature_cache = CacheManager()  # Single feature cache
+        self.feature_cache = CacheManager()
         self.prediction_cache = CacheManager()
         
         try:
@@ -1241,21 +1243,7 @@ class PreferenceModel:
     # Statistical and model diagnostic methods
     #--------------------------------------------
     def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
-        """
-        Predict preference probability and uncertainty for a bigram pair.
-        Accounts for both main features and control features.
-        
-        Args:
-            bigram1: First bigram to compare
-            bigram2: Second bigram to compare
-            
-        Returns:
-            ModelPrediction containing probability, uncertainty and metadata
-            
-        Raises:
-            NotFittedError: If model hasn't been fit
-            ValueError: If bigrams are invalid
-        """
+        """Predict preference probability and uncertainty for a bigram pair."""
         if not self.fit_result:
             raise NotFittedError("Model must be fit before making predictions")
             
@@ -1270,43 +1258,47 @@ class PreferenceModel:
             if cached_prediction is not None:
                 return cached_prediction
                 
-            # Get comfort scores (these now include control features)
             start_time = time.perf_counter()
-            score1, unc1 = self.get_bigram_comfort_scores(bigram1)
-            score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
-           # Separate main and control feature effects
+            # Log model state
             logger.debug(f"All features available: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
             logger.debug(f"Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
             logger.debug(f"Selected features: {self.selected_features}")
             logger.debug(f"Control features: {self.config.features.control_features}")
+            
+            # Separate main and control feature effects
             main_features = [f for f in self.selected_features 
                             if f not in self.config.features.control_features]
+            control_features = self.config.features.control_features
+            
+            # Determine if this is a baseline evaluation
+            is_baseline = getattr(self, 'is_baseline_model', False)
+            logger.debug(f"Model type: {'baseline' if is_baseline else 'main'}")
 
+            # For non-baseline models, require main features
+            main_features = [f for f in self.selected_features 
+                            if f not in self.config.features.control_features]
             control_features = self.config.features.control_features
 
-            if not self.selected_features:
-                raise ValueError("No selected features available")
-            if not main_features:
-                logger.error(f"Prediction failed due to missing main features:")
-                logger.error(f"  All features available: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
+            # For non-baseline models, require main features  
+            if not main_features and not is_baseline:
+                logger.error("Prediction failed due to missing main features:")
+                logger.error(f"  All features available: {self.feature_names}")
                 logger.error(f"  Selected features: {self.selected_features}")
                 logger.error(f"  Control features: {control_features}")
                 logger.error(f"  Feature weights: {self.feature_weights}")
-                raise ValueError(f"No main features available for prediction. Selected features: {self.selected_features}, Control features: {control_features}")
-
+                raise ValueError("No main features available for non-baseline prediction")
+                
             # Extract base features
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
-            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])            
+            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
+            
             # Add interaction features
             for f1, f2 in self.config.features.interactions:
-
-                # Validate base features exist
                 if f1 not in features1 or f2 not in features1:
                     logger.warning(f"Missing base features for interaction: {f1}, {f2}")
                     continue
-
-                # Check both possible orderings of the interaction
+                    
                 interaction_name1 = f"{f1}_x_{f2}"
                 interaction_name2 = f"{f2}_x_{f1}"
                 
@@ -1316,43 +1308,46 @@ class PreferenceModel:
                 elif interaction_name2 in self.selected_features:
                     features1[interaction_name2] = features1[f1] * features1[f2]
                     features2[interaction_name2] = features2[f1] * features2[f2]
-
+                    
             logger.debug(f"Available features in bigram1: {list(features1.keys())}")
             logger.debug(f"Available features in bigram2: {list(features2.keys())}")
-
-            # Get posterior samples for both main and control effects
-            n_samples = self.config.model.n_samples
             
-            # Get main feature effects
-            beta_samples = self.fit_result.stan_variable('beta')
-            main_diffs = np.array([features1[f] - features2[f] for f in main_features]).reshape(1, -1)  # Add batch dimension
-            main_effects = np.dot(main_diffs, beta_samples.T)  # Now shapes will align correctly
+            # Calculate predictions
+            total_effect = 0.0
+            uncertainty = 0.0
             
-            # Get control feature effects
-            if control_features:
-                gamma_samples = self.fit_result.stan_variable('gamma')
-                control_diffs = np.array([features1[f] - features2[f] for f in control_features]).reshape(1, -1)
-                control_effects = np.dot(control_diffs, gamma_samples.T)
+            if main_features:
+                logger.debug(f"Computing main feature effects for: {main_features}")
+                beta_samples = self.fit_result.stan_variable('beta')
+                main_diffs = np.array([features1[f] - features2[f] for f in main_features])
+                main_effects = np.dot(main_diffs, beta_samples.T)
+                total_effect += np.mean(main_effects)
+                uncertainty += np.std(main_effects)
                 
-                # Combine effects
-                total_effects = main_effects + control_effects
-            else:
-                total_effects = main_effects
+            if control_features:
+                logger.debug(f"Computing control feature effects for: {control_features}")
+                gamma_samples = self.fit_result.stan_variable('gamma')
+                control_diffs = np.array([features1[f] - features2[f] for f in control_features])
+                control_effects = np.dot(control_diffs, gamma_samples.T)
+                total_effect += np.mean(control_effects)
+                uncertainty += np.std(control_effects)
+                
+            # Transform to probability
+            probability = 1 / (1 + np.exp(-total_effect))
             
-            # Transform to probabilities
-            probs = 1 / (1 + np.exp(-total_effects))
+            logger.debug(f"Prediction results:")
+            logger.debug(f"  Total effect: {total_effect:.4f}")
+            logger.debug(f"  Uncertainty: {uncertainty:.4f}")
+            logger.debug(f"  Probability: {probability:.4f}")
             
-            # Create prediction object
             prediction = ModelPrediction(
-                probability=float(np.mean(probs)),
-                uncertainty=float(np.std(probs)),
-                features_used=list(self.selected_features),  # Includes both main and control features
+                probability=float(probability),
+                uncertainty=float(uncertainty),
+                features_used=self.selected_features,
                 computation_time=time.perf_counter() - start_time
             )
             
-            # Cache result
             self.prediction_cache.set(cache_key, prediction)
-            
             return prediction
             
         except Exception as e:
@@ -1363,7 +1358,7 @@ class PreferenceModel:
                 features_used=[],
                 computation_time=0.0
             )
-        
+                
     def _check_diagnostics(self) -> None:
         """Check MCMC diagnostics with proper type handling."""
         try:
