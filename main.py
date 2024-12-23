@@ -153,16 +153,28 @@ def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['select_features', 'visualize_feature_space', 
-                                           'train_model', 'recommend_bigram_pairs'], 
+                                       'train_model', 'recommend_bigram_pairs'], 
                        required=True,
                        help='Pipeline mode: feature selection, model training, or bigram recommendations')
     args = parser.parse_args()
     
+    print("\n=== DEBUG: Program Start ===")
+    print(f"Mode argument: {args.mode}")
+    print(f"Mode type: {type(args.mode)}")
+    print(f"Mode comparison: {'select_features' == args.mode}")
+
     try:
-        # Load configuration and cnvert to Pydantic model
+        # Load configuration and convert to Pydantic model
         config_dict = load_config(args.config)
+        print(f"Loaded config: {config_dict}")
         config = Config(**config_dict)
-        
+        print(f"Config features: {config.features}")
+
+        if args.mode == 'select_features':
+            print("=== DEBUG: select_features mode triggered ===")
+        else:
+            print(f"=== DEBUG: different mode triggered: {args.mode} ===")
+                    
         # Setup logging using LoggingManager
         LoggingManager(config).setup_logging()        
         
@@ -217,43 +229,61 @@ def main():
         # Select features
         #---------------------------------
         if args.mode == 'select_features':
-            logger.info("Starting feature selection...")
-            
+            print("\n=== MAIN: FEATURE SELECTION MODE STARTING ===")
+            print(f"Config base features: {config.features.base_features}")
+            print(f"Config interactions: {config.features.interactions}")
+            print(f"Config control features: {config.features.control_features}")
+
             # Get train/test split
             train_data, holdout_data = load_or_create_split(dataset, config)
-            logger.info(f"Split dataset: {len(train_data.preferences)} train, "
-                    f"{len(holdout_data.preferences)} holdout preferences")
-            
-            # Get all features including interactions
+            print(f"Split complete: {len(train_data.preferences)} train, {len(holdout_data.preferences)} test")
+
+            # Get all features including interactions and control features
             base_features = config.features.base_features
-            interaction_features = [f"{f1}_x_{f2}" 
-                                    for f1, f2 in config.features.interactions]
-            all_features = base_features + interaction_features
-                        
-            logger.info(f"Features to evaluate:")
-            logger.info(f"  Base features: {len(base_features)} - {base_features}")
-            logger.info(f"  Interaction features: {len(interaction_features)} - {interaction_features}")
-            logger.info(f"  Total features: {len(all_features)}")
+            interaction_features = [f"{f1}_x_{f2}" for f1, f2 in config.features.interactions]
+            control_features = config.features.control_features
+            all_features = base_features + interaction_features + control_features
             
+            print("\nFeatures prepared:")
+            print(f"Base features: {base_features}")
+            print(f"Interaction features: {interaction_features}")
+            print(f"Control features: {control_features}")
+            print(f"All features: {all_features}")
+
             # Initialize model
             model = PreferenceModel(config=config)
             
-            # Select features using round-robin tournament
+            print("\nAbout to call model.select_features with:")
+            print(f"all_features: {all_features}")
             selected_features = model.select_features(train_data, all_features)
+            print(f"select_features returned: {selected_features}")
+                                    
+            # Select features using round-robin tournament
+            logger.info("Calling model.select_features()...")
+            selected_features = model.select_features(train_data, all_features)
+            logger.info(f"Feature selection completed. Selected features: {selected_features}")
             
             # Final fit with selected features
+            logger.info("Fitting final model with selected features...")
             model.fit(train_data, selected_features)
             
             # Save the trained model
             model_save_path = Path(config.feature_selection.model_file)
+            logger.info(f"Saving model to {model_save_path}")
             model.save(model_save_path)
             
             # Get final weights and metrics
             feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
 
             # Create comprehensive results DataFrame
-            results = []
+            logger.info("\n=== Starting feature evaluation loop ===")
+            logger.info(f"All features: {all_features}")
+
+            # Define selectable features BEFORE trying to log it
             selectable_features = [f for f in all_features if f not in config.features.control_features]
+            logger.info(f"Selectable features: {selectable_features}")
+
+            results = []
             for feature_name in selectable_features:  # Only evaluate non-control features
                 metrics = model.importance_calculator.evaluate_feature(
                     feature=feature_name,
@@ -263,7 +293,7 @@ def main():
                     current_selected_features=selected_features
                 )
                 
-                weight, std = feature_weights.get(feature_name, (0.0, 0.0))  # Use .get() with default
+                weight, std = feature_weights.get(feature_name, (0.0, 0.0))
                 components = feature_name.split('_x_')
                 
                 results.append({
@@ -276,6 +306,15 @@ def main():
                     'weight': weight,
                     'weight_std': std
                 })
+
+            # Log final results
+            logger.info("\n=== Feature evaluation complete ===")
+            logger.info(f"Final model state:")
+            logger.info(f"  Feature names: {model.feature_names}")
+            logger.info(f"  Selected features: {model.selected_features}")
+            logger.info(f"Results dataframe:")
+            for result in results:
+                logger.info(f"  {result}")
             
             # Save comprehensive metrics
             metrics_file = Path(config.feature_selection.metrics_file)
@@ -536,11 +575,11 @@ def main():
             logger.info(f"Training model on training data using {len(selected_features)} selected features...")
             model = PreferenceModel(config=config)
             model.fit(train_data, features=selected_features)
-            
+
             # Save the trained model
             model_save_path = Path(config.model.model_file)
-            feature_selection_model.save(model_save_path)
-            
+            model.save(model_save_path)  # Save the model we just trained
+
             # Evaluate on test data (model.evaluate will use all features including control)
             logger.info("Evaluating model on test data...")
             test_metrics = model.evaluate(test_data)

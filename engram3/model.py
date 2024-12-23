@@ -74,6 +74,7 @@ import pickle
 import copy
 from pathlib import Path
 from itertools import combinations
+import traceback
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -189,10 +190,14 @@ class PreferenceModel:
             if not features:
                 raise ValueError("No features provided and none available from dataset")
             
-            # Store features and feature names
-            self.feature_names = features
-            self.selected_features = features
+            # Ensure proper feature handling
+            control_features = self.config.features.control_features
+            main_features = [f for f in features if f not in control_features]
             
+            # Store unique features (no duplicates)
+            self.feature_names = list(dict.fromkeys(main_features + control_features))
+            self.selected_features = list(dict.fromkeys(main_features + control_features))
+
             # Prepare data
             stan_data = self.prepare_data(dataset, features)
             
@@ -298,6 +303,14 @@ class PreferenceModel:
                                                             
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
+        logger.info("=== Starting model evaluation ===")
+        logger.info(f"Called from: {traceback.extract_stack()[-2]}")  # Add this to see where evaluate is called from
+        logger.info("=== Starting model evaluation ===")
+        logger.info(f"Model state:")
+        logger.info(f"  Feature names: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
+        logger.info(f"  Selected features: {self.selected_features if hasattr(self, 'selected_features') else 'No selected_features'}")
+        logger.info(f"  Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
+    
         try:
             if not hasattr(self, 'fit_result') or self.fit_result is None:
                 logger.error("Model must be fit before evaluation")
@@ -929,11 +942,18 @@ class PreferenceModel:
         in the context of previously selected features plus control features.
         Control features are always included but not selected.
         """
-        # Initialize with control features - these are always included
+        print("\n=== select_features method starting ===")
+        print(f"Received all_features: {all_features}")
+        print(f"Config base_features: {self.config.features.base_features}")
+
+        # Initialize with control features
         self.selected_features = list(self.config.features.control_features)
-        self.importance_calculator.reset_normalization_factors()  # ADD THIS LINE HERE
-        main_features = [f for f in all_features if f not in self.config.features.control_features]
+        print(f"Initialized selected_features with controls: {self.selected_features}")
         
+        self.importance_calculator.reset_normalization_factors()
+        main_features = [f for f in all_features if f not in self.config.features.control_features]
+        print(f"Main features to evaluate: {main_features}")
+            
         while True:
             remaining_features = [f for f in main_features 
                                 if f not in self.selected_features]
@@ -970,7 +990,6 @@ class PreferenceModel:
                 )
                 logger.debug(f"Feature {feature} metrics: {metrics}")
                 feature_metrics[feature] = metrics
-
             # Compare each feature against all others
             win_counts = {f: 0 for f in remaining_features}
             for f1, f2 in combinations(remaining_features, 2):
@@ -1027,7 +1046,7 @@ class PreferenceModel:
             self.fit(dataset, self.selected_features)
         
         return self.selected_features
-
+    
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
         Compare two features based on their metrics.
@@ -1257,6 +1276,8 @@ class PreferenceModel:
             score2, unc2 = self.get_bigram_comfort_scores(bigram2)
             
            # Separate main and control feature effects
+            logger.debug(f"All features available: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
+            logger.debug(f"Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
             logger.debug(f"Selected features: {self.selected_features}")
             logger.debug(f"Control features: {self.config.features.control_features}")
             main_features = [f for f in self.selected_features 
@@ -1267,7 +1288,12 @@ class PreferenceModel:
             if not self.selected_features:
                 raise ValueError("No selected features available")
             if not main_features:
-                raise ValueError(f"No main features available for prediction. Selected features: {self.selected_features}, Control features: {self.config.features.control_features}")
+                logger.error(f"Prediction failed due to missing main features:")
+                logger.error(f"  All features available: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
+                logger.error(f"  Selected features: {self.selected_features}")
+                logger.error(f"  Control features: {control_features}")
+                logger.error(f"  Feature weights: {self.feature_weights}")
+                raise ValueError(f"No main features available for prediction. Selected features: {self.selected_features}, Control features: {control_features}")
 
             # Extract base features
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
@@ -1355,8 +1381,8 @@ class PreferenceModel:
                 rhat = summary[rhat_col].astype(float)
                 if (rhat > 1.1).any():
                     logger.warning("Some parameters have high R-hat (>1.1)")
-                    high_rhat_params = summary.index[rhat > 1.1]
-                    logger.warning(f"Parameters with high R-hat: {high_rhat_params}")
+                    #high_rhat_params = summary.index[rhat > 1.1]
+                    #logger.warning(f"Parameters with high R-hat: {high_rhat_params}")
                     
                     # Call diagnose() when there are convergence issues
                     if hasattr(self.fit_result, 'diagnose'):
@@ -1475,6 +1501,11 @@ class PreferenceModel:
     #--------------------------------------------
     def save(self, path: Path) -> None:
         """Save model state to file."""
+        logger.info("=== Saving model state ===")
+        logger.info(f"Selected features: {self.selected_features}")
+        logger.info(f"Feature names: {self.feature_names}")
+        logger.info(f"Feature weights: {self.feature_weights}")
+        
         save_dict = {
             'config': self.config,
             'feature_names': self.feature_names,
@@ -1485,18 +1516,25 @@ class PreferenceModel:
         }
         with open(path, 'wb') as f:
             pickle.dump(save_dict, f)
-            
+        logger.info(f"Model saved to {path}")
+
     @classmethod
     def load(cls, path: Path) -> 'PreferenceModel':
         """Load model state from file."""
+        logger.info("=== Loading model state ===")
         with open(path, 'rb') as f:
             save_dict = pickle.load(f)
-            
+        
         model = cls(config=save_dict['config'])
         model.feature_names = save_dict['feature_names']
         model.selected_features = save_dict['selected_features']
         model.feature_weights = save_dict['feature_weights']
         model.fit_result = save_dict['fit_result']
         model.interaction_metadata = save_dict['interaction_metadata']
+        
+        logger.info(f"Loaded model from {path}")
+        logger.info(f"Selected features: {model.selected_features}")
+        logger.info(f"Feature names: {model.feature_names}")
+        logger.info(f"Feature weights: {model.feature_weights}")
         
         return model
