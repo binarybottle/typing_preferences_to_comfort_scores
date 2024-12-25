@@ -69,21 +69,10 @@ class FeatureConfig:
 #------------------------------------------------
 # feature_importance.py
 #------------------------------------------------
-class FeatureSelectionConfig(BaseModel):
-    """Validate feature selection configuration."""
-    metric_weights: Dict[str, float]
-    metrics_file: str
-    model_file: str
-    
-    @validator('metric_weights')
-    def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
-        total = sum(v.values())
-        if not np.isclose(total, 1.0, rtol=1e-5):
-            raise ValueError(f"Metric weights must sum to 1.0, got {total}")
-        return v
-    
-    class Config:
-        validate_assignment = True
+class FeatureSelectionThresholds(BaseModel):
+    model_effect: float = 0.2
+    effect_consistency: float = 0.5
+    predictive_power: float = 0.1
 
 #------------------------------------------------
 # feature_visualization.py
@@ -142,8 +131,26 @@ class ModelSettings(BaseModel):
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
     metric_weights: Dict[str, float]
+    thresholds: FeatureSelectionThresholds  # Add this field
+    min_metrics_passed: int = Field(default=2)
     metrics_file: str
     model_file: str
+
+    @validator('metric_weights')
+    def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
+        total = sum(v.values())
+        if not np.isclose(total, 1.0, rtol=1e-5):
+            raise ValueError(f"Metric weights must sum to 1.0, got {total}")
+        return v
+
+    @validator('min_metrics_passed')
+    def validate_min_metrics(cls, v: int) -> int:
+        if v not in [2, 3]:
+            raise ValueError('min_metrics_passed must be 2 or 3')
+        return v
+
+    class Config:
+        validate_assignment = True
 
 class FeaturesConfig(BaseModel):
     """Configuration for features and their interactions."""

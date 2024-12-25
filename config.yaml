@@ -28,16 +28,21 @@ feature_selection:
     model_effect: 0.4                   # Weight for feature's effect in model
     effect_consistency: 0.3             # Weight for consistency of effect across splits (cross-validation stability)
     predictive_power: 0.3               # Weight for prediction improvement
+  thresholds:                           # Selection criteria thresholds
+    model_effect: 0.2                   # Minimum normalized effect size
+    effect_consistency: 0.5             # Minimum effect consistency
+    predictive_power: 0.1               # Minimum improvement over baseline
+  min_metrics_passed: 2                 # Number of metrics that must pass thresholds (2 or 3)
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
 features:
-  base_features:                      # Core features for analysis
-    - same_finger                     # Whether bigram uses same finger
+  base_features:                        # Core features for analysis
+    - same_finger                       # Whether bigram uses same finger
     - sum_finger_values
   interactions:
     - [same_finger, sum_finger_values]
-  control_features:                   # Features to control for but not analyze
+  control_features:                     # Features to control for but not analyze
     - bigram_frequency                  # Bigram frequency in the English language
 
 #-----------------------------------------------------------------------

@@ -30,7 +30,7 @@ from pathlib import Path
 from collections import defaultdict
 import copy
 
-from engram3.utils.config import Config, FeatureSelectionConfig
+from engram3.utils.config import Config, FeatureSelectionSettings
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from engram3.model import PreferenceModel
@@ -43,16 +43,28 @@ class FeatureImportanceCalculator:
     """Centralized feature importance calculation."""
     
     def __init__(self, config: Union[Dict, Config], model: 'PreferenceModel'):
+        """Initialize the feature importance calculator.
+        
+        Args:
+            config: Either a dictionary or Config instance containing configuration
+            model: Reference to the PreferenceModel instance
+        """
         logger.debug("Initializing FeatureImportanceCalculator")
+        
+        # Handle different config input types
         if isinstance(config, dict):
             feature_selection_config = config.get('feature_selection', {})
             self.features = config.get('features', {})
+            # Convert to FeatureSelectionSettings
+            logger.debug(f"Converting dict config: {feature_selection_config}")
+            self.config = FeatureSelectionSettings(**feature_selection_config)
         else:
-            feature_selection_config = config.feature_selection.dict()
+            # We already have a properly validated Config instance
+            logger.debug("Using existing Config instance")
+            self.config = config.feature_selection  # Already a FeatureSelectionSettings instance
             self.features = config.features
         
         logger.debug(f"Features from config: {self.features}")
-        self.config = FeatureSelectionConfig(**feature_selection_config)
         logger.debug(f"Feature selection config: {self.config}")
         
         # Store model reference
@@ -72,12 +84,17 @@ class FeatureImportanceCalculator:
             except Exception as e:
                 logger.warning(f"Could not set Stan model executable permissions: {str(e)}")
 
-        # Add global normalization tracking
+        # Initialize tracking variables
+        self._init_tracking_variables()
+
+    def _init_tracking_variables(self):
+        """Initialize all tracking variables for feature importance calculation."""
+        # Global tracking
         self._max_effect_seen = 0.0
         self._max_consistency_seen = 0.0
         self._baseline_accuracy = None  # Will be set on first evaluation
 
-        # Separate tracking for control vs main feature normalization
+        # Separate tracking for control vs main features
         self._max_effect = {
             'control': 0.0,  # For normalizing control features
             'main': 0.0      # For normalizing main features
@@ -87,7 +104,7 @@ class FeatureImportanceCalculator:
             'main': 0.0
         }
         self._baseline_accuracy = None
-
+        
     def reset_normalization_factors(self):
         """Reset global normalization tracking at start of feature selection."""
         self._max_effect = {'control': 0.0, 'main': 0.0}

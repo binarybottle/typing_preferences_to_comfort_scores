@@ -947,7 +947,17 @@ class PreferenceModel:
         print("\n=== select_features method starting ===")
         print(f"Received all_features: {all_features}")
         print(f"Config base_features: {self.config.features.base_features}")
-
+        
+        # Get thresholds from config
+        thresholds = self.config.feature_selection.thresholds
+        min_metrics = self.config.feature_selection.min_metrics_passed
+        
+        logger.info(f"Selection criteria:")
+        logger.info(f"  Model effect threshold: {thresholds.model_effect}")
+        logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
+        logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
+        logger.info(f"  Required passing metrics: {min_metrics}/3")
+        
         # Initialize with control features
         self.selected_features = list(self.config.features.control_features)
         print(f"Initialized selected_features with controls: {self.selected_features}")
@@ -958,7 +968,7 @@ class PreferenceModel:
             
         while True:
             remaining_features = [f for f in main_features 
-                                if f not in self.selected_features]
+                                  if f not in self.selected_features]
             
             if not remaining_features:
                 break
@@ -972,7 +982,6 @@ class PreferenceModel:
             # Evaluate all remaining features in context of current set
             feature_metrics = {}
             for feature in remaining_features:
-                # Add debug logging here:
                 logger.debug(f"\nEvaluating feature: {feature}")
                 
                 # Create candidate feature set with current feature
@@ -992,6 +1001,7 @@ class PreferenceModel:
                 )
                 logger.debug(f"Feature {feature} metrics: {metrics}")
                 feature_metrics[feature] = metrics
+            
             # Compare each feature against all others
             win_counts = {f: 0 for f in remaining_features}
             for f1, f2 in combinations(remaining_features, 2):
@@ -1004,23 +1014,37 @@ class PreferenceModel:
             best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
             best_metrics = feature_metrics[best_feature]
             
-            logger.info(f"\nFeature comparison results:")
+            logger.debug(f"\nFeature comparison results:")
             for feature, wins in win_counts.items():
                 metrics = feature_metrics[feature]
-                logger.info(f"\n{feature}:")
-                logger.info(f"  Wins: {wins}")
-                logger.info(f"  Effect: {metrics['model_effect']:.3f}")
-                logger.info(f"  Consistency: {metrics['effect_consistency']:.3f}")
-                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f}")
-                
-            if (best_metrics['effect_consistency'] > 0.5 and 
-                best_metrics['predictive_power'] > 0.1):
-                logger.debug(f"Feature {best_feature} meets criteria:")
-                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
-                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
+                logger.debug(f"\n{feature}:")
+                logger.debug(f"  Wins: {wins}")
+                logger.debug(f"  Effect: {metrics['model_effect']:.3f}")
+                logger.debug(f"  Consistency: {metrics['effect_consistency']:.3f}")
+                logger.debug(f"  Predictive power: {metrics['predictive_power']:.3f}")
+            
+            # Count metrics that pass thresholds
+            metrics_passed = 0
+            if best_metrics['model_effect'] > thresholds.model_effect:
+                metrics_passed += 1
+            if best_metrics['effect_consistency'] > thresholds.effect_consistency:
+                metrics_passed += 1
+            if best_metrics['predictive_power'] > thresholds.predictive_power:
+                metrics_passed += 1
+
+            logger.info(f"\nFeature {best_feature} metrics evaluation:")
+            logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
+            logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
+            logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
+            logger.info(f"  Metrics passed: {metrics_passed}/3 (need {min_metrics})")
+
+            # Select if enough metrics pass thresholds
+            """
+            if metrics_passed >= min_metrics:
                 self.selected_features.append(best_feature)
                 self.fit(dataset, self.selected_features)
                 logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
+                logger.info(f"  Passed {metrics_passed} out of 3 metrics")
                 
                 logger.info("\nCurrent model state:")
                 weights = self.get_feature_weights()
@@ -1029,10 +1053,9 @@ class PreferenceModel:
                     w, s = weights.get(feat, (0.0, 0.0))
                     logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
             else:
-                logger.debug(f"Feature {best_feature} fails criteria:")
-                logger.debug(f"  Effect consistency: {best_metrics['effect_consistency']:.3f}")
-                logger.debug(f"  Predictive power: {best_metrics['predictive_power']:.3f}")
+                logger.info(f"Feature {best_feature} failed selection criteria ({metrics_passed}/{min_metrics} metrics passed)")
                 break
+            """
         
         # Ensure at least one main feature is selected
         if not any(f not in self.config.features.control_features 
