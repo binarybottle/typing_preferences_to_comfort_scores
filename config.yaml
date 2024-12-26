@@ -67,18 +67,19 @@ __model_slow: &slow
   chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 __model_fast: &fast  
-  chains: 1                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 50                            # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 100                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 500                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 500                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  max_treedepth: 8                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 model:                                  # Bayesian model parameters (Stan)
   #<<: *slow                             # Change to *fast for fast settings
   <<: *fast                             # Change to *slow for slow settings
-  adapt_delta: 0.99                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores

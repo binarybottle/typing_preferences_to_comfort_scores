@@ -601,155 +601,206 @@ class PreferenceModel:
         cache[key] = value
     
     def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
-        """
-        Prepare data for Stan model with proper validation and cleaning.
-        Handles both main features and control features separately.
-        """
-        try:
-            # Get feature names and separate control features
-            self.feature_names = features if features is not None else dataset.get_feature_names()
-            control_features = self.config.features.control_features
-            
-            # Main features are those not in control_features - deduplicate
-            main_features = list(dict.fromkeys(
-                [f for f in self.feature_names if f not in control_features]
-            ))
-            
-            # Check if this is a control-only model
-            is_control_only = not main_features and all(f in control_features for f in self.feature_names)
-            
-            if not is_control_only and not main_features:
-                raise ValueError("No main features provided for model fitting")
+            """
+            Prepare data for Stan model with standardization, validation and cleaning.
+            Handles both main features and control features separately.
+            """
+            try:
+                # Get feature names and separate control features
+                self.feature_names = features if features is not None else dataset.get_feature_names()
+                control_features = self.config.features.control_features
                 
-            logger.info(f"Preparing data:")
-            logger.info(f"  Main features ({len(main_features)}): {main_features}")
-            logger.info(f"  Control features ({len(control_features)}): {control_features}")
-            
-            # Create participant ID mapping
-            participant_ids = sorted(list(dataset.participants))
-            participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
-            
-            # Initialize arrays for both main and control features
-            X1, X2 = [], []  # Main feature matrices
-            C1, C2 = [], []  # Control feature matrices
-            participant = []
-            y = []
-
-            skipped_count = 0
-            for pref in dataset.preferences:
-                try:
-                    # Process main features or add dummy feature for control-only case
-                    if is_control_only:
-                        features1_main = [0.0]  # Dummy feature
-                        features2_main = [0.0]
-                    else:
-                        features1_main = []
-                        features2_main = []
+                # Main features are those not in control_features - deduplicate
+                main_features = list(dict.fromkeys(
+                    [f for f in self.feature_names if f not in control_features]
+                ))
+                
+                # Check if this is a control-only model
+                is_control_only = not main_features and all(f in control_features for f in self.feature_names)
+                
+                if not is_control_only and not main_features:
+                    raise ValueError("No main features provided for model fitting")
+                    
+                logger.info(f"Preparing data:")
+                logger.info(f"  Main features ({len(main_features)}): {main_features}")
+                logger.info(f"  Control features ({len(control_features)}): {control_features}")
+                
+                # Create participant ID mapping
+                participant_ids = sorted(list(dataset.participants))
+                participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
+                
+                # Track feature statistics for standardization
+                from collections import defaultdict
+                feature_stats = defaultdict(lambda: {'values': [], 'mean': None, 'std': None})
+                
+                # First pass: collect values for standardization
+                logger.info("First pass: collecting values for standardization")
+                for pref in dataset.preferences:
+                    # Collect main feature values
+                    if not is_control_only:
                         for feature in main_features:
                             if '_x_' in feature:
-                                # Handle interaction features
+                                # Handle interaction terms
                                 f1, f2 = feature.split('_x_')
-                                feat1 = pref.features1.get(f1, 0.0) * pref.features1.get(f2, 0.0)
-                                feat2 = pref.features2.get(f1, 0.0) * pref.features2.get(f2, 0.0)
+                                # Collect base feature values for interactions
+                                feat1_base1 = pref.features1.get(f1, 0.0)
+                                feat1_base2 = pref.features1.get(f2, 0.0)
+                                feat2_base1 = pref.features2.get(f1, 0.0)
+                                feat2_base2 = pref.features2.get(f2, 0.0)
+                                # Store base features
+                                feature_stats[f1]['values'].extend([feat1_base1, feat2_base1])
+                                feature_stats[f2]['values'].extend([feat1_base2, feat2_base2])
                             else:
                                 # Handle base features
                                 feat1 = pref.features1.get(feature, 0.0)
                                 feat2 = pref.features2.get(feature, 0.0)
-                            features1_main.append(feat1)
-                            features2_main.append(feat2)
-
-                    # Process control features
-                    features1_control = []
-                    features2_control = []
+                                feature_stats[feature]['values'].extend([feat1, feat2])
+                    
+                    # Collect control feature values
                     for feature in control_features:
                         feat1 = pref.features1.get(feature, 0.0)
                         feat2 = pref.features2.get(feature, 0.0)
-                        features1_control.append(feat1)
-                        features2_control.append(feat2)
-
-                    X1.append(features1_main)
-                    X2.append(features2_main)
-                    C1.append(features1_control)
-                    C2.append(features2_control)
-                    participant.append(participant_map[pref.participant_id])
-                    y.append(1 if pref.preferred else 0)
-
-                except Exception as e:
-                    logger.warning(f"Skipping preference due to error: {str(e)}")
-                    skipped_count += 1
-                    continue
-
-            if skipped_count > 0:
-                logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
-
-            if not (X1 or C1):  # Allow either main or control features to be present
-                raise ValueError("No valid preferences after data preparation")
-
-            # Convert to numpy arrays
-            X1 = np.array(X1, dtype=np.float64)
-            X2 = np.array(X2, dtype=np.float64)
-            C1 = np.array(C1, dtype=np.float64)
-            C2 = np.array(C2, dtype=np.float64)
-            participant = np.array(participant, dtype=np.int32)
-            y = np.array(y, dtype=np.int32)
-
-            # Adjust validation for control-only case
-            if not is_control_only:
-                if X1.shape[1] != len(main_features):
-                    raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
-            else:
-                if X1.shape[1] != 1:  # Check dummy feature dimension
-                    raise ValueError("Invalid dummy feature dimension for control-only model")
-                    
-            if C1.shape[1] != len(control_features):
-                raise ValueError(f"Control feature dimension mismatch: {C1.shape[1]} != {len(control_features)}")
+                        feature_stats[feature]['values'].extend([feat1, feat2])
                 
-            if np.any(np.isnan(X1)) or np.any(np.isnan(X2)) or np.any(np.isnan(C1)) or np.any(np.isnan(C2)):
-                raise ValueError("NaN values found in feature matrices")
+                # Calculate standardization parameters
+                logger.info("Computing standardization parameters")
+                for feature, stats in feature_stats.items():
+                    values = np.array(stats['values'])
+                    stats['mean'] = float(np.mean(values))
+                    stats['std'] = float(np.std(values))
+                    if stats['std'] == 0 or np.isnan(stats['std']):
+                        logger.warning(f"Feature {feature} has zero/NaN std dev, setting to 1.0")
+                        stats['std'] = 1.0
 
-            # Log dimensions
-            logger.info(f"Data dimensions:")
-            logger.info(f"  N (preferences): {len(y)}")
-            logger.info(f"  P (participants): {len(participant_ids)}")
-            if is_control_only:
-                logger.info("  Using dummy main feature for control-only model")
-            logger.info(f"  F (main features): {1 if is_control_only else len(main_features)}")
-            logger.info(f"  C (control features): {len(control_features)}")
+                # Second pass: build standardized matrices
+                logger.info("Second pass: building standardized matrices")
+                X1, X2 = [], []  # Main feature matrices
+                C1, C2 = [], []  # Control feature matrices
+                participant = []
+                y = []
+                
+                skipped_count = 0
+                for pref in dataset.preferences:
+                    try:
+                        # Process main features
+                        if is_control_only:
+                            features1_main = [0.0]  # Dummy feature
+                            features2_main = [0.0]
+                        else:
+                            features1_main = []
+                            features2_main = []
+                            for feature in main_features:
+                                if '_x_' in feature:
+                                    # Handle interaction features
+                                    f1, f2 = feature.split('_x_')
+                                    # Get standardized base features
+                                    feat1_base1 = (pref.features1.get(f1, 0.0) - feature_stats[f1]['mean']) / feature_stats[f1]['std']
+                                    feat1_base2 = (pref.features1.get(f2, 0.0) - feature_stats[f2]['mean']) / feature_stats[f2]['std']
+                                    feat2_base1 = (pref.features2.get(f1, 0.0) - feature_stats[f1]['mean']) / feature_stats[f1]['std']
+                                    feat2_base2 = (pref.features2.get(f2, 0.0) - feature_stats[f2]['mean']) / feature_stats[f2]['std']
+                                    # Multiply standardized values for interaction
+                                    feat1 = feat1_base1 * feat1_base2
+                                    feat2 = feat2_base1 * feat2_base2
+                                else:
+                                    # Standardize base features
+                                    feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                    feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                
+                                features1_main.append(feat1)
+                                features2_main.append(feat2)
 
-            # Prepare Stan data
-            stan_data = {
-                'N': len(y),
-                'P': len(participant_ids),
-                'F': 1 if is_control_only else len(main_features),
-                'C': len(control_features),
-                'X1': X1,
-                'X2': X2,
-                'C1': C1,
-                'C2': C2,
-                'participant': participant,
-                'y': y,
-                'feature_scale': self.config.model.feature_scale,
-                'participant_scale': self.config.model.participant_scale
-            }
+                        # Process control features
+                        features1_control = []
+                        features2_control = []
+                        for feature in control_features:
+                            feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                            feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                            features1_control.append(feat1)
+                            features2_control.append(feat2)
 
-            # Log statistics
-            logger.info("\nFeature summary statistics:")
-            if not is_control_only:
-                for i, feature in enumerate(main_features):
-                    logger.info(f"{feature} (main):")
-                    logger.info(f"  X1 - mean: {np.mean(X1[:, i]):.3f}, std: {np.std(X1[:, i]):.3f}")
-                    logger.info(f"  X2 - mean: {np.mean(X2[:, i]):.3f}, std: {np.std(X2[:, i]):.3f}")
-            for i, feature in enumerate(control_features):
-                logger.info(f"{feature} (control):")
-                logger.info(f"  C1 - mean: {np.mean(C1[:, i]):.3f}, std: {np.std(C1[:, i]):.3f}")
-                logger.info(f"  C2 - mean: {np.mean(C2[:, i]):.3f}, std: {np.std(C2[:, i]):.3f}")
+                        X1.append(features1_main)
+                        X2.append(features2_main)
+                        C1.append(features1_control)
+                        C2.append(features2_control)
+                        participant.append(participant_map[pref.participant_id])
+                        y.append(1 if pref.preferred else 0)
 
-            return stan_data
+                    except Exception as e:
+                        logger.warning(f"Skipping preference due to error: {str(e)}")
+                        skipped_count += 1
+                        continue
 
-        except Exception as e:
-            logger.error(f"Error preparing data: {str(e)}")
-            raise
-                                        
+                if skipped_count > 0:
+                    logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
+
+                # Convert to numpy arrays
+                X1 = np.array(X1, dtype=np.float64)
+                X2 = np.array(X2, dtype=np.float64)
+                C1 = np.array(C1, dtype=np.float64)
+                C2 = np.array(C2, dtype=np.float64)
+                participant = np.array(participant, dtype=np.int32)
+                y = np.array(y, dtype=np.int32)
+
+                # Verify dimensions and check for NaNs
+                if not is_control_only:
+                    if X1.shape[1] != len(main_features):
+                        raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
+                else:
+                    if X1.shape[1] != 1:
+                        raise ValueError("Invalid dummy feature dimension for control-only model")
+                        
+                if C1.shape[1] != len(control_features):
+                    raise ValueError(f"Control feature dimension mismatch: {C1.shape[1]} != {len(control_features)}")
+                    
+                if np.any(np.isnan(X1)) or np.any(np.isnan(X2)) or np.any(np.isnan(C1)) or np.any(np.isnan(C2)):
+                    raise ValueError("NaN values found in feature matrices")
+
+                # Log dimensions and statistics
+                logger.info(f"\nData dimensions:")
+                logger.info(f"  N (preferences): {len(y)}")
+                logger.info(f"  P (participants): {len(participant_ids)}")
+                if is_control_only:
+                    logger.info("  Using dummy main feature for control-only model")
+                logger.info(f"  F (main features): {1 if is_control_only else len(main_features)}")
+                logger.info(f"  C (control features): {len(control_features)}")
+
+                # Log original and standardized statistics
+                logger.info("\nFeature statistics:")
+                if not is_control_only:
+                    for i, feature in enumerate(main_features):
+                        logger.info(f"\n{feature} (main):")
+                        if feature in feature_stats:
+                            logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
+                                    f"std: {feature_stats[feature]['std']:.3f}")
+                        logger.info(f"  Standardized - mean: {np.mean(X1[:, i]):.3f}, "
+                                f"std: {np.std(X1[:, i]):.3f}")
+
+                for i, feature in enumerate(control_features):
+                    logger.info(f"\n{feature} (control):")
+                    logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
+                            f"std: {feature_stats[feature]['std']:.3f}")
+                    logger.info(f"  Standardized - mean: {np.mean(C1[:, i]):.3f}, "
+                            f"std: {np.std(C1[:, i]):.3f}")
+
+                return {
+                    'N': len(y),
+                    'P': len(participant_ids),
+                    'F': 1 if is_control_only else len(main_features),
+                    'C': len(control_features),
+                    'X1': X1,
+                    'X2': X2,
+                    'C1': C1,
+                    'C2': C2,
+                    'participant': participant,
+                    'y': y,
+                    'feature_scale': self.config.model.feature_scale,
+                    'participant_scale': self.config.model.participant_scale
+                }
+
+            except Exception as e:
+                logger.error(f"Error preparing data: {str(e)}")
+                raise
+                                                    
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -1379,33 +1430,53 @@ class PreferenceModel:
             )
                 
     def _check_diagnostics(self) -> None:
-        """Check MCMC diagnostics with proper type handling."""
-        try:
-            if hasattr(self.fit_result, 'diagnose'):
-                diagnostic_info = self.fit_result.diagnose()
-                logger.debug("Diagnostic Information:")
-                logger.debug(diagnostic_info)
-            
-            summary = self.fit_result.summary()
-            rhat_col = next((col for col in summary.columns 
-                            if any(x in col.lower() 
-                                for x in ['r_hat', 'rhat', 'r-hat'])), None)
-            
-            if rhat_col:
-                rhat = summary[rhat_col].astype(float)
-                if (rhat > 1.1).any():
-                    logger.warning("Some parameters have high R-hat (>1.1)")
-                    #high_rhat_params = summary.index[rhat > 1.1]
-                    #logger.warning(f"Parameters with high R-hat: {high_rhat_params}")
+            """Check MCMC diagnostics with concise reporting."""
+            try:
+                # Get summary statistics
+                summary = self.fit_result.summary()
+                
+                # Check R-hat convergence
+                rhat_col = next((col for col in summary.columns 
+                            if any(x in col.lower() for x in ['r_hat', 'rhat', 'r-hat'])), 
+                            None)
+                
+                if rhat_col:
+                    rhat = summary[rhat_col].astype(float)
+                    high_rhat_mask = rhat > 1.1
+                    if high_rhat_mask.any():
+                        n_high_rhat = high_rhat_mask.sum()
+                        n_total = len(rhat)
+                        logger.warning(f"{n_high_rhat}/{n_total} parameters have high R-hat (>1.1)")
+
+                # Check treedepth and divergences
+                if hasattr(self.fit_result, 'method_variables'):
+                    method_vars = self.fit_result.method_variables()
                     
-                    # Call diagnose() when there are convergence issues
-                    if hasattr(self.fit_result, 'diagnose'):
-                        logger.info("Running detailed diagnostics...")
-                        self.fit_result.diagnose()
-                        
-        except Exception as e:
-            logger.warning(f"Error in diagnostics: {str(e)}")
-                                        
+                    # Check maximum treedepth
+                    treedepth = method_vars.get('treedepth__', None)
+                    if treedepth is not None:
+                        max_treedepth = self.config.model.max_treedepth
+                        max_treedepth_hits = (treedepth >= max_treedepth).mean()
+                        if max_treedepth_hits > 0.1:  # More than 10% hitting max
+                            logger.warning(f"{max_treedepth_hits*100:.1f}% of iterations hit max treedepth")
+                    
+                    # Check divergences
+                    divergent = method_vars.get('divergent__', None)
+                    if divergent is not None:
+                        n_divergent = divergent.sum()
+                        if n_divergent > 0:
+                            divergence_rate = n_divergent / len(divergent) * 100
+                            logger.warning(f"{divergence_rate:.1f}% divergent transitions")
+
+                # If there are any issues, run full diagnostics but suppress output
+                if hasattr(self.fit_result, 'diagnose'):
+                    diagnostic_info = self.fit_result.diagnose()
+                    # Store diagnostic info but don't display it
+                    self._diagnostic_info = diagnostic_info
+                            
+            except Exception as e:
+                logger.warning(f"Error in diagnostics: {str(e)}")
+                                                                        
     def _compute_model_metrics(self) -> Dict[str, float]:
         """Compute model-specific performance metrics."""
         metrics = {}
