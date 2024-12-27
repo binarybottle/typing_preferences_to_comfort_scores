@@ -240,7 +240,7 @@ def main():
 
             # Get all features including interactions and control features
             base_features = config.features.base_features
-            interaction_features = [f"{f1}_x_{f2}" for f1, f2 in config.features.interactions]
+            interaction_features = config.features.get_all_interaction_names()
             control_features = config.features.control_features
             all_features = base_features + interaction_features + control_features
             

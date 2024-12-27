@@ -166,11 +166,16 @@ class FeaturesConfig(BaseModel):
         
         base_features = values['base_features']
         for interaction in v:
-            if len(interaction) != 2:
-                raise ValueError(f"Each interaction must have exactly 2 features: {interaction}")
+            # Allow 2 or more features in interactions
+            if len(interaction) < 2:
+                raise ValueError(f"Each interaction must have at least 2 features: {interaction}")
+            # Check that each feature in the interaction is a valid base feature
             for feature in interaction:
                 if feature not in base_features:
                     raise ValueError(f"Interaction feature {feature} not in base_features")
+            # Ensure no duplicate features in a single interaction
+            if len(set(interaction)) != len(interaction):
+                raise ValueError(f"Duplicate features in interaction: {interaction}")
         return v
 
     @validator('control_features')
@@ -185,9 +190,18 @@ class FeaturesConfig(BaseModel):
             raise ValueError(f"Control features overlap with base features: {overlap}")
         return v
 
+    def create_interaction_name(self, features: List[str]) -> str:
+        """Create standardized name for an interaction."""
+        return '_x_'.join(sorted(features))  # Sort for consistency
+
+    def get_all_interaction_names(self) -> List[str]:
+        """Get standardized names for all interactions."""
+        return [self.create_interaction_name(interaction) 
+                for interaction in self.interactions]
+
     class Config:
         validate_assignment = True
-
+        
 class DataConfig(BaseModel):
     """Data configuration."""
     input_file: str

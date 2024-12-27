@@ -75,6 +75,7 @@ import copy
 from pathlib import Path
 from itertools import combinations
 import traceback
+from collections import defaultdict
 
 from engram3.utils.config import (
     Config, NotFittedError, FeatureError,
@@ -543,19 +544,20 @@ class PreferenceModel:
                     if pref.typing_time2 is not None:
                         all_times.append(pref.typing_time2)
                 
-                time_mean = np.mean(all_times)
-                time_std = np.std(all_times)
+                if all_times:  # Only calculate if we have valid times
+                    time_mean = np.mean(all_times)
+                    time_std = np.std(all_times)
+                else:
+                    time_mean = 0.0
+                    time_std = 1.0
                 
                 for pref in dataset.preferences:
                     time1 = pref.typing_time1
                     time2 = pref.typing_time2
                     
-                    # Use mean for None values
-                    if time1 is None or time2 is None:
-                        valid_times = [t for t in [time1, time2] if t is not None]
-                        mean_time = np.mean(valid_times) if valid_times else time_mean
-                        time1 = mean_time if time1 is None else time1
-                        time2 = mean_time if time2 is None else time2
+                    # Replace None values with mean
+                    time1 = time_mean if time1 is None else time1
+                    time2 = time_mean if time2 is None else time2
                     
                     # Z-score normalize timing values
                     time1_norm = (time1 - time_mean) / time_std
@@ -565,7 +567,7 @@ class PreferenceModel:
                     differences.append(time1_norm - time2_norm)
                     raw_features[pref.bigram1] = time1_norm
                     raw_features[pref.bigram2] = time2_norm
-                    
+
             else:
                 # All other features (including control features) are already normalized
                 for pref in dataset.preferences:
@@ -630,7 +632,6 @@ class PreferenceModel:
                 participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
                 
                 # Track feature statistics for standardization
-                from collections import defaultdict
                 feature_stats = defaultdict(lambda: {'values': [], 'mean': None, 'std': None})
                 
                 # First pass: collect values for standardization
@@ -681,12 +682,21 @@ class PreferenceModel:
                 # Calculate standardization parameters
                 logger.info("Computing standardization parameters")
                 for feature, stats in feature_stats.items():
+
                     values = np.array(stats['values'])
-                    stats['mean'] = float(np.mean(values))
-                    stats['std'] = float(np.std(values))
-                    if stats['std'] == 0 or np.isnan(stats['std']):
-                        logger.warning(f"Feature {feature} has zero/NaN std dev, setting to 1.0")
+
+                    # Filter out None values before calculating statistics
+                    values = np.array([v for v in values if v is not None])
+
+                    if len(values) > 0:
+                        stats['mean'] = float(np.mean(values))
+                        stats['std'] = float(np.std(values)) if len(values) > 1 else 1.0
+                    else:
+                        # Handle case where all values are None
+                        stats['mean'] = 0.0
                         stats['std'] = 1.0
+
+                    logger.debug(f"Feature {feature} stats - mean: {stats['mean']}, std: {stats['std']}")
 
                 # Second pass: build standardized matrices
                 logger.info("Second pass: building standardized matrices")

@@ -136,9 +136,15 @@ class FeatureImportanceCalculator:
 
                 # Show clear feature evaluation header
                 logger.info(f"\n{'='*32}")
-                logger.info(f"EVALUATING: {self._format_interaction_name(feature)}")
-                if current_selected_features:
-                    logger.info(f"Context: {', '.join(current_selected_features)}")
+                # Add better interaction display
+                if '_x_' in feature:
+                    components = feature.split('_x_')
+                    logger.info(f"EVALUATING {len(components)}-WAY INTERACTION:")
+                    logger.info(f"  {' × '.join(components)}")
+                else:
+                    logger.info(f"EVALUATING BASE FEATURE:")
+                    logger.info(f"  {feature}")
+                logger.info(f"Context: {', '.join(current_selected_features)}")
                 logger.info(f"{'-'*32}")
 
                 # Set up test features silently
@@ -256,7 +262,7 @@ class FeatureImportanceCalculator:
                                     current_features: List[str]) -> float:
         """
         Calculate consistency of feature effect across cross-validation splits.
-        Uses current selected features to capture interaction effects.
+        Handles both base features and higher-order interactions.
         
         Args:
             feature: Feature to evaluate
@@ -286,10 +292,19 @@ class FeatureImportanceCalculator:
                 if feature in weights:
                     effects.append(weights[feature][0])
                 
-                # Get interaction effects if any
+                # Handle n-way interactions
                 for f in weights:
-                    if '_x_' in f and feature in f:
-                        interaction_effects[f].append(weights[f][0])
+                    if '_x_' in f:
+                        components = f.split('_x_')
+                        # Check if this feature participates in the interaction
+                        if feature in components:
+                            interaction_effects[f].append(weights[f][0])
+                            # If this is an interaction being evaluated, also track component effects
+                            if f == feature:
+                                for component in components:
+                                    if component in weights and component != feature:
+                                        interaction_effects[f'{feature}_with_{component}'].append(
+                                            weights[component][0])
             
             if not effects and not interaction_effects:
                 return 0.0
@@ -303,7 +318,7 @@ class FeatureImportanceCalculator:
                     mad = np.mean(np.abs(effects - np.mean(effects)))
                     base_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
             
-            # Calculate consistency for interactions
+            # Calculate consistency for interactions and components
             interaction_consistencies = []
             for effects in interaction_effects.values():
                 if effects:
@@ -316,13 +331,20 @@ class FeatureImportanceCalculator:
             
             # Combine base and interaction consistencies
             if interaction_consistencies:
+                # Weight the consistencies by the number of interacting features
+                if '_x_' in feature:
+                    n_components = len(feature.split('_x_'))
+                    # Give more weight to higher-order interaction consistency
+                    weights = [n_components if i == 0 else 1 for i in range(len(interaction_consistencies))]
+                    return float(np.average([base_consistency] + interaction_consistencies, 
+                                        weights=weights))
                 return float(np.mean([base_consistency] + interaction_consistencies))
             return float(base_consistency)
             
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-                            
+                                    
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {
