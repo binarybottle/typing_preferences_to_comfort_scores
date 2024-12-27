@@ -409,13 +409,13 @@ class BigramRecommender:
         logger.info(f"Saved bigram recommendation visualization to {plot_path}")
                                     
     def _calculate_pair_scores(self, pair: Tuple[str, str], 
-                             feature_metrics: pd.DataFrame,
-                             weights: Dict[str, float]) -> Dict[str, float]:
+                            feature_metrics: pd.DataFrame,
+                            weights: Dict[str, float]) -> Dict[str, float]:
         """Calculate all scores for a bigram pair."""
         try:
             # Get prediction uncertainty
-            pred_mean, pred_std = self.model.predict_preference(*pair)
-            prediction_score = pred_std
+            prediction = self.model.predict_preference(*pair)
+            prediction_score = prediction.uncertainty  # Use uncertainty from ModelPrediction
             
             # Get comfort score uncertainties
             comfort1_mean, comfort1_std = self.model.get_bigram_comfort_scores(pair[0])

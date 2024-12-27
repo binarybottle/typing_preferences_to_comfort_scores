@@ -402,10 +402,11 @@ class PreferenceModel:
                 
                 for pref in val_data.preferences:
                     try:
-                        pred_mean, pred_std = self.predict_preference(
-                            pref.bigram1, pref.bigram2)
-                        if not np.isnan(pred_mean):
-                            val_predictions.append(pred_mean)
+                        prediction = self.predict_preference(pref.bigram1, pref.bigram2)
+                        pred_prob = prediction.probability
+                        pred_std = prediction.uncertainty
+                        if not np.isnan(pred_prob):
+                            val_predictions.append(pred_prob)
                             val_uncertainties.append(pred_std)
                             val_true.append(1.0 if pref.preferred else 0.0)
                     except Exception as e:
@@ -1224,13 +1225,13 @@ class PreferenceModel:
             for pref in self.dataset.preferences:
                 key = (pref.bigram1, pref.bigram2)
                 if key not in predictions:
-                    pred, _ = self.predict_preference(key[0], key[1])
-                    predictions[key] = pred
-                    predictions[(key[1], key[0])] = 1 - pred
+                    prediction = self.predict_preference(key[0], key[1])
+                    predictions[key] = prediction.probability
+                    predictions[(key[1], key[0])] = 1 - prediction.probability
                     
             violations = 0
-            total = 0
-            
+            total = 0     
+                   
             # Check transitivity using pre-computed predictions
             seen_triples = set()
             for i, pref_i in enumerate(self.dataset.preferences[:-2]):
@@ -1537,8 +1538,9 @@ class PreferenceModel:
             uncertainties = []
             
             for pref in self.dataset.preferences:
-                pred_prob, pred_std = self.predict_preference(
-                    pref.bigram1, pref.bigram2)
+                prediction = self.predict_preference(pref.bigram1, pref.bigram2)
+                pred_prob = prediction.probability
+                pred_std = prediction.uncertainty
                 
                 y_true.append(1.0 if pref.preferred else 0.0)
                 y_pred.append(pred_prob)
