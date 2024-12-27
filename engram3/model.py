@@ -639,23 +639,39 @@ class PreferenceModel:
                     # Collect main feature values
                     if not is_control_only:
                         for feature in main_features:
+                            
                             if '_x_' in feature:
-                                # Handle interaction terms
-                                f1, f2 = feature.split('_x_')
-                                # Collect base feature values for interactions
-                                feat1_base1 = pref.features1.get(f1, 0.0)
-                                feat1_base2 = pref.features1.get(f2, 0.0)
-                                feat2_base1 = pref.features2.get(f1, 0.0)
-                                feat2_base2 = pref.features2.get(f2, 0.0)
-                                # Store base features
-                                feature_stats[f1]['values'].extend([feat1_base1, feat2_base1])
-                                feature_stats[f2]['values'].extend([feat1_base2, feat2_base2])
+                                # Split interaction name into component features
+                                # e.g., 'same_finger_x_sum_finger_values_x_rows_apart' -> 
+                                # ['same_finger', 'sum_finger_values', 'rows_apart']
+                                components = feature.split('_x_')
+                                
+                                # For each component feature, collect its values for both bigrams in the preference
+                                # This maintains statistics for the base features themselves
+                                for component in components:
+                                    # Get values for this component from both bigrams in the preference
+                                    feat1 = pref.features1.get(component, 0.0)  # Value for first bigram
+                                    feat2 = pref.features2.get(component, 0.0)  # Value for second bigram
+                                    # Store both values for computing statistics on the base feature
+                                    feature_stats[component]['values'].extend([feat1, feat2])
+                                
+                                # Now compute the interaction value for each bigram
+                                # For each bigram, multiply together all its component feature values
+                                feat1_interaction = 1.0  # Will hold product of all components for first bigram
+                                feat2_interaction = 1.0  # Will hold product of all components for second bigram
+                                for component in components:
+                                    # Multiply each component's value into the running product for each bigram
+                                    feat1_interaction *= pref.features1.get(component, 0.0)  # First bigram's product
+                                    feat2_interaction *= pref.features2.get(component, 0.0)  # Second bigram's product
+                                
+                                # Store both interaction values (one per bigram) for computing interaction statistics
+                                feature_stats[feature]['values'].extend([feat1_interaction, feat2_interaction])
                             else:
-                                # Handle base features
-                                feat1 = pref.features1.get(feature, 0.0)
-                                feat2 = pref.features2.get(feature, 0.0)
+                                # For base features, simply get and store the value from each bigram
+                                feat1 = pref.features1.get(feature, 0.0)  # Value from first bigram
+                                feat2 = pref.features2.get(feature, 0.0)  # Value from second bigram
                                 feature_stats[feature]['values'].extend([feat1, feat2])
-                    
+
                     # Collect control feature values
                     for feature in control_features:
                         feat1 = pref.features1.get(feature, 0.0)
@@ -800,7 +816,14 @@ class PreferenceModel:
             except Exception as e:
                 logger.error(f"Error preparing data: {str(e)}")
                 raise
-                                                    
+
+    def _compute_interaction_value(self, components: List[str], features: Dict[str, float]) -> float:
+        """Compute value for a higher-order interaction."""
+        value = 1.0
+        for component in components:
+            value *= features.get(component, 0.0)
+        return value
+
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -825,7 +848,7 @@ class PreferenceModel:
             
         if not self.feature_extractor:
             raise NotFittedError("Feature extractor not initialized. Call fit() first.")
-            
+
         try:
             # Use cache if available
             cache_key = str(bigram)  # Ensure string key for cache
@@ -848,7 +871,24 @@ class PreferenceModel:
                 
             if not features:
                 logger.warning(f"No features extracted for bigram '{bigram}'")
+            
+            # Add interaction features
+            for interaction in self.config.features.interactions:
+                # Get name for this interaction (sorted for consistency)
+                interaction_name = '_x_'.join(sorted(interaction))
                 
+                # Compute interaction value by multiplying component features
+                interaction_value = 1.0
+                for component in interaction:
+                    if component not in features:
+                        logger.warning(f"Component feature '{component}' missing for interaction in bigram '{bigram}'")
+                        interaction_value = 0.0
+                        break
+                    interaction_value *= features[component]
+                    
+                # Add interaction to features
+                features[interaction_name] = interaction_value
+            
             # Cache result
             self.feature_cache.set(cache_key, features.copy())
             

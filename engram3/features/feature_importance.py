@@ -136,8 +136,9 @@ class FeatureImportanceCalculator:
 
                 # Show clear feature evaluation header
                 logger.info(f"\n{'='*32}")
-                logger.info(f"EVALUATING: {feature}")
-                logger.info(f"Context: {', '.join(current_selected_features)}")
+                logger.info(f"EVALUATING: {self._format_interaction_name(feature)}")
+                if current_selected_features:
+                    logger.info(f"Context: {', '.join(current_selected_features)}")
                 logger.info(f"{'-'*32}")
 
                 # Set up test features silently
@@ -147,11 +148,16 @@ class FeatureImportanceCalculator:
                 
                 if not is_control_feature:
                     test_features.append(feature)
-                    for f1, f2 in model.config.features.interactions:
-                        if feature in (f1, f2):
-                            interaction_name = f"{f1}_x_{f2}"
-                            if interaction_name in all_features:
-                                test_features.append(interaction_name)
+                    # Handle higher-order interactions
+                    for interaction in model.config.features.interactions:
+                        # Check if feature is part of this interaction
+                        if feature in interaction:
+                            # Only add interaction if all other components are already selected
+                            other_components = [f for f in interaction if f != feature]
+                            if all(f in current_selected_features for f in other_components):
+                                interaction_name = '_x_'.join(sorted(interaction))
+                                if interaction_name in all_features:
+                                    test_features.append(interaction_name)
 
                 # Fit model silently
                 model_single = type(model)(config=model.config)
@@ -240,6 +246,12 @@ class FeatureImportanceCalculator:
                 logger.error("Traceback:", exc_info=True)
                 return self._get_default_metrics()
                                                                                                                 
+    def _format_interaction_name(self, feature: str) -> str:
+            """Format interaction name for display."""
+            if '_x_' in feature:
+                components = feature.split('_x_')
+                return f"{feature} ({' × '.join(components)})"
+
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     current_features: List[str]) -> float:
         """
