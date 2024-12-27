@@ -134,9 +134,10 @@ class FeatureImportanceCalculator:
                     self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
                     logger.info(f"Baseline accuracy: {self._baseline_accuracy:.4f}")
 
-                # Feature evaluation header
-                logger.info(f"\n{'-'*32}")
+                # Show clear feature evaluation header
+                logger.info(f"\n{'='*32}")
                 logger.info(f"EVALUATING: {feature}")
+                logger.info(f"Context: {', '.join(current_selected_features)}")
                 logger.info(f"{'-'*32}")
 
                 # Set up test features silently
@@ -177,27 +178,52 @@ class FeatureImportanceCalculator:
                 self._max_consistency_seen = max(self._max_consistency_seen, raw_consistency)
                 effect_consistency = raw_consistency / self._max_consistency_seen if self._max_consistency_seen > 0 else 0.0
 
-                # Calculate predictive power
+                # Calculate predictive power with detailed logging
                 metrics = model_single.evaluate(dataset)
                 test_accuracy = metrics.get('accuracy', 0.5)
                 epsilon = 1e-10
+
+                logger.info("\nPredictive Power Details:")
+                logger.info(f"  Test accuracy:      {test_accuracy:.6f}")
+                logger.info(f"  Baseline accuracy:  {self._baseline_accuracy:.6f}")
+                logger.info(f"  Raw difference:     {test_accuracy - self._baseline_accuracy:+.6f}")
+
+                # Calculate improvement
                 raw_improvement = max(0.0, test_accuracy - self._baseline_accuracy)
+                logger.info(f"  Clipped improve:    {raw_improvement:.6f}")
+                
+                # Calculate maximum possible improvement
                 max_possible = 1.0 - self._baseline_accuracy
+                logger.info(f"  Max possible:       {max_possible:.6f}")
+
+                # Calculate final power
                 predictive_power = raw_improvement / max_possible if max_possible > epsilon else 0.0
+                logger.info(f"  Final power:        {predictive_power:.6f}")
+
+                # Also log AUC if available
+                if 'auc' in metrics:
+                    logger.info(f"  AUC:               {metrics['auc']:.6f}")
+                
+                # Log any improvements in other metrics
+                for metric_name, value in metrics.items():
+                    if metric_name not in ['accuracy', 'auc']:
+                        logger.info(f"  {metric_name}:          {value:.6f}")
+
+                # Log results clearly
+                logger.info("Results:")
+                logger.info(f"  Effect:      {model_effect:.4f} (raw: {raw_effect:.4f})")
+                logger.info(f"  Consistency: {effect_consistency:.4f} (raw: {raw_consistency:.4f})")
+                logger.info(f"  Power:       {predictive_power:.4f} (acc: {test_accuracy:.4f})")
+                weight, std = weights.get(feature, (0.0, 0.0))
+                logger.info(f"  Weight:      {weight:.4f} ± {std:.4f}")
+                logger.info(f"{'='*32}\n")
 
                 # Cache raw values
                 self.metric_cache.set(f"{feature}_raw_effect", raw_effect)
                 self.metric_cache.set(f"{feature}_raw_consistency", raw_consistency)
                 self.metric_cache.set(f"{feature}_raw_improvement", raw_improvement)
+                self.metric_cache.set(f"{feature}_max_possible", max_possible)
                 self.metric_cache.set(f"{feature}_test_accuracy", test_accuracy)
-
-                # Log final results
-                weight, std = weights.get(feature, (0.0, 0.0))
-                logger.info(f"Effect:       {model_effect:.4f} (raw: {raw_effect:.4f})")
-                logger.info(f"Consistency:  {effect_consistency:.4f} (raw: {raw_consistency:.4f})")
-                logger.info(f"Power:        {predictive_power:.4f} (acc: {test_accuracy:.4f})")
-                logger.info(f"Weight:       {weight:.4f} ± {std:.4f}")
-                logger.info(f"{'-'*32}\n")
 
                 return {
                     'model_effect': model_effect,
