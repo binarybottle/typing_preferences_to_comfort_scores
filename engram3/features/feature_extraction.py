@@ -99,17 +99,14 @@ class FeatureExtractor:
         if bigram in self._cache:
             return self._cache[bigram].copy()
             
-        # Handle same-letter bigrams differently
-        if char1 == char2:
-            features = self._extract_same_letter_features(char1)
-        else:
-            features = self._extract_different_letter_features(char1, char2)
+        # Extract features
+        features = self._extract_features(char1, char2)
             
         # Cache results
         self._cache[bigram] = features.copy()
         return features
 
-    def _extract_different_letter_features(self, char1: str, char2: str) -> Dict[str, float]:
+    def _extract_features(self, char1: str, char2: str) -> Dict[str, float]:
         """Extract features for different-letter bigrams"""
         try:
             features = {
