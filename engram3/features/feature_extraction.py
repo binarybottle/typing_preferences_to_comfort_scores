@@ -57,19 +57,19 @@ class FeatureExtractor:
         """
         all_bigrams = []
         bigram_features = {}
+
+        # Get first different-letter bigram for debug logging
+        first_char1 = layout_chars[0]
+        first_char2 = layout_chars[1] if len(layout_chars) > 1 else layout_chars[0]
+        if first_char1 != first_char2:
+            first_features = self.extract_bigram_features(first_char1, first_char2)
                 
-        # Process first bigram with detailed logging
-        first_chars = (layout_chars[0], layout_chars[0])
-        first_features = self.extract_bigram_features(*first_chars)
-        
         for char1 in layout_chars:
             for char2 in layout_chars:
-
-                # Skip same-letter bigrams, since we filter out same-letter bigrams 
-                # in the dataset anyway (_load_csv in data.py)
+                # Skip same-letter bigrams
                 if char1 == char2:
                     continue
-
+                    
                 bigram = (char1, char2)
                 all_bigrams.append(bigram)
                 features = self.extract_bigram_features(char1, char2)
@@ -79,7 +79,8 @@ class FeatureExtractor:
         
         # Debug log final results
         logger.debug(f"Computed features for {len(all_bigrams)} bigrams")
-        logger.debug(f"Feature keys in first bigram: {list(bigram_features[all_bigrams[0]].keys())}")
+        if all_bigrams:
+            logger.debug(f"Feature keys in first bigram: {list(bigram_features[all_bigrams[0]].keys())}")
         
         return all_bigrams, bigram_features
 
