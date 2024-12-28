@@ -25,6 +25,19 @@ from dataclasses import dataclass
 from pathlib import Path
 import yaml
 
+from engram3.features.features import (
+    qwerty_bigram_frequency,
+    same_finger,
+    sum_finger_values,
+    adj_finger_diff_row,
+    rows_apart,
+    angle_apart,
+    outward_roll,
+    middle_column,
+    sum_engram_position_values,
+    sum_row_position_values,
+    same_key
+)
 from engram3.features.features import qwerty_bigram_frequency
 from engram3.utils.config import FeatureConfig
 from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
@@ -93,60 +106,61 @@ class FeatureExtractor:
     def _extract_different_letter_features(self, char1: str, char2: str) -> Dict[str, float]:
         """Extract features for different-letter bigrams"""
         try:
-            # Create string bigram
-            bigram_str = char1 + char2
-
             features = {
                 'typing_time': 0.0,  # Placeholder for actual timing data
                 
                 # Finger usage features
-                'same_finger': self._calc_same_finger(char1, char2),
-                'sum_finger_values': self._calc_sum_finger_values(char1, char2),
-                'adj_finger_diff_row': self._calc_adj_finger_diff_row(char1, char2),
+                'same_finger': same_finger(char1, char2, self.config.column_map, self.config.finger_map),
+                'sum_finger_values': sum_finger_values(char1, char2, self.config.finger_map),
+                'adj_finger_diff_row': adj_finger_diff_row(char1, char2, self.config.column_map, 
+                                                        self.config.row_map, self.config.finger_map),
                 
                 # Spatial features
-                'rows_apart': self._calc_rows_apart(char1, char2),
-                'angle_apart': self._calc_angle_apart(char1, char2),
-                'outward_roll': self._calc_outward_roll(char1, char2),
-                'middle_column': self._calc_middle_column(char1, char2),
+                'rows_apart': rows_apart(char1, char2, self.config.column_map, self.config.row_map),
+                'angle_apart': angle_apart(char1, char2, self.config.column_map, self.config.angles),
+                'outward_roll': outward_roll(char1, char2, self.config.column_map, self.config.finger_map),
+                'middle_column': middle_column(char1, char2, self.config.column_map),
                 
                 # Position values
-                'sum_engram_position_values': self._calc_sum_engram_position_values(char1, char2),
-                'sum_row_position_values': self._calc_sum_row_position_values(char1, char2),
+                'sum_engram_position_values': sum_engram_position_values(char1, char2, 
+                                                                    self.config.column_map, 
+                                                                    self.config.engram_position_values),
+                'sum_row_position_values': sum_row_position_values(char1, char2, 
+                                                                self.config.column_map, 
+                                                                self.config.row_position_values),
                 
                 # Control feature
-                'bigram_frequency': qwerty_bigram_frequency(
-                    char1, char2,
-                    self.config.bigrams,
-                    self.config.bigram_frequencies_array
-                )
+                'bigram_frequency': qwerty_bigram_frequency(char1, char2, 
+                                                        self.config.bigrams,
+                                                        self.config.bigram_frequencies_array)
             }
             return features
         except Exception as e:
             logger.error(f"Error computing features for bigram {char1}{char2}: {str(e)}")
             raise
-        
+
     def _extract_same_letter_features(self, char: str) -> Dict[str, float]:
         """Extract features for same-letter bigrams"""
         try:
             features = {
                 'typing_time': 0.0,
-                'same_finger': 1.0,
-                'sum_finger_values': self.config.finger_map.get(char, 0) * 2,
-                'adj_finger_diff_row': 0.0,
-                'rows_apart': 0,
-                'angle_apart': 0.0,
-                'outward_roll': 0.0,
-                'middle_column': 1.0 if self._is_middle_column(char) else 0.0,
-                'sum_engram_position_values': self.config.engram_position_values.get(char, 0) * 2,
-                'sum_row_position_values': self.config.row_position_values.get(char, 0) * 2,
-                
-                # Control feature
-                'bigram_frequency': qwerty_bigram_frequency(
-                    char, char,
-                    self.config.bigrams,
-                    self.config.bigram_frequencies_array
-                )
+                'same_finger': same_key(char, char),  # Using same_key instead of hardcoding 1.0
+                'sum_finger_values': sum_finger_values(char, char, self.config.finger_map),
+                'adj_finger_diff_row': adj_finger_diff_row(char, char, self.config.column_map, 
+                                                        self.config.row_map, self.config.finger_map),
+                'rows_apart': rows_apart(char, char, self.config.column_map, self.config.row_map),
+                'angle_apart': angle_apart(char, char, self.config.column_map, self.config.angles),
+                'outward_roll': outward_roll(char, char, self.config.column_map, self.config.finger_map),
+                'middle_column': middle_column(char, char, self.config.column_map),
+                'sum_engram_position_values': sum_engram_position_values(char, char, 
+                                                                    self.config.column_map, 
+                                                                    self.config.engram_position_values),
+                'sum_row_position_values': sum_row_position_values(char, char, 
+                                                                self.config.column_map, 
+                                                                self.config.row_position_values),
+                'bigram_frequency': qwerty_bigram_frequency(char, char, 
+                                                        self.config.bigrams,
+                                                        self.config.bigram_frequencies_array)
             }
             return features
         except Exception as e:
@@ -155,66 +169,42 @@ class FeatureExtractor:
         
     def _calc_same_finger(self, char1: str, char2: str) -> float:
         """Calculate if bigram uses same finger"""
-        return float(self.config.finger_map.get(char1) == self.config.finger_map.get(char2))
-
-    def _calc_sum_finger_values(self, char1: str, char2: str) -> float:
-        """Calculate sum of finger values"""
-        return (self.config.finger_map.get(char1, 0) + 
-                self.config.finger_map.get(char2, 0))
-
-    def _calc_adj_finger_diff_row(self, char1: str, char2: str) -> float:
-        """Calculate adjacent finger difference within row"""
-        f1 = self.config.finger_map.get(char1)
-        f2 = self.config.finger_map.get(char2)
-        r1 = self.config.row_map.get(char1)
-        r2 = self.config.row_map.get(char2)
-        return float(abs(f1 - f2) == 1 and r1 == r2)
-
-    def _calc_rows_apart(self, char1: str, char2: str) -> float:
-        """Calculate number of rows between keys"""
-        r1 = self.config.row_map.get(char1, 0)
-        r2 = self.config.row_map.get(char2, 0)
-        return float(abs(r1 - r2))
-
-    def _calc_angle_apart(self, char1: str, char2: str) -> float:
-        """Calculate angular distance between keys"""
-        c1 = self.config.column_map.get(char1)
-        c2 = self.config.column_map.get(char2)
-        if c1 is None or c2 is None:
-            return 0.0
-        angles = self.config.angles
-        return angles.get((char1, char2), 0.0)  # Use tuple key directly
+        return same_finger(char1, char2, self.config.column_map, self.config.finger_map)
 
     def _calc_outward_roll(self, char1: str, char2: str) -> float:
         """Calculate if bigram involves outward rolling motion"""
-        c1 = self.config.column_map.get(char1)
-        c2 = self.config.column_map.get(char2)
-        f1 = self.config.finger_map.get(char1)
-        f2 = self.config.finger_map.get(char2)
-        if None in (c1, c2, f1, f2):
-            return 0.0
-        return float(c2 > c1 and f2 > f1)
+        return outward_roll(char1, char2, self.config.column_map, self.config.finger_map)
+
+    def _calc_rows_apart(self, char1: str, char2: str) -> float:
+        """Calculate number of rows between keys"""
+        return rows_apart(char1, char2, self.config.column_map, self.config.row_map)
+
+    def _calc_angle_apart(self, char1: str, char2: str) -> float:
+        """Calculate angular distance between keys"""
+        return angle_apart(char1, char2, self.config.column_map, self.config.angles)
 
     def _calc_middle_column(self, char1: str, char2: str) -> float:
         """Calculate middle column usage"""
-        return float(self._is_middle_column(char1) or self._is_middle_column(char2))
+        return middle_column(char1, char2, self.config.column_map)
 
-    def _is_middle_column(self, char: str) -> bool:
-        """Check if character is in middle column"""
-        col = self.config.column_map.get(char, 0)
-        return col in (5, 6)  # Assuming middle columns are 5 and 6
+    def _calc_adj_finger_diff_row(self, char1: str, char2: str) -> float:
+        """Calculate adjacent finger difference within row"""
+        return adj_finger_diff_row(char1, char2, self.config.column_map, 
+                                self.config.row_map, self.config.finger_map)
+
+    def _calc_sum_finger_values(self, char1: str, char2: str) -> float:
+        """Calculate sum of finger values"""
+        return sum_finger_values(char1, char2, self.config.finger_map)
 
     def _calc_sum_engram_position_values(self, char1: str, char2: str) -> float:
         """Calculate sum of engram position values"""
-        return (self.config.engram_position_values.get(char1, 0) + 
-                self.config.engram_position_values.get(char2, 0))
+        return sum_engram_position_values(char1, char2, self.config.column_map, 
+                                        self.config.engram_position_values)
 
     def _calc_sum_row_position_values(self, char1: str, char2: str) -> float:
         """Calculate sum of row position values"""
-        return (self.config.row_position_values.get(char1, 0) + 
-                self.config.row_position_values.get(char2, 0))
-
-
+        return sum_row_position_values(char1, char2, self.config.column_map, 
+                                    self.config.row_position_values)
 
 def load_interactions(filepath: str) -> List[List[str]]:
     """Load feature interactions from YAML file"""

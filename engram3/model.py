@@ -638,7 +638,7 @@ class PreferenceModel:
                     # Collect main feature values
                     if not is_control_only:
                         for feature in main_features:
-                            
+
                             if '_x_' in feature:
                                 # Split interaction name into component features
                                 # e.g., 'same_finger_x_sum_finger_values_x_rows_apart' -> 
@@ -669,6 +669,9 @@ class PreferenceModel:
                                 # For base features, simply get and store the value from each bigram
                                 feat1 = pref.features1.get(feature, 0.0)  # Value from first bigram
                                 feat2 = pref.features2.get(feature, 0.0)  # Value from second bigram
+                                if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                                    feat1 = 0.0
+                                    feat2 = 0.0
                                 feature_stats[feature]['values'].extend([feat1, feat2])
 
                     # Collect control feature values
@@ -680,7 +683,6 @@ class PreferenceModel:
                 # Calculate standardization parameters
                 logger.info("Computing standardization parameters")
                 for feature, stats in feature_stats.items():
-
                     values = np.array(stats['values'])
 
                     # Filter out None values before calculating statistics
@@ -688,7 +690,7 @@ class PreferenceModel:
 
                     if len(values) > 0:
                         stats['mean'] = float(np.mean(values))
-                        stats['std'] = float(np.std(values)) if len(values) > 1 else 1.0
+                        stats['std'] = float(np.std(values))
                     else:
                         # Handle case where all values are None
                         stats['mean'] = 0.0
@@ -734,27 +736,40 @@ class PreferenceModel:
                                         
                                         # Multiply standardized values for each component
                                         for component in components:
-                                            feat1_base = (pref.features1.get(component, 0.0) - feature_stats[component]['mean']) / feature_stats[component]['std']
-                                            feat2_base = (pref.features2.get(component, 0.0) - feature_stats[component]['mean']) / feature_stats[component]['std']
+                                            feat1 = pref.features1.get(component, 0.0)
+                                            feat2 = pref.features2.get(component, 0.0)
+                                            if component == 'typing_time' and (feat1 is None or feat2 is None):
+                                                feat1 = 0.0
+                                                feat2 = 0.0
+                                            
+                                            feat1_base = (feat1 - feature_stats[component]['mean']) / feature_stats[component]['std']
+                                            feat2_base = (feat2 - feature_stats[component]['mean']) / feature_stats[component]['std']
                                             
                                             feat1_interaction *= feat1_base
                                             feat2_interaction *= feat2_base
                                         
-                                        feat1 = feat1_interaction
-                                        feat2 = feat2_interaction
+                                        features1_main.append(feat1_interaction)
+                                        features2_main.append(feat2_interaction)
                                     else:
                                         # Add logging for base features
                                         logger.debug(f"Processing base feature: {feature}")
                                         if feature not in feature_stats:
                                             logger.error(f"Missing statistics for feature: {feature}")
                                             raise ValueError(f"Missing statistics for feature: {feature}")
-                                            
-                                        feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                                        feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                        
+                                        feat1 = pref.features1.get(feature, 0.0)
+                                        feat2 = pref.features2.get(feature, 0.0)
+                                        if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                                            feat1 = 0.0
+                                            feat2 = 0.0
 
-                                    features1_main.append(feat1)
-                                    features2_main.append(feat2)
-                                    
+                                        # Always standardize, even if we've set values to zero
+                                        feat1 = (feat1 - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                        feat2 = (feat2 - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                        
+                                        features1_main.append(feat1)
+                                        features2_main.append(feat2)
+
                                 except Exception as e:
                                     logger.error(f"Error processing feature {feature}: {str(e)}")
                                     raise  # Re-raise to be caught by outer try-except
@@ -1375,13 +1390,11 @@ class PreferenceModel:
                 
                 # Special handling for typing_time
                 if feature == 'typing_time':
-                    # Use mean time if either value is None
                     if value1 is None or value2 is None:
-                        valid_times = [t for t in [pref.typing_time1, pref.typing_time2] 
-                                    if t is not None]
-                        mean_time = np.mean(valid_times) if valid_times else 0.0
-                        value1 = mean_time if value1 is None else value1
-                        value2 = mean_time if value2 is None else value2
+                        # If either typing time is missing, nullify this comparison
+                        value1 = 0.0
+                        value2 = 0.0
+                        logger.debug(f"Nullifying typing time comparison due to missing data")
                 
                 # Compute difference
                 feature_diffs[i] = value1 - value2
@@ -1393,11 +1406,11 @@ class PreferenceModel:
             logger.debug(f"  range: [{np.min(feature_diffs):.4f}, {np.max(feature_diffs):.4f}]")
             
             return feature_diffs
-            
+        
         except Exception as e:
-            logger.error(f"Error computing single feature values for {feature}: {str(e)}")
+            logger.error(f"Error computing feature values for {feature}: {str(e)}")
             return np.zeros(len(dataset.preferences))
-                                                                                                                            
+                                                                                                                                    
     def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
         """Generate and save a detailed metrics report."""
         report_df = pd.DataFrame([
