@@ -64,6 +64,12 @@ class FeatureExtractor:
         
         for char1 in layout_chars:
             for char2 in layout_chars:
+
+                # Skip same-letter bigrams, since we filter out same-letter bigrams 
+                # in the dataset anyway (_load_csv in data.py)
+                if char1 == char2:
+                    continue
+
                 bigram = (char1, char2)
                 all_bigrams.append(bigram)
                 features = self.extract_bigram_features(char1, char2)
@@ -137,34 +143,6 @@ class FeatureExtractor:
             return features
         except Exception as e:
             logger.error(f"Error computing features for bigram {char1}{char2}: {str(e)}")
-            raise
-
-    def _extract_same_letter_features(self, char: str) -> Dict[str, float]:
-        """Extract features for same-letter bigrams"""
-        try:
-            features = {
-                'typing_time': 0.0,
-                'same_finger': same_key(char, char),  # Using same_key instead of hardcoding 1.0
-                'sum_finger_values': sum_finger_values(char, char, self.config.finger_map),
-                'adj_finger_diff_row': adj_finger_diff_row(char, char, self.config.column_map, 
-                                                        self.config.row_map, self.config.finger_map),
-                'rows_apart': rows_apart(char, char, self.config.column_map, self.config.row_map),
-                'angle_apart': angle_apart(char, char, self.config.column_map, self.config.angles),
-                'outward_roll': outward_roll(char, char, self.config.column_map, self.config.finger_map),
-                'middle_column': middle_column(char, char, self.config.column_map),
-                'sum_engram_position_values': sum_engram_position_values(char, char, 
-                                                                    self.config.column_map, 
-                                                                    self.config.engram_position_values),
-                'sum_row_position_values': sum_row_position_values(char, char, 
-                                                                self.config.column_map, 
-                                                                self.config.row_position_values),
-                'bigram_frequency': qwerty_bigram_frequency(char, char, 
-                                                        self.config.bigrams,
-                                                        self.config.bigram_frequencies_array)
-            }
-            return features
-        except Exception as e:
-            logger.error(f"Error computing features for same-letter bigram {char}: {str(e)}")
             raise
         
     def _calc_same_finger(self, char1: str, char2: str) -> float:
