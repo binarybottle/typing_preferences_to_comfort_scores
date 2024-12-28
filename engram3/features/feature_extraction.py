@@ -247,3 +247,4 @@ def load_interactions(filepath: str) -> List[List[str]]:
     except Exception as e:
         logger.error(f"Error loading interactions file: {str(e)}")
         return []
+    

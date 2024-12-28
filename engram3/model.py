@@ -77,10 +77,7 @@ from itertools import combinations
 import traceback
 from collections import defaultdict
 
-from engram3.utils.config import (
-    Config, NotFittedError, FeatureError,
-    ModelPrediction, StabilityMetrics
-)
+from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from engram3.data import PreferenceDataset
 from engram3.features.feature_importance import FeatureImportanceCalculator
 from engram3.utils.visualization import PlottingUtils
@@ -717,47 +714,84 @@ class PreferenceModel:
                             features1_main = []
                             features2_main = []
                             for feature in main_features:
-                                if '_x_' in feature:
-                                    # Handle interaction features
-                                    f1, f2 = feature.split('_x_')
-                                    # Get standardized base features
-                                    feat1_base1 = (pref.features1.get(f1, 0.0) - feature_stats[f1]['mean']) / feature_stats[f1]['std']
-                                    feat1_base2 = (pref.features1.get(f2, 0.0) - feature_stats[f2]['mean']) / feature_stats[f2]['std']
-                                    feat2_base1 = (pref.features2.get(f1, 0.0) - feature_stats[f1]['mean']) / feature_stats[f1]['std']
-                                    feat2_base2 = (pref.features2.get(f2, 0.0) - feature_stats[f2]['mean']) / feature_stats[f2]['std']
-                                    # Multiply standardized values for interaction
-                                    feat1 = feat1_base1 * feat1_base2
-                                    feat2 = feat2_base1 * feat2_base2
-                                else:
-                                    # Standardize base features
-                                    feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                                    feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                                
-                                features1_main.append(feat1)
-                                features2_main.append(feat2)
+                                try:
 
-                        # Process control features
+                                    if '_x_' in feature:
+                                        # Add detailed logging
+                                        logger.debug(f"Processing interaction feature: {feature}")
+                                        components = feature.split('_x_')
+                                        logger.debug(f"Components: {components}")
+                                        
+                                        # Get standardized base features with error checking
+                                        for component in components:
+                                            if component not in feature_stats:
+                                                logger.error(f"Missing statistics for component: {component}")
+                                                raise ValueError(f"Missing statistics for component: {component}")
+                                        
+                                        # Initialize products for interaction
+                                        feat1_interaction = 1.0
+                                        feat2_interaction = 1.0
+                                        
+                                        # Multiply standardized values for each component
+                                        for component in components:
+                                            feat1_base = (pref.features1.get(component, 0.0) - feature_stats[component]['mean']) / feature_stats[component]['std']
+                                            feat2_base = (pref.features2.get(component, 0.0) - feature_stats[component]['mean']) / feature_stats[component]['std']
+                                            
+                                            feat1_interaction *= feat1_base
+                                            feat2_interaction *= feat2_base
+                                        
+                                        feat1 = feat1_interaction
+                                        feat2 = feat2_interaction
+                                    else:
+                                        # Add logging for base features
+                                        logger.debug(f"Processing base feature: {feature}")
+                                        if feature not in feature_stats:
+                                            logger.error(f"Missing statistics for feature: {feature}")
+                                            raise ValueError(f"Missing statistics for feature: {feature}")
+                                            
+                                        feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+                                        feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
+
+                                    features1_main.append(feat1)
+                                    features2_main.append(feat2)
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error processing feature {feature}: {str(e)}")
+                                    raise  # Re-raise to be caught by outer try-except
+                                    
+                        # Process control features with error checking
                         features1_control = []
                         features2_control = []
                         for feature in control_features:
+                            if feature not in feature_stats:
+                                logger.error(f"Missing statistics for control feature: {feature}")
+                                raise ValueError(f"Missing statistics for control feature: {feature}")
+                                
                             feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
                             feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
                             features1_control.append(feat1)
                             features2_control.append(feat2)
-
+                            
+                        # Add arrays only if we got here without errors
                         X1.append(features1_main)
                         X2.append(features2_main)
                         C1.append(features1_control)
                         C2.append(features2_control)
                         participant.append(participant_map[pref.participant_id])
                         y.append(1 if pref.preferred else 0)
-
+                        
                     except Exception as e:
                         logger.warning(f"Skipping preference due to error: {str(e)}")
+                        logger.warning(f"Preference details: bigram1={pref.bigram1}, bigram2={pref.bigram2}")
+                        logger.warning(f"Features1: {pref.features1}")
+                        logger.warning(f"Features2: {pref.features2}")
                         skipped_count += 1
                         continue
 
-                if skipped_count > 0:
+                if skipped_count == len(dataset.preferences):
+                    logger.error("All preferences were skipped due to errors")
+                    raise ValueError("No valid preferences remained after processing")
+                elif skipped_count > 0:
                     logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
 
                 # Convert to numpy arrays
@@ -767,6 +801,25 @@ class PreferenceModel:
                 C2 = np.array(C2, dtype=np.float64)
                 participant = np.array(participant, dtype=np.int32)
                 y = np.array(y, dtype=np.int32)
+
+                # Check if we have any valid data
+                if len(X1) == 0:
+                    logger.error("No valid preferences after processing")
+                    raise ValueError("No valid preferences remained after processing")
+
+                # Reshape arrays if needed
+                if is_control_only:
+                    if len(X1) > 0 and X1.ndim == 1:
+                        X1 = X1.reshape(-1, 1)
+                        X2 = X2.reshape(-1, 1)
+                else:
+                    if len(X1) > 0 and X1.ndim == 1 and len(main_features) > 0:
+                        X1 = X1.reshape(-1, len(main_features))
+                        X2 = X2.reshape(-1, len(main_features))
+
+                if len(C1) > 0 and C1.ndim == 1 and len(control_features) > 0:
+                    C1 = C1.reshape(-1, len(control_features))
+                    C2 = C2.reshape(-1, len(control_features))
 
                 # Verify dimensions and check for NaNs
                 if not is_control_only:
@@ -1226,12 +1279,12 @@ class PreferenceModel:
                 key = (pref.bigram1, pref.bigram2)
                 if key not in predictions:
                     prediction = self.predict_preference(key[0], key[1])
-                    predictions[key] = prediction.probability
-                    predictions[(key[1], key[0])] = 1 - prediction.probability
-                    
+                    predictions[key] = prediction.probability  # Original order
+                    predictions[(key[1], key[0])] = 1 - prediction.probability  # Reversed order
+
             violations = 0
             total = 0     
-                   
+
             # Check transitivity using pre-computed predictions
             seen_triples = set()
             for i, pref_i in enumerate(self.dataset.preferences[:-2]):
@@ -1415,21 +1468,20 @@ class PreferenceModel:
             features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
             
             # Add interaction features
-            for f1, f2 in self.config.features.interactions:
-                if f1 not in features1 or f2 not in features1:
-                    logger.warning(f"Missing base features for interaction: {f1}, {f2}")
+            for interaction in self.config.features.interactions:
+                # Skip if any component is missing
+                if any(f not in features1 for f in interaction):
+                    logger.warning(f"Missing base features for interaction: {interaction}")
                     continue
                     
-                interaction_name1 = f"{f1}_x_{f2}"
-                interaction_name2 = f"{f2}_x_{f1}"
+                # Create interaction name by joining all components
+                interaction_name = '_x_'.join(sorted(interaction))
                 
-                if interaction_name1 in self.selected_features:
-                    features1[interaction_name1] = features1[f1] * features1[f2]
-                    features2[interaction_name1] = features2[f1] * features2[f2]
-                elif interaction_name2 in self.selected_features:
-                    features1[interaction_name2] = features1[f1] * features1[f2]
-                    features2[interaction_name2] = features2[f1] * features2[f2]
-                    
+                if interaction_name in self.selected_features:
+                    # Compute product of all component features
+                    features1[interaction_name] = np.prod([features1[f] for f in interaction])
+                    features2[interaction_name] = np.prod([features2[f] for f in interaction])
+                
             logger.debug(f"Available features in bigram1: {list(features1.keys())}")
             logger.debug(f"Available features in bigram2: {list(features2.keys())}")
             
@@ -1467,12 +1519,15 @@ class PreferenceModel:
                 features_used=self.selected_features,
                 computation_time=time.perf_counter() - start_time
             )
-            
+            # Assertion to catch invalid returns
+            assert isinstance(prediction, ModelPrediction), f"Invalid prediction type: {type(prediction)}"
+
             self.prediction_cache.set(cache_key, prediction)
             return prediction
             
         except Exception as e:
             logger.error(f"Error predicting preference: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")  # Add this to see full stack trace
             return ModelPrediction(
                 probability=0.5,
                 uncertainty=1.0,
