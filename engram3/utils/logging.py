@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import traceback
 from datetime import datetime
 import logging
+from logging.handlers import RotatingFileHandler
 
 from engram3.utils.config import Config
 
@@ -47,8 +48,13 @@ class LoggingManager:
             # Clear any existing handlers
             root_logger.handlers.clear()
 
-            # File handler - captures everything
-            file_handler = logging.FileHandler(log_file)
+            # File handler - captures everything with rotation
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10*1024*1024,  # 10MB per file
+                backupCount=5,          # Keep 5 backup files
+                encoding='utf-8'
+            )
             file_handler.setLevel(getattr(logging, logging_config.file_level))
             file_handler.setFormatter(logging.Formatter(logging_config.format))
             root_logger.addHandler(file_handler)
@@ -86,7 +92,12 @@ class LoggingManager:
     def _create_file_handler(self, log_dir: Path, timestamp: str) -> logging.Handler:
         """Create file handler with detailed formatting."""
         log_file = log_dir / f"debug_{timestamp}.log"
-        file_handler = logging.FileHandler(log_file)
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10*1024*1024,  # 10MB per file
+            backupCount=5,          # Keep 5 backup files
+            encoding='utf-8'
+        )
         file_handler.setLevel(self.config.logging.file_level)
         file_handler.setFormatter(
             logging.Formatter(self.config.logging.format)
@@ -104,3 +115,4 @@ class LoggingManager:
         error_msg = f"{context}: {str(e)}" if context else str(e)
         logger.error(error_msg)
         logger.debug(traceback.format_exc())
+

@@ -129,10 +129,15 @@ class PreferenceModel:
             logger.info(f"Loading Stan model from {model_path}")
             
             import cmdstanpy
+            output_dir = Path(self.config.paths.root_dir) / "stan_temp"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
             self.model = cmdstanpy.CmdStanModel(
                 stan_file=str(model_path),
                 cpp_options={'STAN_THREADS': True},
-                stanc_options={'warn-pedantic': True}
+                stanc_options={'warn-pedantic': True},
+                output_dir=str(output_dir),
+                cleanup_tmp=True
             )
             
             # Set permissions if needed
@@ -140,7 +145,7 @@ class PreferenceModel:
                 exe_path = Path(self.model.exe_file)
                 if exe_path.exists():
                     exe_path.chmod(0o755)
-                    
+
         except Exception as e:
             logger.error(f"Error initializing model: {str(e)}")
             logger.error("Traceback:", exc_info=True)
@@ -212,7 +217,11 @@ class PreferenceModel:
                 iter_warmup=self.config.model.warmup,
                 iter_sampling=self.config.model.n_samples,
                 adapt_delta=self.config.model.adapt_delta,
-                max_treedepth=self.config.model.max_treedepth
+                max_treedepth=self.config.model.max_treedepth,
+                show_console=True,
+                show_progress=True,
+                refresh=50,
+                save_warmup=False
             )
             
             # Check diagnostics
@@ -222,6 +231,22 @@ class PreferenceModel:
             self._update_feature_weights()
             
         except Exception as e:
+            # Try to get Stan output if available
+            output_dir = Path(self.config.paths.stan_temp)
+            for file in output_dir.glob("preference_model-*-stdout.txt"):
+                try:
+                    with open(file) as f:
+                        logger.error(f"Stan output from {file.name}:\n{f.read()}")
+                except Exception as read_error:
+                    logger.error(f"Could not read Stan output: {str(read_error)}")
+
+            # Clean up temp files
+            try:
+                for file in output_dir.glob("preference_model-*"):
+                    file.unlink()
+            except Exception as cleanup_error:
+                logger.error(f"Error cleaning up temp files: {str(cleanup_error)}")
+
             logger.error(f"Error fitting model: {str(e)}")
             raise
 
@@ -1114,129 +1139,132 @@ class PreferenceModel:
         in the context of previously selected features plus control features.
         Control features are always included but not selected.
         """
-        print("\n=== select_features method starting ===")
-        print(f"Received all_features: {all_features}")
-        print(f"Config base_features: {self.config.features.base_features}")
-        
-        # Get thresholds from config
-        thresholds = self.config.feature_selection.thresholds
-        min_metrics = self.config.feature_selection.min_metrics_passed
-        
-        logger.info(f"Selection criteria:")
-        logger.info(f"  Model effect threshold: {thresholds.model_effect}")
-        logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
-        logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
-        logger.info(f"  Required passing metrics: {min_metrics}/3")
-        
-        # Initialize with control features
-        self.selected_features = list(self.config.features.control_features)
-        print(f"Initialized selected_features with controls: {self.selected_features}")
-        
-        self.importance_calculator.reset_normalization_factors()
-        main_features = [f for f in all_features if f not in self.config.features.control_features]
-        print(f"Main features to evaluate: {main_features}")
+        try:
+            print("\n=== select_features method starting ===")
+            print(f"Received all_features: {all_features}")
+            print(f"Config base_features: {self.config.features.base_features}")
             
-        while True:
-            remaining_features = [f for f in main_features 
-                                  if f not in self.selected_features]
+            # Get thresholds from config
+            thresholds = self.config.feature_selection.thresholds
+            min_metrics = self.config.feature_selection.min_metrics_passed
             
-            if not remaining_features:
-                break
+            logger.info(f"Selection criteria:")
+            logger.info(f"  Model effect threshold: {thresholds.model_effect}")
+            logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
+            logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
+            logger.info(f"  Required passing metrics: {min_metrics}/3")
+            
+            # Initialize with control features
+            self.selected_features = list(self.config.features.control_features)
+            print(f"Initialized selected_features with controls: {self.selected_features}")
+            
+            self.importance_calculator.reset_normalization_factors()
+            main_features = [f for f in all_features if f not in self.config.features.control_features]
+            print(f"Main features to evaluate: {main_features}")
+                
+            while True:
+                remaining_features = [f for f in main_features 
+                                    if f not in self.selected_features]
+                
+                if not remaining_features:
+                    break
+                        
+                logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
+                logger.info(f"Current feature set: {self.selected_features}")
+                
+                # Add debug logging here:
+                logger.debug(f"Evaluating features: {remaining_features}")
+                
+                # Evaluate all remaining features in context of current set
+                feature_metrics = {}
+                for feature in remaining_features:
+                    logger.debug(f"\nEvaluating feature: {feature}")
                     
-            logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
-            logger.info(f"Current feature set: {self.selected_features}")
-            
-            # Add debug logging here:
-            logger.debug(f"Evaluating features: {remaining_features}")
-            
-            # Evaluate all remaining features in context of current set
-            feature_metrics = {}
-            for feature in remaining_features:
-                logger.debug(f"\nEvaluating feature: {feature}")
+                    # Create candidate feature set with current feature
+                    candidate_features = self.selected_features + [feature]
+                    logger.debug(f"Candidate feature set: {candidate_features}")
+                                    
+                    # Fit model with candidate feature set
+                    self.fit(dataset, candidate_features)
+                    
+                    # Evaluate this feature in context of current set
+                    metrics = self.importance_calculator.evaluate_feature(
+                        feature=feature,
+                        dataset=dataset,
+                        model=self,
+                        all_features=all_features,
+                        current_selected_features=self.selected_features
+                    )
+                    logger.debug(f"Feature {feature} metrics: {metrics}")
+                    feature_metrics[feature] = metrics
                 
-                # Create candidate feature set with current feature
-                candidate_features = self.selected_features + [feature]
-                logger.debug(f"Candidate feature set: {candidate_features}")
-                                
-                # Fit model with candidate feature set
-                self.fit(dataset, candidate_features)
+                # Compare each feature against all others
+                win_counts = {f: 0 for f in remaining_features}
+                for f1, f2 in combinations(remaining_features, 2):
+                    if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
+                        win_counts[f1] += 1
+                    else:
+                        win_counts[f2] += 1
+                        
+                # Select feature with most wins
+                best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
+                best_metrics = feature_metrics[best_feature]
                 
-                # Evaluate this feature in context of current set
-                metrics = self.importance_calculator.evaluate_feature(
-                    feature=feature,
-                    dataset=dataset,
-                    model=self,
-                    all_features=all_features,
-                    current_selected_features=self.selected_features
-                )
-                logger.debug(f"Feature {feature} metrics: {metrics}")
-                feature_metrics[feature] = metrics
-            
-            # Compare each feature against all others
-            win_counts = {f: 0 for f in remaining_features}
-            for f1, f2 in combinations(remaining_features, 2):
-                if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
-                    win_counts[f1] += 1
+                logger.debug(f"\nFeature comparison results:")
+                for feature, wins in win_counts.items():
+                    metrics = feature_metrics[feature]
+                    logger.debug(f"\n{feature}:")
+                    logger.debug(f"  Wins: {wins}")
+                    logger.debug(f"  Effect: {metrics['model_effect']:.3f}")
+                    logger.debug(f"  Consistency: {metrics['effect_consistency']:.3f}")
+                    logger.debug(f"  Predictive power: {metrics['predictive_power']:.3f}")
+                
+                # Count metrics that pass thresholds
+                metrics_passed = 0
+                if best_metrics['model_effect'] > thresholds.model_effect:
+                    metrics_passed += 1
+                if best_metrics['effect_consistency'] > thresholds.effect_consistency:
+                    metrics_passed += 1
+                if best_metrics['predictive_power'] > thresholds.predictive_power:
+                    metrics_passed += 1
+
+                logger.info(f"\nFeature {best_feature} metrics evaluation:")
+                logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
+                logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
+                logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
+                logger.info(f"  Metrics passed: {metrics_passed}/3 (need {min_metrics})")
+
+                # Select if enough metrics pass thresholds
+                """
+                if metrics_passed >= min_metrics:
+                    self.selected_features.append(best_feature)
+                    self.fit(dataset, self.selected_features)
+                    logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
+                    logger.info(f"  Passed {metrics_passed} out of 3 metrics")
+                    
+                    logger.info("\nCurrent model state:")
+                    weights = self.get_feature_weights()
+                    for feat in [f for f in self.selected_features 
+                                if f not in self.config.features.control_features]:
+                        w, s = weights.get(feat, (0.0, 0.0))
+                        logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
                 else:
-                    win_counts[f2] += 1
-                    
-            # Select feature with most wins
-            best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
-            best_metrics = feature_metrics[best_feature]
+                    logger.info(f"Feature {best_feature} failed selection criteria ({metrics_passed}/{min_metrics} metrics passed)")
+                    break
+                """
             
-            logger.debug(f"\nFeature comparison results:")
-            for feature, wins in win_counts.items():
-                metrics = feature_metrics[feature]
-                logger.debug(f"\n{feature}:")
-                logger.debug(f"  Wins: {wins}")
-                logger.debug(f"  Effect: {metrics['model_effect']:.3f}")
-                logger.debug(f"  Consistency: {metrics['effect_consistency']:.3f}")
-                logger.debug(f"  Predictive power: {metrics['predictive_power']:.3f}")
-            
-            # Count metrics that pass thresholds
-            metrics_passed = 0
-            if best_metrics['model_effect'] > thresholds.model_effect:
-                metrics_passed += 1
-            if best_metrics['effect_consistency'] > thresholds.effect_consistency:
-                metrics_passed += 1
-            if best_metrics['predictive_power'] > thresholds.predictive_power:
-                metrics_passed += 1
-
-            logger.info(f"\nFeature {best_feature} metrics evaluation:")
-            logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-            logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-            logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-            logger.info(f"  Metrics passed: {metrics_passed}/3 (need {min_metrics})")
-
-            # Select if enough metrics pass thresholds
-            """
-            if metrics_passed >= min_metrics:
-                self.selected_features.append(best_feature)
+            # Ensure at least one main feature is selected
+            if not any(f not in self.config.features.control_features 
+                    for f in self.selected_features):
+                logger.warning("No main features selected, forcing selection of best main feature")
+                best_main = max(feature_metrics.items(), 
+                            key=lambda x: x[1]['model_effect'])[0]
+                self.selected_features.append(best_main)
                 self.fit(dataset, self.selected_features)
-                logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
-                logger.info(f"  Passed {metrics_passed} out of 3 metrics")
-                
-                logger.info("\nCurrent model state:")
-                weights = self.get_feature_weights()
-                for feat in [f for f in self.selected_features 
-                            if f not in self.config.features.control_features]:
-                    w, s = weights.get(feat, (0.0, 0.0))
-                    logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
-            else:
-                logger.info(f"Feature {best_feature} failed selection criteria ({metrics_passed}/{min_metrics} metrics passed)")
-                break
-            """
-        
-        # Ensure at least one main feature is selected
-        if not any(f not in self.config.features.control_features 
-                for f in self.selected_features):
-            logger.warning("No main features selected, forcing selection of best main feature")
-            best_main = max(feature_metrics.items(), 
-                        key=lambda x: x[1]['model_effect'])[0]
-            self.selected_features.append(best_main)
-            self.fit(dataset, self.selected_features)
-        
-        return self.selected_features
+            
+            return self.selected_features
+        finally:
+            self.cleanup()
     
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
@@ -1727,19 +1755,47 @@ class PreferenceModel:
     def load(cls, path: Path) -> 'PreferenceModel':
         """Load model state from file."""
         logger.info("=== Loading model state ===")
-        with open(path, 'rb') as f:
-            save_dict = pickle.load(f)
-        
-        model = cls(config=save_dict['config'])
-        model.feature_names = save_dict['feature_names']
-        model.selected_features = save_dict['selected_features']
-        model.feature_weights = save_dict['feature_weights']
-        model.fit_result = save_dict['fit_result']
-        model.interaction_metadata = save_dict['interaction_metadata']
-        
-        logger.info(f"Loaded model from {path}")
-        logger.info(f"Selected features: {model.selected_features}")
-        logger.info(f"Feature names: {model.feature_names}")
-        logger.info(f"Feature weights: {model.feature_weights}")
-        
-        return model
+        try:
+            with open(path, 'rb') as f:
+                save_dict = pickle.load(f)
+            
+            model = cls(config=save_dict['config'])
+            try:
+                model.feature_names = save_dict['feature_names']
+                model.selected_features = save_dict['selected_features']
+                model.feature_weights = save_dict['feature_weights']
+                model.fit_result = save_dict['fit_result']
+                model.interaction_metadata = save_dict['interaction_metadata']
+                return model
+            except Exception:
+                model.cleanup()
+                raise
+        except Exception:
+            logger.error(f"Error loading model from {path}")
+            raise
+
+    def cleanup(self) -> None:
+        """Clean up temporary files and resources."""
+        try:
+            # Clean Stan temp directory
+            output_dir = Path(self.config.paths.stan_temp)
+            if output_dir.exists():
+                for file in output_dir.glob("preference_model-*"):
+                    try:
+                        file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Could not remove temp file {file}: {str(e)}")
+                        
+            # Clear caches
+            self.clear_caches()
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        try:
+            self.cleanup()
+        except:
+            pass  # Suppress errors during garbage collection
+

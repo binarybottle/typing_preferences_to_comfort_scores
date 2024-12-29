@@ -253,97 +253,101 @@ def main():
             # Initialize model
             model = PreferenceModel(config=config)
             
-            print("\nAbout to call model.select_features with:")
-            print(f"all_features: {all_features}")
-            selected_features = model.select_features(train_data, all_features)
-            print(f"select_features returned: {selected_features}")
-                                    
-            # Select features using round-robin tournament
-            logger.info("Calling model.select_features()...")
-            selected_features = model.select_features(train_data, all_features)
-            logger.info(f"Feature selection completed. Selected features: {selected_features}")
-            
-            # Final fit with selected features
-            logger.info("Fitting final model with selected features...")
-            model.fit(train_data, selected_features)
-            
-            # Save the trained model
-            model_save_path = Path(config.feature_selection.model_file)
-            logger.info(f"Saving model to {model_save_path}")
-            model.save(model_save_path)
-            
-            # Get final weights and metrics
-            feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
-
-            # Create comprehensive results DataFrame
-            logger.info("\n=== Starting feature evaluation loop ===")
-            logger.info(f"All features: {all_features}")
-
-            # Define selectable features BEFORE trying to log it
-            selectable_features = [f for f in all_features if f not in config.features.control_features]
-            logger.info(f"Selectable features: {selectable_features}")
-
-            results = []
-            for feature_name in selectable_features:  # Only evaluate non-control features
-                metrics = model.importance_calculator.evaluate_feature(
-                    feature=feature_name,
-                    dataset=train_data,
-                    model=model,
-                    all_features=all_features,
-                    current_selected_features=selected_features
-                )
+            try:
+                print("\nAbout to call model.select_features with:")
+                print(f"all_features: {all_features}")
+                selected_features = model.select_features(train_data, all_features)
+                print(f"select_features returned: {selected_features}")
+                                        
+                # Select features using round-robin tournament
+                logger.info("Calling model.select_features()...")
+                selected_features = model.select_features(train_data, all_features)
+                logger.info(f"Feature selection completed. Selected features: {selected_features}")
                 
-                weight, std = feature_weights.get(feature_name, (0.0, 0.0))
-                components = feature_name.split('_x_')
+                # Final fit with selected features
+                logger.info("Fitting final model with selected features...")
+                model.fit(train_data, selected_features)
                 
-                results.append({
-                    'feature_name': feature_name,
-                    'n_components': len(components),
-                    'selected': 1 if feature_name in selected_features else 0,
-                    'model_effect': metrics.get('model_effect', 0.0),
-                    'effect_consistency': metrics.get('effect_consistency', 0.0),
-                    'predictive_power': metrics.get('predictive_power', 0.0),
-                    'weight': weight,
-                    'weight_std': std
-                })
+                # Save the trained model
+                model_save_path = Path(config.feature_selection.model_file)
+                logger.info(f"Saving model to {model_save_path}")
+                model.save(model_save_path)
+                
+                # Get final weights and metrics
+                feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
 
-            # Log final results
-            logger.info("\n=== Feature evaluation complete ===")
-            logger.info(f"Final model state:")
-            logger.info(f"  Feature names: {model.feature_names}")
-            logger.info(f"  Selected features: {model.selected_features}")
-            logger.info(f"Results dataframe:")
-            for result in results:
-                logger.info(f"  {result}")
-            
-            # Save comprehensive metrics
-            metrics_file = Path(config.feature_selection.metrics_file)
-            pd.DataFrame(results).to_csv(metrics_file, index=False)
-            
-            # Print summary
-            logger.info("\nFeature selection summary:")
-            logger.info(f"Total features evaluated: {len(all_features)}")
-            logger.info(f"Base features: {len(base_features)}")
-            logger.info(f"Interaction features: {len(interaction_features)}")
-            logger.info(f"Features selected: {len(selected_features)}")
+                # Create comprehensive results DataFrame
+                logger.info("\n=== Starting feature evaluation loop ===")
+                logger.info(f"All features: {all_features}")
 
-            logger.info("\nSelected features:")
-            # Change this part
-            feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
-            for feature in selected_features:
-                weight, std = feature_weights.get(feature, (0.0, 0.0))  # Use .get() with default
-                metrics = model.importance_calculator.evaluate_feature(
-                    feature=feature,
-                    dataset=train_data,
-                    model=model,
-                    all_features=all_features,  # We have this from earlier
-                    current_selected_features=selected_features
-                )
-                logger.info(f"\n{feature}:")
-                logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
-                logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
-                logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
+                # Define selectable features BEFORE trying to log it
+                selectable_features = [f for f in all_features if f not in config.features.control_features]
+                logger.info(f"Selectable features: {selectable_features}")
+
+                results = []
+                for feature_name in selectable_features:  # Only evaluate non-control features
+                    metrics = model.importance_calculator.evaluate_feature(
+                        feature=feature_name,
+                        dataset=train_data,
+                        model=model,
+                        all_features=all_features,
+                        current_selected_features=selected_features
+                    )
+                    
+                    weight, std = feature_weights.get(feature_name, (0.0, 0.0))
+                    components = feature_name.split('_x_')
+                    
+                    results.append({
+                        'feature_name': feature_name,
+                        'n_components': len(components),
+                        'selected': 1 if feature_name in selected_features else 0,
+                        'model_effect': metrics.get('model_effect', 0.0),
+                        'effect_consistency': metrics.get('effect_consistency', 0.0),
+                        'predictive_power': metrics.get('predictive_power', 0.0),
+                        'weight': weight,
+                        'weight_std': std
+                    })
+
+                # Log final results
+                logger.info("\n=== Feature evaluation complete ===")
+                logger.info(f"Final model state:")
+                logger.info(f"  Feature names: {model.feature_names}")
+                logger.info(f"  Selected features: {model.selected_features}")
+                logger.info(f"Results dataframe:")
+                for result in results:
+                    logger.info(f"  {result}")
+                
+                # Save comprehensive metrics
+                metrics_file = Path(config.feature_selection.metrics_file)
+                pd.DataFrame(results).to_csv(metrics_file, index=False)
+                
+                # Print summary
+                logger.info("\nFeature selection summary:")
+                logger.info(f"Total features evaluated: {len(all_features)}")
+                logger.info(f"Base features: {len(base_features)}")
+                logger.info(f"Interaction features: {len(interaction_features)}")
+                logger.info(f"Features selected: {len(selected_features)}")
+
+                logger.info("\nSelected features:")
+                # Change this part
+                feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
+                for feature in selected_features:
+                    weight, std = feature_weights.get(feature, (0.0, 0.0))  # Use .get() with default
+                    metrics = model.importance_calculator.evaluate_feature(
+                        feature=feature,
+                        dataset=train_data,
+                        model=model,
+                        all_features=all_features,  # We have this from earlier
+                        current_selected_features=selected_features
+                    )
+                    logger.info(f"\n{feature}:")
+                    logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
+                    logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
+                    logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
+                    logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
+            
+            finally:
+                model.cleanup()
 
         #---------------------------------
         # Visualize feature space
@@ -355,173 +359,178 @@ def main():
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
             
-            # Initialize feature extraction
-            logger.info("Initializing feature extraction...")
-            # Debug to check the values are imported
-            logger.debug(f"Loaded bigrams: {len(bigrams)} items")
-            logger.debug(f"Loaded bigram frequencies: {bigram_frequencies_array.shape}")
-            feature_config = FeatureConfig(
-                column_map=column_map,
-                row_map=row_map,
-                finger_map=finger_map,
-                engram_position_values=engram_position_values,
-                row_position_values=row_position_values,
-                angles=angles,
-                bigrams=bigrams,
-                bigram_frequencies_array=bigram_frequencies_array
-            )
-            feature_extractor = FeatureExtractor(feature_config)
-            
-            # Precompute features for all possible bigrams
-            logger.info("Precomputing bigram features...")
-            all_bigrams, all_bigram_features = feature_extractor.precompute_all_features(
-                config.data.layout['chars']
-            )
-            
-            # Get feature names from first computed features
-            feature_names = list(next(iter(all_bigram_features.values())).keys())
-            
-            # Load dataset with precomputed features
-            logger.info("Loading dataset...")
-            dataset = PreferenceDataset(
-                Path(config.data.input_file),
-                feature_extractor=feature_extractor,
-                config=config,
-                precomputed_features={
-                    'all_bigrams': all_bigrams,
-                    'all_bigram_features': all_bigram_features,
-                    'feature_names': feature_names
-                }
-            )
-            
-            # Load saved feature metrics
-            metrics_file = Path(config.feature_selection.metrics_file)
-            if not metrics_file.exists():
-                raise FileNotFoundError(f"Feature metrics file not found: {metrics_file}")
-                    
-            # Load metrics and check available columns
-            metrics_df = pd.read_csv(metrics_file)
-            logger.info(f"Available columns in metrics file: {list(metrics_df.columns)}")
-            
-            available_plots = []
-            
             try:
-                # 1. PCA Feature Space Plot
-                fig_pca = plot_feature_space(
-                    model=feature_selection_model,
-                    dataset=dataset,
-                    title="Feature Space",
-                    figure_size=(12, 8),
-                    alpha=0.6
+                    
+                # Initialize feature extraction
+                logger.info("Initializing feature extraction...")
+                # Debug to check the values are imported
+                logger.debug(f"Loaded bigrams: {len(bigrams)} items")
+                logger.debug(f"Loaded bigram frequencies: {bigram_frequencies_array.shape}")
+                feature_config = FeatureConfig(
+                    column_map=column_map,
+                    row_map=row_map,
+                    finger_map=finger_map,
+                    engram_position_values=engram_position_values,
+                    row_position_values=row_position_values,
+                    angles=angles,
+                    bigrams=bigrams,
+                    bigram_frequencies_array=bigram_frequencies_array
                 )
-                fig_pca.savefig(Path(config.paths.plots_dir) / 'feature_space_pca.png')
-                plt.close()
-                available_plots.append('feature_space_pca.png')
+                feature_extractor = FeatureExtractor(feature_config)
                 
-                # 2. Feature Impacts Plot from metrics
+                # Precompute features for all possible bigrams
+                logger.info("Precomputing bigram features...")
+                all_bigrams, all_bigram_features = feature_extractor.precompute_all_features(
+                    config.data.layout['chars']
+                )
+                
+                # Get feature names from first computed features
+                feature_names = list(next(iter(all_bigram_features.values())).keys())
+                
+                # Load dataset with precomputed features
+                logger.info("Loading dataset...")
+                dataset = PreferenceDataset(
+                    Path(config.data.input_file),
+                    feature_extractor=feature_extractor,
+                    config=config,
+                    precomputed_features={
+                        'all_bigrams': all_bigrams,
+                        'all_bigram_features': all_bigram_features,
+                        'feature_names': feature_names
+                    }
+                )
+                
+                # Load saved feature metrics
+                metrics_file = Path(config.feature_selection.metrics_file)
+                if not metrics_file.exists():
+                    raise FileNotFoundError(f"Feature metrics file not found: {metrics_file}")
+                        
+                # Load metrics and check available columns
                 metrics_df = pd.read_csv(metrics_file)
-                # Get all features including control features
-                sorted_metrics = pd.concat([
-                    metrics_df[~metrics_df['feature_name'].isin(control_features)],
-                    metrics_df[metrics_df['feature_name'].isin(control_features)]
-                ]).sort_values('weight', key=abs, ascending=False)
-
-                fig_impacts = plt.figure(figsize=(12, 6))
-                ax = fig_impacts.add_subplot(111)
-
-                # Separate main and control features
-                control_features = config.features.control_features
-                main_metrics = sorted_metrics[~sorted_metrics['feature_name'].isin(control_features)]
-                control_metrics = sorted_metrics[sorted_metrics['feature_name'].isin(control_features)]
-
-                # Plot main features
-                y_pos = np.arange(len(main_metrics))
-                ax.barh(y_pos,
-                        main_metrics['weight'],
-                        xerr=main_metrics['weight_std'],
-                        alpha=0.6,
-                        capsize=5,
-                        color=['blue' if s else 'lightgray' for s in main_metrics['selected']],
-                        label='Main Features')
-
-                # Plot control features differently
-                if len(control_metrics) > 0:
-                    control_y_pos = np.arange(len(main_metrics), len(sorted_metrics))
-                    ax.barh(control_y_pos,
-                            control_metrics['weight'],
-                            xerr=control_metrics['weight_std'],
-                            alpha=0.4,
-                            capsize=5,
-                            color='gray',
-                            label='Control Features')
-
-                # Customize plot
-                all_y_pos = np.arange(len(sorted_metrics))
-                ax.set_yticks(all_y_pos)
-                ax.set_yticklabels(sorted_metrics['feature_name'])
-                ax.set_xlabel('Feature Weight\n(Effects shown after controlling for bigram frequency)')
-                ax.set_title('Feature Impact Analysis\n(blue = selected features, gray = control features)')
-                ax.grid(True, alpha=0.3)
-                ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
-                ax.legend()
-
-                # Similarly update the model weights plot
-                feature_weights = feature_selection_model.get_feature_weights(include_control=True)
-                if feature_weights:
-                    fig_weights = plt.figure(figsize=(12, 6))
-                    ax = fig_weights.add_subplot(111)
+                logger.info(f"Available columns in metrics file: {list(metrics_df.columns)}")
+                
+                available_plots = []
+                
+                try:
+                    # 1. PCA Feature Space Plot
+                    fig_pca = plot_feature_space(
+                        model=feature_selection_model,
+                        dataset=dataset,
+                        title="Feature Space",
+                        figure_size=(12, 8),
+                        alpha=0.6
+                    )
+                    fig_pca.savefig(Path(config.paths.plots_dir) / 'feature_space_pca.png')
+                    plt.close()
+                    available_plots.append('feature_space_pca.png')
                     
+                    # 2. Feature Impacts Plot from metrics
+                    metrics_df = pd.read_csv(metrics_file)
+                    # Get all features including control features
+                    sorted_metrics = pd.concat([
+                        metrics_df[~metrics_df['feature_name'].isin(control_features)],
+                        metrics_df[metrics_df['feature_name'].isin(control_features)]
+                    ]).sort_values('weight', key=abs, ascending=False)
+
+                    fig_impacts = plt.figure(figsize=(12, 6))
+                    ax = fig_impacts.add_subplot(111)
+
                     # Separate main and control features
-                    main_features = {k: v for k, v in feature_weights.items() 
-                                    if k not in control_features}
-                    control_features_weights = {k: v for k, v in feature_weights.items() 
-                                            if k in control_features}
-                    
-                    # Sort and plot main features
-                    sorted_main = sorted(main_features.items(), key=lambda x: abs(x[1][0]), reverse=True)
-                    main_y_pos = np.arange(len(sorted_main))
-                    
-                    features = [f for f, _ in sorted_main]
-                    means = [w[0] for _, w in sorted_main]
-                    stds = [w[1] for _, w in sorted_main]
-                    
-                    ax.barh(main_y_pos, means, xerr=stds,
-                            alpha=0.6, capsize=5,
-                            color=['blue' if m > 0 else 'red' for m in means],
+                    control_features = config.features.control_features
+                    main_metrics = sorted_metrics[~sorted_metrics['feature_name'].isin(control_features)]
+                    control_metrics = sorted_metrics[sorted_metrics['feature_name'].isin(control_features)]
+
+                    # Plot main features
+                    y_pos = np.arange(len(main_metrics))
+                    ax.barh(y_pos,
+                            main_metrics['weight'],
+                            xerr=main_metrics['weight_std'],
+                            alpha=0.6,
+                            capsize=5,
+                            color=['blue' if s else 'lightgray' for s in main_metrics['selected']],
                             label='Main Features')
-                    
-                    # Plot control features
-                    if control_features_weights:
-                        sorted_control = sorted(control_features_weights.items(), 
-                                            key=lambda x: abs(x[1][0]), reverse=True)
-                        control_y_pos = np.arange(len(main_y_pos), 
-                                                len(main_y_pos) + len(sorted_control))
-                        
-                        control_features = [f for f, _ in sorted_control]
-                        control_means = [w[0] for _, w in sorted_control]
-                        control_stds = [w[1] for _, w in sorted_control]
-                        
-                        ax.barh(control_y_pos, control_means, xerr=control_stds,
-                                alpha=0.4, capsize=5, color='gray',
+
+                    # Plot control features differently
+                    if len(control_metrics) > 0:
+                        control_y_pos = np.arange(len(main_metrics), len(sorted_metrics))
+                        ax.barh(control_y_pos,
+                                control_metrics['weight'],
+                                xerr=control_metrics['weight_std'],
+                                alpha=0.4,
+                                capsize=5,
+                                color='gray',
                                 label='Control Features')
-                        
-                        features.extend(control_features)
-                        
+
                     # Customize plot
-                    ax.set_yticks(np.arange(len(features)))
-                    ax.set_yticklabels(features)
+                    all_y_pos = np.arange(len(sorted_metrics))
+                    ax.set_yticks(all_y_pos)
+                    ax.set_yticklabels(sorted_metrics['feature_name'])
                     ax.set_xlabel('Feature Weight\n(Effects shown after controlling for bigram frequency)')
-                    ax.set_title('Feature Weights from Model')
+                    ax.set_title('Feature Impact Analysis\n(blue = selected features, gray = control features)')
                     ax.grid(True, alpha=0.3)
                     ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
                     ax.legend()
-                
-                logger.info(f"Generated the following plots: {', '.join(available_plots)}")
-                
-            except Exception as e:
-                logger.error(f"Error generating visualizations: {str(e)}")
-                raise
+
+                    # Similarly update the model weights plot
+                    feature_weights = feature_selection_model.get_feature_weights(include_control=True)
+                    if feature_weights:
+                        fig_weights = plt.figure(figsize=(12, 6))
+                        ax = fig_weights.add_subplot(111)
                         
+                        # Separate main and control features
+                        main_features = {k: v for k, v in feature_weights.items() 
+                                        if k not in control_features}
+                        control_features_weights = {k: v for k, v in feature_weights.items() 
+                                                if k in control_features}
+                        
+                        # Sort and plot main features
+                        sorted_main = sorted(main_features.items(), key=lambda x: abs(x[1][0]), reverse=True)
+                        main_y_pos = np.arange(len(sorted_main))
+                        
+                        features = [f for f, _ in sorted_main]
+                        means = [w[0] for _, w in sorted_main]
+                        stds = [w[1] for _, w in sorted_main]
+                        
+                        ax.barh(main_y_pos, means, xerr=stds,
+                                alpha=0.6, capsize=5,
+                                color=['blue' if m > 0 else 'red' for m in means],
+                                label='Main Features')
+                        
+                        # Plot control features
+                        if control_features_weights:
+                            sorted_control = sorted(control_features_weights.items(), 
+                                                key=lambda x: abs(x[1][0]), reverse=True)
+                            control_y_pos = np.arange(len(main_y_pos), 
+                                                    len(main_y_pos) + len(sorted_control))
+                            
+                            control_features = [f for f, _ in sorted_control]
+                            control_means = [w[0] for _, w in sorted_control]
+                            control_stds = [w[1] for _, w in sorted_control]
+                            
+                            ax.barh(control_y_pos, control_means, xerr=control_stds,
+                                    alpha=0.4, capsize=5, color='gray',
+                                    label='Control Features')
+                            
+                            features.extend(control_features)
+                            
+                        # Customize plot
+                        ax.set_yticks(np.arange(len(features)))
+                        ax.set_yticklabels(features)
+                        ax.set_xlabel('Feature Weight\n(Effects shown after controlling for bigram frequency)')
+                        ax.set_title('Feature Weights from Model')
+                        ax.grid(True, alpha=0.3)
+                        ax.axvline(x=0, color='black', linestyle='-', alpha=0.2)
+                        ax.legend()
+                    
+                    logger.info(f"Generated the following plots: {', '.join(available_plots)}")
+                    
+                except Exception as e:
+                    logger.error(f"Error generating visualizations: {str(e)}")
+                    raise
+
+            finally:
+                feature_selection_model.cleanup()
+                            
         #---------------------------------
         # Recommend bigram pairs
         #---------------------------------
@@ -574,19 +583,24 @@ def main():
             # Train prediction model
             logger.info(f"Training model on training data using {len(selected_features)} selected features...")
             model = PreferenceModel(config=config)
-            model.fit(train_data, features=selected_features)
 
-            # Save the trained model
-            model_save_path = Path(config.model.model_file)
-            model.save(model_save_path)  # Save the model we just trained
+            try:
+                model.fit(train_data, features=selected_features)
 
-            # Evaluate on test data (model.evaluate will use all features including control)
-            logger.info("Evaluating model on test data...")
-            test_metrics = model.evaluate(test_data)
+                # Save the trained model
+                model_save_path = Path(config.model.model_file)
+                model.save(model_save_path)  # Save the model we just trained
+
+                # Evaluate on test data (model.evaluate will use all features including control)
+                logger.info("Evaluating model on test data...")
+                test_metrics = model.evaluate(test_data)
+                
+                logger.info("\nTest data metrics:")
+                for metric, value in test_metrics.items():
+                    logger.info(f"{metric}: {value:.3f}")
             
-            logger.info("\nTest data metrics:")
-            for metric, value in test_metrics.items():
-                logger.info(f"{metric}: {value:.3f}")
+            finally:
+                model.cleanup()
 
         #---------------------------------
         # Predict bigram scores

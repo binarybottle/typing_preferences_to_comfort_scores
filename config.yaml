@@ -171,4 +171,4 @@ paths:                                  # Directory structure for outputs
   metrics_dir: "output/data"            # Directory for storing computed metrics
   plots_dir: "output/plots"             # Directory for saving visualizations
   logs_dir: "output/logs"               # Directory for log files
-  
+  stan_temp: "output/stan_temp"         # Directory for Stan temporary files

@@ -1,6 +1,7 @@
 train_test_indices.npz
 data/*
 output*
+output/stan_temp/
 __pycache__
 package-lock.json
 package.json
