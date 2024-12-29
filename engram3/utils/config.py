@@ -246,6 +246,7 @@ class PathsConfig(BaseModel):
     metrics_dir: Path
     plots_dir: Path
     logs_dir: Path
+    stan_temp: Path
 
     @validator('*')
     def create_directories(cls, v: Path) -> Path:

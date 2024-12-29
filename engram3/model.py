@@ -135,9 +135,7 @@ class PreferenceModel:
             self.model = cmdstanpy.CmdStanModel(
                 stan_file=str(model_path),
                 cpp_options={'STAN_THREADS': True},
-                stanc_options={'warn-pedantic': True},
-                output_dir=str(output_dir),
-                cleanup_tmp=True
+                stanc_options={'warn-pedantic': True}
             )
             
             # Set permissions if needed
@@ -1777,18 +1775,17 @@ class PreferenceModel:
     def cleanup(self) -> None:
         """Clean up temporary files and resources."""
         try:
-            # Clean Stan temp directory
-            output_dir = Path(self.config.paths.stan_temp)
-            if output_dir.exists():
-                for file in output_dir.glob("preference_model-*"):
-                    try:
-                        file.unlink()
-                    except Exception as e:
-                        logger.warning(f"Could not remove temp file {file}: {str(e)}")
-                        
+            # Clean Stan temp directory if it exists in config
+            if hasattr(self.config.paths, 'stan_temp'):
+                output_dir = Path(self.config.paths.stan_temp)
+                if output_dir.exists():
+                    for file in output_dir.glob("preference_model-*"):
+                        try:
+                            file.unlink()
+                        except Exception as e:
+                            logger.warning(f"Could not remove temp file {file}: {str(e)}")
             # Clear caches
             self.clear_caches()
-            
         except Exception as e:
             logger.error(f"Error during cleanup: {str(e)}")
 
