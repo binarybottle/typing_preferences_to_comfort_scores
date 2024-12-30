@@ -86,15 +86,19 @@ class PreferenceDataset:
         if precomputed_features:
             self.all_bigrams = precomputed_features['all_bigrams']
             self.all_bigram_features = precomputed_features['all_bigram_features']
-            self.feature_names = precomputed_features['feature_names']
             
+            # Initialize features including base, interaction, and control features
+            if self.config:
+                base_features = self.config.features.base_features
+                interaction_features = self.config.features.get_all_interaction_names()
+                self.feature_names = base_features + interaction_features + list(self.control_features)
+            else:
+                self.feature_names = precomputed_features['feature_names']
+                
             # Debug before validation
             logger.debug(f"Precomputed feature names: {self.feature_names}")
             logger.debug(f"Control features to check: {self.config.features.control_features}")
-            # Sample of bigram features
-            first_bigram = next(iter(self.all_bigram_features))
-            logger.debug(f"Sample features for bigram {first_bigram}: {self.all_bigram_features[first_bigram].keys()}")
-
+                
             # Validate that control features are present in precomputed features
             missing_controls = [f for f in self.control_features 
                               if f not in self.feature_names]
@@ -124,7 +128,16 @@ class PreferenceDataset:
             if include_control:
                 return self.feature_names
             return [f for f in self.feature_names if f not in self.control_features]
+        elif hasattr(self, 'config'):
+            # Get base features and interactions from config
+            base_features = self.config.features.base_features
+            interaction_features = self.config.features.get_all_interaction_names()
+            all_features = base_features + interaction_features
+            if include_control:
+                return all_features + list(self.config.features.control_features)
+            return all_features
         elif self.preferences:
+            # Fallback to preferences features only if no config
             features = list(self.preferences[0].features1.keys())
             if include_control:
                 return features
@@ -292,6 +305,11 @@ class PreferenceDataset:
             
             # Copy needed attributes
             subset.file_path = self.file_path
+            subset.config = self.config
+            if subset.config:
+                subset.control_features = subset.config.features.control_features
+            else:
+                subset.control_features = []            
             subset.column_map = self.column_map
             subset.row_map = self.row_map
             subset.finger_map = self.finger_map
@@ -326,6 +344,18 @@ class PreferenceDataset:
             # Get base features
             features1 = self.all_bigram_features[bigram1].copy()
             features2 = self.all_bigram_features[bigram2].copy()
+
+            # Add interaction features if config exists
+            if self.config and hasattr(self.config.features, 'interactions'):
+                for interaction in self.config.features.interactions:
+                    interaction_name = '_x_'.join(sorted(interaction))
+                    feat1_interaction = 1.0
+                    feat2_interaction = 1.0
+                    for component in interaction:
+                        feat1_interaction *= features1.get(component, 0.0)
+                        feat2_interaction *= features2.get(component, 0.0)
+                    features1[interaction_name] = feat1_interaction
+                    features2[interaction_name] = feat2_interaction
 
             # Add timing information
             try:
