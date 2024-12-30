@@ -129,7 +129,8 @@ class FeatureImportanceCalculator:
                     base_model.selected_features = list(model.config.features.control_features)
                     base_model.is_baseline_model = True
                     
-                    base_model.fit(dataset, base_model.selected_features)
+                    base_model.fit(dataset, base_model.selected_features, 
+                                   fit_purpose="Initial baseline model (control features only)")
                     base_metrics = base_model.evaluate(dataset)
                     self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
                     logger.info(f"Baseline accuracy: {self._baseline_accuracy:.4f}")
@@ -171,7 +172,8 @@ class FeatureImportanceCalculator:
                 model_single.feature_names = test_features
                 model_single.selected_features = test_features
                 model_single.is_baseline_model = len(test_features) == len(control_features)
-                model_single.fit(dataset, test_features)
+                model_single.fit(dataset, test_features, 
+                                 fit_purpose=f"Feature evaluation for {feature}")
 
                 # Calculate metrics
                 weights = model_single.get_feature_weights()
@@ -277,15 +279,16 @@ class FeatureImportanceCalculator:
             effects = []
             interaction_effects = defaultdict(list)
             
-            for train_idx, val_idx in self.model._get_cv_splits(dataset, n_splits):
+            for split_idx, (train_idx, val_idx) in enumerate(self.model._get_cv_splits(dataset, n_splits), 1):
                 train_data = dataset._create_subset_dataset(train_idx)
                 
-                # Use all current features when evaluating consistency
                 features_to_test = list(current_features)  # Copy to avoid modifying input
                 if feature not in features_to_test:
                     features_to_test.append(feature)
                                                         
-                self.model.fit(train_data, features_to_test)
+                self.model.fit(train_data, features_to_test, 
+                               fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
+
                 weights = self.model.get_feature_weights()
                 
                 # Get feature effect

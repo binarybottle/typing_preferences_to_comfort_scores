@@ -266,8 +266,9 @@ def main():
                 
                 # Final fit with selected features
                 logger.info("Fitting final model with selected features...")
-                model.fit(train_data, selected_features)
-                
+                model.fit(train_data, selected_features,
+                          fit_purpose="Fitting final model with selected features")
+
                 # Save the trained model
                 model_save_path = Path(config.feature_selection.model_file)
                 logger.info(f"Saving model to {model_save_path}")
@@ -585,7 +586,8 @@ def main():
             model = PreferenceModel(config=config)
 
             try:
-                model.fit(train_data, features=selected_features)
+                model.fit(train_data, features=selected_features,
+                          fit_purpose="Training model on training data")
 
                 # Save the trained model
                 model_save_path = Path(config.model.model_file)

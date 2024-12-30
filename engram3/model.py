@@ -183,8 +183,19 @@ class PreferenceModel:
         self.feature_cache.clear()
         self.prediction_cache.clear()
 
-    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> None:
+    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None, fit_purpose: str = None) -> None:
+        """
+        Fit the model to the given dataset.
+        
+        Args:
+            dataset: Dataset to fit
+            features: Optional list of features to use (default: all available)
+            fit_purpose: Description of what this fit is for (logging purposes)
+        """
         try:
+            if fit_purpose:
+                logger.info(f"\nFitting model: {fit_purpose}")
+
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
@@ -211,12 +222,15 @@ class PreferenceModel:
 
             # Setup sampling parameters
             n_chains = self.config.model.chains
-            n_iter = self.config.model.warmup + self.config.model.n_samples
+            #n_iter = self.config.model.warmup + self.config.model.n_samples
 
-            # Print sampling information
-            logger.info(f"Starting sampling with {n_chains} chains, "
-                    f"{self.config.model.warmup} warmup iterations, "
-                    f"{self.config.model.n_samples} sampling iterations")
+            # Print sampling information with purpose if provided
+            sampling_msg = f"Starting sampling with {n_chains} chains, " + \
+                        f"{self.config.model.warmup} warmup iterations, " + \
+                        f"{self.config.model.n_samples} sampling iterations"
+            if fit_purpose:
+                sampling_msg += f" ({fit_purpose})"
+            logger.info(sampling_msg)
 
             # Fit using Stan
             self.fit_result = self.model.sample(

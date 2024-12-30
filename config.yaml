@@ -38,10 +38,77 @@ feature_selection:
 
 features:
   base_features:                        # Core features for analysis
+    - typing_time                       # Time taken to type bigram
     - same_finger                       # Whether bigram uses same finger
     - sum_finger_values                 # Combined finger load values
+    - adj_finger_diff_row               # Adjacent fingers in different rows
+    - rows_apart                        # Number of rows between keys
+    - angle_apart                       # Angular distance between keys
+    - outward_roll                      # Whether movement rolls outward
+    - middle_column                     # Keys in middle column (outside home columns)
+    - sum_engram_position_values        # Combined Engram position values
+    - sum_row_position_values           # Combined row position values
   interactions:
     - [same_finger, sum_finger_values] 
+    - [same_finger, rows_apart]
+    - [same_finger, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row]
+    - [sum_finger_values, rows_apart]
+    - [sum_finger_values, angle_apart]
+    - [sum_finger_values, outward_roll]
+    - [sum_finger_values, sum_engram_position_values]
+    - [sum_finger_values, sum_row_position_values]
+    - [adj_finger_diff_row, rows_apart]
+    - [adj_finger_diff_row, angle_apart]
+    - [adj_finger_diff_row, outward_roll]
+    - [adj_finger_diff_row, sum_engram_position_values]
+    - [adj_finger_diff_row, sum_row_position_values]
+    - [rows_apart, outward_roll]
+    - [rows_apart, sum_engram_position_values]
+    - [rows_apart, sum_row_position_values]
+    - [angle_apart, outward_roll]
+    - [angle_apart, sum_engram_position_values]
+    - [outward_roll, sum_engram_position_values]
+    - [outward_roll, sum_row_position_values]
+    - [same_finger, sum_finger_values, rows_apart]
+    - [same_finger, sum_finger_values, sum_row_position_values]
+    #- [same_finger, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, sum_row_position_values]
+    - [sum_finger_values, rows_apart, outward_roll]
+    - [sum_finger_values, rows_apart, sum_engram_position_values]
+    - [sum_finger_values, rows_apart, sum_row_position_values]
+    - [sum_finger_values, angle_apart, outward_roll]
+    - [sum_finger_values, angle_apart, sum_engram_position_values]
+    - [sum_finger_values, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, outward_roll, sum_row_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll]
+    - [adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, sum_row_position_values]
+    - [adj_finger_diff_row, angle_apart, outward_roll]
+    - [adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    - [adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, outward_roll, sum_row_position_values]
+    - [rows_apart, outward_roll, sum_engram_position_values]
+    - [rows_apart, outward_roll, sum_row_position_values]
+    - [angle_apart, outward_roll, sum_engram_position_values]
+    - [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_row_position_values]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart, outward_roll]
+    - [sum_finger_values, adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_row_position_values]
+    - [sum_finger_values, rows_apart, outward_roll, sum_engram_position_values]
+    - [sum_finger_values, rows_apart, outward_roll, sum_row_position_values]
+    - [sum_finger_values, angle_apart, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll, sum_engram_position_values]
+    - [adj_finger_diff_row, rows_apart, outward_roll, sum_row_position_values]
+    - [adj_finger_diff_row, angle_apart, outward_roll, sum_engram_position_values]
   control_features:                     # Features to control for but not analyze
     - bigram_frequency                  # Bigram frequency in the English language
 
@@ -78,8 +145,8 @@ __model_fast: &fast
   max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 model:                                  # Bayesian model parameters (Stan)
-  #<<: *slow                             # Change to *fast for fast settings
-  <<: *fast                             # Change to *slow for slow settings
+  <<: *slow                             # Change to *fast for fast settings
+  #<<: *fast                             # Change to *slow for slow settings
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
