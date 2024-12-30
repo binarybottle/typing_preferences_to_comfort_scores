@@ -76,7 +76,8 @@ from pathlib import Path
 from itertools import combinations
 import traceback
 from collections import defaultdict
-from tqdm import tqdm
+import tempfile
+import shutil
 
 from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from engram3.data import PreferenceDataset
@@ -183,6 +184,14 @@ class PreferenceModel:
         self.feature_cache.clear()
         self.prediction_cache.clear()
 
+    def _check_temp_space(self, required_mb=1000):
+        """Check if enough temporary space available"""
+        temp_dir = Path(tempfile.gettempdir())
+        total, used, free = shutil.disk_usage(temp_dir)
+        free_mb = free // (1024 * 1024)
+        if free_mb < required_mb:
+            raise RuntimeError(f"Insufficient temporary space: {free_mb}MB free, need {required_mb}MB")
+
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None, fit_purpose: str = None) -> None:
         """
         Fit the model to the given dataset.
@@ -193,6 +202,22 @@ class PreferenceModel:
             fit_purpose: Description of what this fit is for (logging purposes)
         """
         try:
+
+            self._check_temp_space()
+
+            # Clean temp directory first
+            temp_dirs = [tempfile.gettempdir(), self.config.paths.stan_temp]
+            for temp_dir in temp_dirs:
+                for pattern in ["preference_model*", "stanModel*", "stan_*"]:
+                    for file in Path(temp_dir).glob(pattern):
+                        try:
+                            if file.is_file():
+                                file.unlink()
+                            elif file.is_dir():
+                                shutil.rmtree(file)
+                        except OSError:
+                            pass
+
             if fit_purpose:
                 logger.info(f"\nFitting model: {fit_purpose}")
 
@@ -220,31 +245,48 @@ class PreferenceModel:
             if stan_data['F'] < 1:
                 raise ValueError(f"Invalid number of features: {stan_data['F']}")
 
-            # Setup sampling parameters
-            n_chains = self.config.model.chains
-            #n_iter = self.config.model.warmup + self.config.model.n_samples
-
-            # Print sampling information with purpose if provided
-            sampling_msg = f"Starting sampling with {n_chains} chains, " + \
-                        f"{self.config.model.warmup} warmup iterations, " + \
-                        f"{self.config.model.n_samples} sampling iterations"
+            sampling_msg = f"Starting sampling with {self.config.model.chains} chains, " + \
+                                f"{self.config.model.warmup} warmup iterations, " + \
+                                f"{self.config.model.n_samples} sampling iterations"
             if fit_purpose:
                 sampling_msg += f" ({fit_purpose})"
             logger.info(sampling_msg)
 
-            # Fit using Stan
-            self.fit_result = self.model.sample(
-                data=stan_data,
-                chains=self.config.model.chains,
-                iter_warmup=self.config.model.warmup,
-                iter_sampling=self.config.model.n_samples,
-                adapt_delta=self.config.model.adapt_delta,
-                max_treedepth=self.config.model.max_treedepth,
-                show_progress=True,  # Let CmdStan handle progress display
-                refresh=max(1, min(self.config.model.n_samples // 10, 100)),  # Update every 10% or 100 iterations
-                save_warmup=False
-            )
-    
+            # Log Stan configuration
+            logger.info("Stan configuration:")
+            logger.info(f"  Chains: {self.config.model.chains}")
+            logger.info(f"  Warmup: {self.config.model.warmup}")
+            logger.info(f"  Samples: {self.config.model.n_samples}")
+            logger.info(f"  Max treedepth: {self.config.model.max_treedepth}")
+            logger.info(f"  Adapt delta: {self.config.model.adapt_delta}")
+
+            try:
+                self.fit_result = self.model.sample(
+                    data=stan_data,
+                    chains=self.config.model.chains,
+                    iter_warmup=self.config.model.warmup,
+                    iter_sampling=self.config.model.n_samples,
+                    adapt_delta=self.config.model.adapt_delta,
+                    max_treedepth=self.config.model.max_treedepth,
+                    show_progress=True,
+                    show_console=True,
+                    refresh=max(1, min(self.config.model.n_samples // 10, 100)),
+                    save_warmup=False
+                )
+            except Exception as stan_error:
+                logger.error("Stan sampling error details:")
+                # Get stdout
+                stdout_files = list(Path(self.config.paths.stan_temp).glob("*-stdout.txt"))
+                for f in stdout_files:
+                    logger.error(f"\nStdout from {f}:")
+                    logger.error(f.read_text())
+                # Get stderr
+                stderr_files = list(Path(self.config.paths.stan_temp).glob("*-stderr.txt"))
+                for f in stderr_files:
+                    logger.error(f"\nStderr from {f}:")
+                    logger.error(f.read_text())
+                raise RuntimeError(f"Stan sampling failed: {str(stan_error)}")
+
             # Check diagnostics
             self._check_diagnostics()
             
@@ -260,13 +302,6 @@ class PreferenceModel:
                         logger.error(f"Stan output from {file.name}:\n{f.read()}")
                 except Exception as read_error:
                     logger.error(f"Could not read Stan output: {str(read_error)}")
-
-            # Clean up temp files
-            try:
-                for file in output_dir.glob("preference_model-*"):
-                    file.unlink()
-            except Exception as cleanup_error:
-                logger.error(f"Error cleaning up temp files: {str(cleanup_error)}")
 
             logger.error(f"Error fitting model: {str(e)}")
             raise
