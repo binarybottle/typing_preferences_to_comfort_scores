@@ -1136,44 +1136,58 @@ class PreferenceModel:
             # Setup progress tracking
             start_time = time.time()
             
-            print("\n=== FEATURE SELECTION STARTING ===")
-            print(f"Received all_features: {all_features}")
-            print(f"Config base_features: {self.config.features.base_features}")
+            logger.info("\n" + "="*80)
+            logger.info("FEATURE SELECTION PROCESS".center(80))
+            logger.info("="*80 + "\n")
+            
+            logger.info(f"Received all_features: {all_features}")
+            logger.info(f"Config base_features: {self.config.features.base_features}")
             
             # Get thresholds from config
             thresholds = self.config.feature_selection.thresholds
             min_metrics = self.config.feature_selection.min_metrics_passed
             
-            logger.info(f"Selection criteria:")
-            logger.info(f"  Model effect threshold: {thresholds.model_effect}")
-            logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
-            logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
-            logger.info(f"  Required passing metrics: {min_metrics}/3")
+            logger.info("Selection Criteria:")
+            logger.info(f"  • Model effect threshold:      {thresholds.model_effect}")
+            logger.info(f"  • Effect consistency threshold: {thresholds.effect_consistency}")
+            logger.info(f"  • Predictive power threshold:   {thresholds.predictive_power}")
+            logger.info(f"  • Required passing metrics:     {min_metrics}/3\n")
             
             # Initialize with control features
             self.selected_features = list(self.config.features.control_features)
-            print(f"Initialized selected_features with controls: {self.selected_features}")
+            logger.info("Control Features:")
+            for f in self.selected_features:
+                logger.info(f"  • {f}")
+            logger.info("")
             
             self.importance_calculator.reset_normalization_factors()
             main_features = [f for f in all_features if f not in self.config.features.control_features]
-            print(f"Main features to evaluate: {main_features}")
-
-            print(f"\nEvaluating {len(main_features)} features...")
+            total_features = len(main_features)
             
+            logger.info(f"Total features to evaluate: {total_features}")
+            logger.info("-" * 80)
+            
+            round_num = 0
             while True:
+                round_num += 1
                 remaining_features = [f for f in main_features 
                                     if f not in self.selected_features]
                 
                 if not remaining_features:
                     break
-                        
-                logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
-                logger.info(f"Current feature set: {self.selected_features}")
+                
+                features_left = len(remaining_features)
+                logger.info(f"\nROUND {round_num}")
+                logger.info(f"Remaining features: {features_left}")
+                logger.info(f"Current feature set: {', '.join(self.selected_features)}")
+                logger.info("-" * 40)
                 
                 # Evaluate all remaining features in context of current set
                 feature_metrics = {}
                 for idx, feature in enumerate(remaining_features, 1):
-                    print(f"\rFeature {idx}/{len(remaining_features)}: Testing {feature}", end="")
+                    overall_progress = len(self.selected_features) / total_features * 100
+                    # Use print for the progress line since it needs to update in place
+                    print(f"\rProgress: {overall_progress:.1f}% | Round {round_num}: Testing feature {idx}/{features_left}: {feature:<30}", end="")
                     
                     # Create candidate feature set with current feature
                     candidate_features = self.selected_features + [feature]
@@ -1190,7 +1204,7 @@ class PreferenceModel:
                         current_selected_features=self.selected_features
                     )
                     feature_metrics[feature] = metrics
-                    
+                
                 # Compare features and count wins
                 win_counts = {f: 0 for f in remaining_features}
                 for f1, f2 in combinations(remaining_features, 2):
@@ -1201,16 +1215,16 @@ class PreferenceModel:
                 
                 best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
                 best_metrics = feature_metrics[best_feature]
-                print(f"\nSelected: {best_feature}")
+                
+                logger.info(f"\n\nSelected Feature: {best_feature}")
+                logger.info("Metrics:")
+                logger.info(f"  • Model effect:       {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
+                logger.info(f"  • Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
+                logger.info(f"  • Predictive power:   {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
+                logger.info("-" * 80)
                 
                 # Add best feature to selected set
                 self.selected_features.append(best_feature)
-                
-                # Log metrics for selected feature
-                logger.info(f"\nFeature {best_feature} metrics evaluation:")
-                logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-                logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-                logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
             
             # Ensure at least one main feature is selected
             if not any(f not in self.config.features.control_features 
@@ -1221,11 +1235,22 @@ class PreferenceModel:
                 self.selected_features.append(best_main)
                 self.fit(dataset, self.selected_features)
             
+            elapsed_time = time.time() - start_time
+            
+            logger.info("\n" + "="*80)
+            logger.info("FEATURE SELECTION COMPLETE".center(80))
+            logger.info("="*80)
+            logger.info(f"\nTime taken: {elapsed_time:.1f} seconds")
+            logger.info(f"Selected {len(self.selected_features)} features:")
+            for f in self.selected_features:
+                logger.info(f"  • {f}")
+            logger.info("")
+            
             return self.selected_features
             
         finally:
             self.cleanup()
-                                        
+                                                    
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
         Compare two features based on their metrics.
