@@ -1138,54 +1138,74 @@ class PreferenceModel:
         Control features are always included but not selected.
         """
         try:
-            print("\n=== select_features method starting ===")
-            print(f"Received all_features: {all_features}")
-            print(f"Config base_features: {self.config.features.base_features}")
-            
+            start_time = time.time()
+            print("\n=== FEATURE SELECTION STARTING ===")
+
+            # Group and count features
+            base_features = [f for f in all_features if '_x_' not in f and f not in self.config.features.control_features]
+            interaction_features = [f for f in all_features if '_x_' in f]
+            interaction_by_depth = defaultdict(list)
+            for f in interaction_features:
+                depth = len(f.split('_x_'))
+                interaction_by_depth[depth].append(f)
+
+            print("\nFeature Breakdown:")
+            print(f"Base features ({len(base_features)}):")
+            for f in base_features:
+                print(f"  {f}")
+            for depth, features in sorted(interaction_by_depth.items()):
+                print(f"\n{depth}-way interactions ({len(features)}):")
+                for f in features:
+                    print(f"  {f}")
+            print(f"\nControl features ({len(self.config.features.control_features)}):")
+            for f in self.config.features.control_features:
+                print(f"  {f}")
+                
             # Get thresholds from config
             thresholds = self.config.feature_selection.thresholds
             min_metrics = self.config.feature_selection.min_metrics_passed
             
-            logger.info(f"Selection criteria:")
-            logger.info(f"  Model effect threshold: {thresholds.model_effect}")
-            logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
-            logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
-            logger.info(f"  Required passing metrics: {min_metrics}/3")
+            print("\nSelection Criteria:")
+            print(f"  Model effect threshold: {thresholds.model_effect}")
+            print(f"  Effect consistency threshold: {thresholds.effect_consistency}")
+            print(f"  Predictive power threshold: {thresholds.predictive_power}")
+            print(f"  Required passing metrics: {min_metrics}/3")
             
             # Initialize with control features
             self.selected_features = list(self.config.features.control_features)
-            print(f"Initialized selected_features with controls: {self.selected_features}")
-            
             self.importance_calculator.reset_normalization_factors()
             main_features = [f for f in all_features if f not in self.config.features.control_features]
-            print(f"Main features to evaluate: {main_features}")
-                
+            
+            # Main selection loop
             while True:
-                remaining_features = [f for f in main_features 
-                                    if f not in self.selected_features]
-                
+                remaining_features = [f for f in main_features if f not in self.selected_features]
                 if not remaining_features:
                     break
-                        
-                logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
-                logger.info(f"Current feature set: {self.selected_features}")
+                    
+                elapsed_time = time.time() - start_time
+                remaining_count = len(remaining_features)
+                eval_count = len(main_features) - remaining_count
+                if eval_count > 0:
+                    avg_time_per_feature = elapsed_time / eval_count
+                    estimated_remaining = avg_time_per_feature * remaining_count
+                    print(f"\n=== Progress Update ===")
+                    print(f"Features evaluated: {eval_count}/{len(main_features)}")
+                    print(f"Elapsed time: {elapsed_time:.1f}s")
+                    print(f"Estimated remaining: {estimated_remaining:.1f}s")
+                    print(f"Current feature set: {self.selected_features}")
                 
-                # Add debug logging here:
-                logger.debug(f"Evaluating features: {remaining_features}")
+                print(f"\nEvaluating {len(remaining_features)} remaining features...")
                 
-                # Evaluate all remaining features in context of current set
+                # Your existing evaluation code...
                 feature_metrics = {}
                 for feature in remaining_features:
-                    logger.debug(f"\nEvaluating feature: {feature}")
-                    
-                    # Create candidate feature set with current feature
+                    print(f"\nEvaluating: {feature}")
+                    if '_x_' in feature:
+                        components = feature.split('_x_')
+                        print(f"  Components: {' × '.join(components)}")
+                        
                     candidate_features = self.selected_features + [feature]
-                    logger.debug(f"Candidate feature set: {candidate_features}")
-                                    
-                    # Fit model with candidate feature set
                     self.fit(dataset, candidate_features)
-                    
-                    # Evaluate this feature in context of current set
                     metrics = self.importance_calculator.evaluate_feature(
                         feature=feature,
                         dataset=dataset,
@@ -1193,77 +1213,34 @@ class PreferenceModel:
                         all_features=all_features,
                         current_selected_features=self.selected_features
                     )
-                    logger.debug(f"Feature {feature} metrics: {metrics}")
                     feature_metrics[feature] = metrics
-                
-                # Compare each feature against all others
+
+                # Rest of your existing code...
                 win_counts = {f: 0 for f in remaining_features}
                 for f1, f2 in combinations(remaining_features, 2):
                     if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
                         win_counts[f1] += 1
                     else:
                         win_counts[f2] += 1
-                        
-                # Select feature with most wins
+                            
                 best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
                 best_metrics = feature_metrics[best_feature]
                 
-                logger.debug(f"\nFeature comparison results:")
-                for feature, wins in win_counts.items():
-                    metrics = feature_metrics[feature]
-                    logger.debug(f"\n{feature}:")
-                    logger.debug(f"  Wins: {wins}")
-                    logger.debug(f"  Effect: {metrics['model_effect']:.3f}")
-                    logger.debug(f"  Consistency: {metrics['effect_consistency']:.3f}")
-                    logger.debug(f"  Predictive power: {metrics['predictive_power']:.3f}")
+                print(f"\nBest feature: {best_feature}")
+                print(f"  Effect: {best_metrics['model_effect']:.3f}")
+                print(f"  Consistency: {best_metrics['effect_consistency']:.3f}")
+                print(f"  Power: {best_metrics['predictive_power']:.3f}")
                 
-                # Count metrics that pass thresholds
-                metrics_passed = 0
-                if best_metrics['model_effect'] > thresholds.model_effect:
-                    metrics_passed += 1
-                if best_metrics['effect_consistency'] > thresholds.effect_consistency:
-                    metrics_passed += 1
-                if best_metrics['predictive_power'] > thresholds.predictive_power:
-                    metrics_passed += 1
-
-                logger.info(f"\nFeature {best_feature} metrics evaluation:")
-                logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-                logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-                logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-                logger.info(f"  Metrics passed: {metrics_passed}/3 (need {min_metrics})")
-
-                # Select if enough metrics pass thresholds
-                """
-                if metrics_passed >= min_metrics:
-                    self.selected_features.append(best_feature)
-                    self.fit(dataset, self.selected_features)
-                    logger.info(f"\nSelected {best_feature} with {win_counts[best_feature]} wins")
-                    logger.info(f"  Passed {metrics_passed} out of 3 metrics")
-                    
-                    logger.info("\nCurrent model state:")
-                    weights = self.get_feature_weights()
-                    for feat in [f for f in self.selected_features 
-                                if f not in self.config.features.control_features]:
-                        w, s = weights.get(feat, (0.0, 0.0))
-                        logger.info(f"  {feat}: {w:.3f} ± {s:.3f}")
-                else:
-                    logger.info(f"Feature {best_feature} failed selection criteria ({metrics_passed}/{min_metrics} metrics passed)")
-                    break
-                """
-            
-            # Ensure at least one main feature is selected
-            if not any(f not in self.config.features.control_features 
-                    for f in self.selected_features):
-                logger.warning("No main features selected, forcing selection of best main feature")
-                best_main = max(feature_metrics.items(), 
-                            key=lambda x: x[1]['model_effect'])[0]
-                self.selected_features.append(best_main)
-                self.fit(dataset, self.selected_features)
+            total_time = time.time() - start_time
+            print(f"\n=== Feature Selection Complete ===")
+            print(f"Total time: {total_time:.1f}s")
+            print(f"Selected features: {self.selected_features}")
             
             return self.selected_features
+            
         finally:
             self.cleanup()
-    
+                
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
         Compare two features based on their metrics.
