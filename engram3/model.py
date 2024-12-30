@@ -207,8 +207,26 @@ class PreferenceModel:
             # Validate Stan data
             if stan_data['F'] < 1:
                 raise ValueError(f"Invalid number of features: {stan_data['F']}")
-                
-            # Fit using Stan
+
+            # Setup progress bars for Stan chains
+            n_chains = self.config.model.chains
+            n_iter = self.config.model.warmup + self.config.model.n_samples
+            progress_bars = {
+                i: tqdm(total=n_iter, 
+                    desc=f"Chain [{i}]", 
+                    position=i-1,
+                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}')
+                for i in range(1, n_chains + 1)
+            }
+
+            def progress_callback(chain_id, iter_num, stage):
+                progress_bars[chain_id].update(1)
+                if iter_num <= self.config.model.warmup:
+                    progress_bars[chain_id].set_postfix_str("(Warmup)")
+                else:
+                    progress_bars[chain_id].set_postfix_str("(Sampling)")
+
+            # Fit using Stan with progress bars
             self.fit_result = self.model.sample(
                 data=stan_data,
                 chains=self.config.model.chains,
@@ -216,12 +234,19 @@ class PreferenceModel:
                 iter_sampling=self.config.model.n_samples,
                 adapt_delta=self.config.model.adapt_delta,
                 max_treedepth=self.config.model.max_treedepth,
-                show_console=True,
-                show_progress=True,
-                refresh=50,
+                show_progress=False,
+                refresh=1,
+                callback=progress_callback,
                 save_warmup=False
             )
+
+            # Close progress bars
+            for bar in progress_bars.values():
+                bar.close()
             
+            # Move cursor back up to cover empty space
+            print(f"\033[{n_chains}A", end="")
+
             # Check diagnostics
             self._check_diagnostics()
             
@@ -1138,109 +1163,101 @@ class PreferenceModel:
         Control features are always included but not selected.
         """
         try:
+            # Setup progress tracking
             start_time = time.time()
+            
             print("\n=== FEATURE SELECTION STARTING ===")
-
-            # Group and count features
-            base_features = [f for f in all_features if '_x_' not in f and f not in self.config.features.control_features]
-            interaction_features = [f for f in all_features if '_x_' in f]
-            interaction_by_depth = defaultdict(list)
-            for f in interaction_features:
-                depth = len(f.split('_x_'))
-                interaction_by_depth[depth].append(f)
-
-            print("\nFeature Breakdown:")
-            print(f"Base features ({len(base_features)}):")
-            for f in base_features:
-                print(f"  {f}")
-            for depth, features in sorted(interaction_by_depth.items()):
-                print(f"\n{depth}-way interactions ({len(features)}):")
-                for f in features:
-                    print(f"  {f}")
-            print(f"\nControl features ({len(self.config.features.control_features)}):")
-            for f in self.config.features.control_features:
-                print(f"  {f}")
-                
+            print(f"Received all_features: {all_features}")
+            print(f"Config base_features: {self.config.features.base_features}")
+            
             # Get thresholds from config
             thresholds = self.config.feature_selection.thresholds
             min_metrics = self.config.feature_selection.min_metrics_passed
             
-            print("\nSelection Criteria:")
-            print(f"  Model effect threshold: {thresholds.model_effect}")
-            print(f"  Effect consistency threshold: {thresholds.effect_consistency}")
-            print(f"  Predictive power threshold: {thresholds.predictive_power}")
-            print(f"  Required passing metrics: {min_metrics}/3")
+            logger.info(f"Selection criteria:")
+            logger.info(f"  Model effect threshold: {thresholds.model_effect}")
+            logger.info(f"  Effect consistency threshold: {thresholds.effect_consistency}")
+            logger.info(f"  Predictive power threshold: {thresholds.predictive_power}")
+            logger.info(f"  Required passing metrics: {min_metrics}/3")
             
             # Initialize with control features
             self.selected_features = list(self.config.features.control_features)
+            print(f"Initialized selected_features with controls: {self.selected_features}")
+            
             self.importance_calculator.reset_normalization_factors()
             main_features = [f for f in all_features if f not in self.config.features.control_features]
-            
-            # Main selection loop
-            while True:
-                remaining_features = [f for f in main_features if f not in self.selected_features]
-                if not remaining_features:
-                    break
-                    
-                elapsed_time = time.time() - start_time
-                remaining_count = len(remaining_features)
-                eval_count = len(main_features) - remaining_count
-                if eval_count > 0:
-                    avg_time_per_feature = elapsed_time / eval_count
-                    estimated_remaining = avg_time_per_feature * remaining_count
-                    print(f"\n=== Progress Update ===")
-                    print(f"Features evaluated: {eval_count}/{len(main_features)}")
-                    print(f"Elapsed time: {elapsed_time:.1f}s")
-                    print(f"Estimated remaining: {estimated_remaining:.1f}s")
-                    print(f"Current feature set: {self.selected_features}")
-                
-                print(f"\nEvaluating {len(remaining_features)} remaining features...")
-                
-                # Your existing evaluation code...
-                feature_metrics = {}
-                for feature in remaining_features:
-                    print(f"\nEvaluating: {feature}")
-                    if '_x_' in feature:
-                        components = feature.split('_x_')
-                        print(f"  Components: {' × '.join(components)}")
-                        
-                    candidate_features = self.selected_features + [feature]
-                    self.fit(dataset, candidate_features)
-                    metrics = self.importance_calculator.evaluate_feature(
-                        feature=feature,
-                        dataset=dataset,
-                        model=self,
-                        all_features=all_features,
-                        current_selected_features=self.selected_features
-                    )
-                    feature_metrics[feature] = metrics
+            print(f"Main features to evaluate: {main_features}")
 
-                # Rest of your existing code...
-                win_counts = {f: 0 for f in remaining_features}
-                for f1, f2 in combinations(remaining_features, 2):
-                    if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
-                        win_counts[f1] += 1
-                    else:
-                        win_counts[f2] += 1
+            # Create progress bar for feature evaluation
+            with tqdm(total=len(main_features), 
+                    desc="Features Evaluated",
+                    position=0,
+                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}') as pbar:
+                    
+                while True:
+                    remaining_features = [f for f in main_features 
+                                        if f not in self.selected_features]
+                    
+                    if not remaining_features:
+                        break
                             
-                best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
-                best_metrics = feature_metrics[best_feature]
+                    logger.info(f"\nEvaluating {len(remaining_features)} remaining main features...")
+                    logger.info(f"Current feature set: {self.selected_features}")
+                    
+                    # Evaluate all remaining features in context of current set
+                    feature_metrics = {}
+                    for feature in remaining_features:
+                        pbar.set_postfix_str(f"Testing: {feature}")
+                        
+                        # Create candidate feature set with current feature
+                        candidate_features = self.selected_features + [feature]
+                        
+                        # Fit model with candidate feature set
+                        self.fit(dataset, candidate_features)
+                        
+                        # Evaluate this feature in context of current set
+                        metrics = self.importance_calculator.evaluate_feature(
+                            feature=feature,
+                            dataset=dataset,
+                            model=self,
+                            all_features=all_features,
+                            current_selected_features=self.selected_features
+                        )
+                        feature_metrics[feature] = metrics
+                        
+                    # Rest of your existing comparison and selection code...
+                    win_counts = {f: 0 for f in remaining_features}
+                    for f1, f2 in combinations(remaining_features, 2):
+                        if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
+                            win_counts[f1] += 1
+                        else:
+                            win_counts[f2] += 1
+                    
+                    best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
+                    best_metrics = feature_metrics[best_feature]
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"Selected: {best_feature}")
+                    
+                    # Your existing metrics logging...
+                    logger.info(f"\nFeature {best_feature} metrics evaluation:")
+                    logger.info(f"  Model effect: {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
+                    logger.info(f"  Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
+                    logger.info(f"  Predictive power: {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
                 
-                print(f"\nBest feature: {best_feature}")
-                print(f"  Effect: {best_metrics['model_effect']:.3f}")
-                print(f"  Consistency: {best_metrics['effect_consistency']:.3f}")
-                print(f"  Power: {best_metrics['predictive_power']:.3f}")
+                # Ensure at least one main feature is selected
+                if not any(f not in self.config.features.control_features 
+                        for f in self.selected_features):
+                    logger.warning("No main features selected, forcing selection of best main feature")
+                    best_main = max(feature_metrics.items(), 
+                                key=lambda x: x[1]['model_effect'])[0]
+                    self.selected_features.append(best_main)
+                    self.fit(dataset, self.selected_features)
                 
-            total_time = time.time() - start_time
-            print(f"\n=== Feature Selection Complete ===")
-            print(f"Total time: {total_time:.1f}s")
-            print(f"Selected features: {self.selected_features}")
-            
-            return self.selected_features
-            
+                return self.selected_features
+                
         finally:
             self.cleanup()
-                
+                            
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
         Compare two features based on their metrics.
