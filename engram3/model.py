@@ -78,6 +78,9 @@ import traceback
 from collections import defaultdict
 import tempfile
 import shutil
+import psutil
+from tenacity import retry, stop_after_attempt, wait_fixed
+import gc
 
 from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from engram3.data import PreferenceDataset
@@ -184,13 +187,24 @@ class PreferenceModel:
         self.feature_cache.clear()
         self.prediction_cache.clear()
 
-    def _check_temp_space(self, required_mb=1000):
+    def _check_memory(self, required_gb=8):
+        """Check available system memory"""
+        mem = psutil.virtual_memory()
+        if mem.available < required_gb * 1024**3:
+            raise RuntimeError(f"Insufficient memory: {mem.available/(1024**3):.1f}GB free, need {required_gb}GB")
+
+    def _check_temp_space(self, required_mb=5000):
         """Check if enough temporary space available"""
         temp_dir = Path(tempfile.gettempdir())
         total, used, free = shutil.disk_usage(temp_dir)
         free_mb = free // (1024 * 1024)
         if free_mb < required_mb:
             raise RuntimeError(f"Insufficient temporary space: {free_mb}MB free, need {required_mb}MB")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    def _sample_with_retry(self, **kwargs):
+        """Attempt sampling with retries on failure"""
+        return self.model.sample(**kwargs)
 
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None, fit_purpose: str = None) -> None:
         """
@@ -203,9 +217,22 @@ class PreferenceModel:
         """
         try:
 
+            # Initial validation
+            if not dataset or not hasattr(dataset, 'preferences') or len(dataset.preferences) == 0:
+                raise ValueError("Empty dataset")
+            if features is not None and len(features) == 0:
+                raise ValueError("Empty features list")
+
+            # Resource checks
+            self._check_memory()
             self._check_temp_space()
 
-            # Clean temp directory first
+            # Clear previous results
+            for attr in ['fit_result', 'feature_weights']:
+                if hasattr(self, attr):
+                    delattr(self, attr)
+
+            # Clean temp directories
             temp_dirs = [tempfile.gettempdir(), self.config.paths.stan_temp]
             for temp_dir in temp_dirs:
                 for pattern in ["preference_model*", "stanModel*", "stan_*"]:
@@ -260,8 +287,11 @@ class PreferenceModel:
             logger.info(f"  Max treedepth: {self.config.model.max_treedepth}")
             logger.info(f"  Adapt delta: {self.config.model.adapt_delta}")
 
+            # Force garbage collection before sampling
+            gc.collect()
+
             try:
-                self.fit_result = self.model.sample(
+                self.fit_result = self._sample_with_retry(
                     data=stan_data,
                     chains=self.config.model.chains,
                     iter_warmup=self.config.model.warmup,
@@ -275,34 +305,18 @@ class PreferenceModel:
                 )
             except Exception as stan_error:
                 logger.error("Stan sampling error details:")
-                # Get stdout
-                stdout_files = list(Path(self.config.paths.stan_temp).glob("*-stdout.txt"))
-                for f in stdout_files:
-                    logger.error(f"\nStdout from {f}:")
-                    logger.error(f.read_text())
-                # Get stderr
-                stderr_files = list(Path(self.config.paths.stan_temp).glob("*-stderr.txt"))
-                for f in stderr_files:
-                    logger.error(f"\nStderr from {f}:")
+                for f in Path(self.config.paths.stan_temp).glob("*-std*.txt"):
+                    logger.error(f"\n{f.name}:")
                     logger.error(f.read_text())
                 raise RuntimeError(f"Stan sampling failed: {str(stan_error)}")
 
-            # Check diagnostics
-            self._check_diagnostics()
-            
-            # Update feature weights
-            self._update_feature_weights()
-            
-        except Exception as e:
-            # Try to get Stan output if available
-            output_dir = Path(self.config.paths.stan_temp)
-            for file in output_dir.glob("preference_model-*-stdout.txt"):
-                try:
-                    with open(file) as f:
-                        logger.error(f"Stan output from {file.name}:\n{f.read()}")
-                except Exception as read_error:
-                    logger.error(f"Could not read Stan output: {str(read_error)}")
+            # Force garbage collection after sampling
+            gc.collect()
 
+            self._check_diagnostics()
+            self._update_feature_weights()
+
+        except Exception as e:
             logger.error(f"Error fitting model: {str(e)}")
             raise
 
@@ -673,6 +687,8 @@ class PreferenceModel:
             Handles both main features and control features separately.
             """
             try:
+                processed_features = set()
+
                 # Get feature names and separate control features
                 self.feature_names = features if features is not None else dataset.get_feature_names()
                 control_features = self.config.features.control_features
@@ -705,6 +721,10 @@ class PreferenceModel:
                     # Collect main feature values
                     if not is_control_only:
                         for feature in main_features:
+
+                            if feature not in processed_features:
+                                logger.debug(f"Processing base feature: {feature}")
+                                processed_features.add(feature)
 
                             if '_x_' in feature:
                                 # Split interaction name into component features
@@ -743,6 +763,11 @@ class PreferenceModel:
 
                     # Collect control feature values
                     for feature in control_features:
+
+                        if feature not in processed_features:
+                            logger.debug(f"Processing base feature: {feature}")
+                            processed_features.add(feature)
+
                         feat1 = pref.features1.get(feature, 0.0)
                         feat2 = pref.features2.get(feature, 0.0)
                         feature_stats[feature]['values'].extend([feat1, feat2])
@@ -783,6 +808,11 @@ class PreferenceModel:
                             features1_main = []
                             features2_main = []
                             for feature in main_features:
+
+                                if feature not in processed_features:
+                                    logger.debug(f"Processing base feature: {feature}")
+                                    processed_features.add(feature)
+
                                 try:
 
                                     if '_x_' in feature:
@@ -845,6 +875,11 @@ class PreferenceModel:
                         features1_control = []
                         features2_control = []
                         for feature in control_features:
+
+                            if feature not in processed_features:
+                                logger.debug(f"Processing base feature: {feature}")
+                                processed_features.add(feature)
+
                             if feature not in feature_stats:
                                 logger.error(f"Missing statistics for control feature: {feature}")
                                 raise ValueError(f"Missing statistics for control feature: {feature}")
