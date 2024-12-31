@@ -95,20 +95,20 @@ features:
     - [rows_apart, outward_roll, sum_engram_position_values]
     - [rows_apart, outward_roll, sum_row_position_values]
     - [angle_apart, outward_roll, sum_engram_position_values]
-    - [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_row_position_values]
-    - [sum_finger_values, adj_finger_diff_row, angle_apart, outward_roll]
-    - [sum_finger_values, adj_finger_diff_row, angle_apart, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_row_position_values]
-    - [sum_finger_values, rows_apart, outward_roll, sum_engram_position_values]
-    - [sum_finger_values, rows_apart, outward_roll, sum_row_position_values]
-    - [sum_finger_values, angle_apart, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, outward_roll, sum_row_position_values]
-    - [adj_finger_diff_row, angle_apart, outward_roll, sum_engram_position_values]
+    #- [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
+    #- [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, rows_apart, sum_row_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, angle_apart, outward_roll]
+    #- [sum_finger_values, adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, outward_roll, sum_row_position_values]
+    #- [sum_finger_values, rows_apart, outward_roll, sum_engram_position_values]
+    #- [sum_finger_values, rows_apart, outward_roll, sum_row_position_values]
+    #- [sum_finger_values, angle_apart, outward_roll, sum_engram_position_values]
+    #- [adj_finger_diff_row, rows_apart, outward_roll, sum_engram_position_values]
+    #- [adj_finger_diff_row, rows_apart, outward_roll, sum_row_position_values]
+    #- [adj_finger_diff_row, angle_apart, outward_roll, sum_engram_position_values]
   control_features:                     # Features to control for but not analyze
     - bigram_frequency                  # Bigram frequency in the English language
 
@@ -131,9 +131,9 @@ recommendations:
 #-----------------------------------------------------------------------
 # Model slow vs. fast settings
 __model_slow: &slow
-  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  chains: 2                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 2000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 5000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
   max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
 __model_fast: &fast  
@@ -148,6 +148,7 @@ model:                                  # Bayesian model parameters (Stan)
   adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
+  required_temp_mb: 2000                # Required temporary space in MB
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
   model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
 

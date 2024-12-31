@@ -122,6 +122,7 @@ class ModelSettings(BaseModel):
     max_treedepth: int = Field(gt=0)
     feature_scale: float = Field(gt=0)
     participant_scale: float = Field(gt=0)
+    required_temp_mb: int = Field(gt=0)
     predictions_file: str
     model_file: str
 

@@ -193,14 +193,14 @@ class PreferenceModel:
         if mem.available < required_gb * 1024**3:
             raise RuntimeError(f"Insufficient memory: {mem.available/(1024**3):.1f}GB free, need {required_gb}GB")
 
-    def _check_temp_space(self, required_mb=5000):
-        """Check if enough temporary space available"""
+    def _check_temp_space(self):
+        required_mb = self.config.model.get('required_temp_mb', 2000)  # Default 2000MB
         temp_dir = Path(tempfile.gettempdir())
         total, used, free = shutil.disk_usage(temp_dir)
         free_mb = free // (1024 * 1024)
         if free_mb < required_mb:
             raise RuntimeError(f"Insufficient temporary space: {free_mb}MB free, need {required_mb}MB")
-
+        
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def _sample_with_retry(self, **kwargs):
         """Attempt sampling with retries on failure"""
@@ -299,7 +299,6 @@ class PreferenceModel:
                     adapt_delta=self.config.model.adapt_delta,
                     max_treedepth=self.config.model.max_treedepth,
                     show_progress=True,
-                    show_console=True,
                     refresh=max(1, min(self.config.model.n_samples // 10, 100)),
                     save_warmup=False
                 )
@@ -791,6 +790,7 @@ class PreferenceModel:
                     logger.debug(f"Feature {feature} stats - mean: {stats['mean']}, std: {stats['std']}")
 
                 # Second pass: build standardized matrices
+                processed_features.clear()  # Reset before second pass
                 logger.info("Second pass: building standardized matrices")
                 X1, X2 = [], []  # Main feature matrices
                 C1, C2 = [], []  # Control feature matrices
@@ -1206,7 +1206,78 @@ class PreferenceModel:
             logger.error(f"Error extracting feature weights: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise FeatureError(f"Failed to extract feature weights: {str(e)}")
-                                            
+
+    def calculate_storage_requirements(self, dataset: PreferenceDataset, all_features: List[str]) -> int:
+        """
+        Calculate approximate storage requirements for the entire feature selection process.
+        
+        Returns:
+            Required storage in MB
+        """
+        bytes_per_param = 8  # Double precision float
+        n_participants = len(dataset.participants)
+        n_preferences = len(dataset.preferences)
+        n_features = len(all_features)
+        n_chains = self.config.model.chains
+        n_samples = self.config.model.warmup + self.config.model.n_samples
+        
+        logger.info(f"Storage calculation details:")
+        logger.info(f"  Participants: {n_participants}")
+        logger.info(f"  Preferences: {n_preferences}")
+        logger.info(f"  Features: {n_features}")
+        logger.info(f"  Chains: {n_chains}")
+        logger.info(f"  Total samples: {n_samples}")
+        
+        # Storage per model fit
+        params_per_chain = (n_participants * n_features) + n_preferences + n_features
+        chain_storage = params_per_chain * bytes_per_param * n_chains * n_samples
+        
+        logger.info(f"  Parameters per chain: {params_per_chain}")
+        logger.info(f"  Storage per full model fit: {chain_storage / (1024 * 1024):.1f} MB")
+        
+        # Number of model fits needed
+        total_fits = 1 + n_features + (5 * n_features)
+        logger.info(f"  Total model fits needed: {total_fits}")
+        logger.info(f"    - Initial baseline: 1")
+        logger.info(f"    - Feature evaluations: {n_features}")
+        logger.info(f"    - Cross-validation fits: {5 * n_features}")
+        
+        # Total storage including overhead for temp files
+        total_bytes = chain_storage * total_fits * 1.5  # 50% overhead
+        total_mb = int(total_bytes / (1024 * 1024))
+        
+        logger.info(f"  Total storage needed (with 50% overhead): {total_mb} MB")
+        
+        return total_mb
+
+    def check_total_storage(self, dataset: PreferenceDataset, all_features: List[str]) -> None:
+        """
+        Check if enough storage is available for the entire feature selection process.
+        Raises RuntimeError if insufficient space.
+        """
+        required_mb = self.calculate_storage_requirements(dataset, all_features)
+        
+        # Check temp directory space
+        temp_dir = Path(tempfile.gettempdir())
+        total, used, free = shutil.disk_usage(temp_dir)
+        free_mb = free // (1024 * 1024)
+        
+        logger.info(f"Storage requirements:")
+        logger.info(f"  Required space: {required_mb} MB")
+        logger.info(f"  Available space: {free_mb} MB")
+        
+        if free_mb < required_mb:
+            raise RuntimeError(
+                f"Insufficient storage space for feature selection.\n"
+                f"Required: {required_mb} MB\n"
+                f"Available: {free_mb} MB\n"
+                f"Consider:\n"
+                f"- Freeing up temporary space\n"
+                f"- Reducing number of chains ({self.config.model.chains})\n"
+                f"- Reducing number of samples ({self.config.model.n_samples})\n"
+                f"- Reducing number of features to evaluate ({len(all_features)})"
+            )
+                                                
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------                          
@@ -1217,6 +1288,10 @@ class PreferenceModel:
         Control features are always included but not selected.
         """
         try:
+
+            # Check storage requirements upfront    
+            self.check_total_storage(dataset, all_features)
+
             # Setup progress tracking
             start_time = time.time()
             
