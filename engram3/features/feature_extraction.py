@@ -21,7 +21,6 @@ Supports keyboard analysis through:
   - Bigram characteristic analysis
 """
 from typing import Dict, List, Tuple
-from dataclasses import dataclass
 from pathlib import Path
 import yaml
 

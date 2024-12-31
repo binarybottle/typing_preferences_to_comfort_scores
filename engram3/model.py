@@ -194,13 +194,13 @@ class PreferenceModel:
             raise RuntimeError(f"Insufficient memory: {mem.available/(1024**3):.1f}GB free, need {required_gb}GB")
 
     def _check_temp_space(self):
-        required_mb = self.config.model.get('required_temp_mb', 2000)  # Default 2000MB
+        required_mb = self.config.model.required_temp_mb  # Default value is already 2000
         temp_dir = Path(tempfile.gettempdir())
         total, used, free = shutil.disk_usage(temp_dir)
         free_mb = free // (1024 * 1024)
         if free_mb < required_mb:
             raise RuntimeError(f"Insufficient temporary space: {free_mb}MB free, need {required_mb}MB")
-        
+                    
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def _sample_with_retry(self, **kwargs):
         """Attempt sampling with retries on failure"""

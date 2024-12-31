@@ -7,7 +7,6 @@ Implements PreferenceDataset class which handles:
   - Managing train/test splits
   - Providing consistent data access for modeling
 """
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, Any
 import logging
