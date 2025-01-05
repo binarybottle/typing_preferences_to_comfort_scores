@@ -23,6 +23,22 @@ data:                                   # Path to processed preference data
 #-----------------------------------------------------------------------
 # Feature selection
 #-----------------------------------------------------------------------
+# The feature selection process evaluates feature importance based on:
+# - model_effect (weight magnitude)
+# - effect_consistency (stability across CV splits)
+# - predictive_power (improvement over baseline)
+# When a 3-way interaction is evaluated, it needs to provide sufficient additional predictive power, etc. 
+# compared to a model that already contains all previously selected features, including 2-way interactions.
+# In the round-robin feature selection process, we're making relative comparisons between features to select 
+# the best one at each round. Therefore high precision MCMC settings (chains, warmup, n_samples) are less critical 
+because:
+# - We only need enough precision to reliably determine which feature is better
+# - We're not using the absolute values for final inference
+# - The relative ranking is more important than precise effect estimates
+# Model settings like adapt_delta and max_treedepth can be more relaxed because:
+# - Small inaccuracies won't affect the relative comparisons much
+# - We're interested in "better vs worse" rather than exact effect sizes
+# - Performance (speed) becomes more important since we're doing many comparisons
 feature_selection:
   metric_weights:                       # Weights for combining different metrics (must sum to 1)
     model_effect: 0.4                   # Weight for feature's effect in model
@@ -137,13 +153,15 @@ __model_fast: &debug
   warmup: 200                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 500                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
   max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.80                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 # Settings to select features (takes days on an M1/M2 Macbook Pro)
 __model_feature_selection: &feature_selection
   chains: 2                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 1000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 3000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  max_treedepth: 10                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.90                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 # Settings to train the model on the selected features
 __model_slow: &model_train
@@ -151,12 +169,12 @@ __model_slow: &model_train
   warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
   max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 model:                                  # Bayesian model parameters (Stan)
   #<<: *debug                            # Model debug settings
   <<: *feature_selection                # Model feature selection settings
   #<<: *model_train                      # Model training settings
-  adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   required_temp_mb: 2000                # Required temporary space in MB

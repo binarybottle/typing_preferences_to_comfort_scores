@@ -78,14 +78,16 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
     """
     split_file = Path(config.data.splits['split_data_file'])
     
-    # If split file exists, delete it to force new split creation
-    if split_file.exists():
-        logger.info("Removing existing split file to create new split...")
-        split_file.unlink()
-    
     try:
+        if split_file.exists():
+            logger.info("Loading existing train/test split...")
+            split_data = np.load(split_file)
+            train_data = dataset._create_subset_dataset(split_data['train_indices'])
+            test_data = dataset._create_subset_dataset(split_data['test_indices'])
+            return train_data, test_data
+            
         logger.info("Creating new train/test split...")
-        
+                    
         # Get test size from config
         test_ratio = config.data.splits['test_ratio']
         

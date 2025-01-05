@@ -349,7 +349,7 @@ class PreferenceModel:
                 )
             
             # Get control feature weights (gamma) if any exist
-            control_features = self.config.features.control_features
+            control_features = list(dict.fromkeys(self.config.features.control_features))  # Ensure unique
             if control_features:
                 try:
                     gamma = self.fit_result.stan_variable('gamma')
@@ -378,10 +378,10 @@ class PreferenceModel:
         """Evaluate model performance on a dataset."""
         logger.info("=== Starting model evaluation ===")
         logger.info(f"Model state:")
-        logger.info(f"  Feature names: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
-        logger.info(f"  Selected features: {self.selected_features if hasattr(self, 'selected_features') else 'No selected_features'}")
+        logger.info(f"  Feature names: {list(dict.fromkeys(self.feature_names)) if hasattr(self, 'feature_names') else 'No feature_names'}")
+        logger.info(f"  Selected features: {list(dict.fromkeys(self.selected_features)) if hasattr(self, 'selected_features') else 'No selected_features'}")
         logger.info(f"  Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
-    
+
         try:
             if not hasattr(self, 'fit_result') or self.fit_result is None:
                 logger.error("Model must be fit before evaluation")
@@ -680,7 +680,9 @@ class PreferenceModel:
                 processed_features = set()
 
                 # Get feature names and separate control features
-                self.feature_names = features if features is not None else dataset.get_feature_names()
+                self.feature_names = list(dict.fromkeys(
+                    features if features is not None else dataset.get_feature_names()
+                ))
                 control_features = self.config.features.control_features
                 
                 # Main features are those not in control_features - deduplicate
@@ -1657,10 +1659,10 @@ class PreferenceModel:
             logger.debug(f"Control features: {self.config.features.control_features}")
             
             # Separate main and control feature effects
-            main_features = [f for f in self.selected_features 
-                            if f not in self.config.features.control_features]
-            control_features = self.config.features.control_features
-            
+            main_features = list(dict.fromkeys([f for f in self.selected_features 
+                                    if f not in self.config.features.control_features]))
+            control_features = list(dict.fromkeys(self.config.features.control_features))
+
             # Determine if this is a baseline evaluation
             is_baseline = getattr(self, 'is_baseline_model', False)
             logger.debug(f"Model type: {'baseline' if is_baseline else 'main'}")
@@ -1882,25 +1884,59 @@ class PreferenceModel:
     # Cross-validation and splitting methods
     #--------------------------------------------
     def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray]]:
-        """Get cross-validation splits preserving participant structure."""
+        """Get cross-validation splits preserving participant structure with validation."""
         from sklearn.model_selection import KFold
         
-        # Get unique participants
+        # Get unique participants and their preferences
         participants = list(dataset.participants)
+        participant_to_indices = {}
+        for i, pref in enumerate(dataset.preferences):
+            if pref.participant_id not in participant_to_indices:
+                participant_to_indices[pref.participant_id] = []
+            participant_to_indices[pref.participant_id].append(i)
+        
+        # Create participant splits
         kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
         
         splits = []
+        total_preferences = len(dataset.preferences)
+        used_indices = set()
+        
         for train_part_idx, val_part_idx in kf.split(participants):
             # Get participant IDs for each split
             train_participants = {participants[i] for i in train_part_idx}
+            val_participants = {participants[i] for i in val_part_idx}
+            
+            # Verify participant split
+            if train_participants & val_participants:
+                raise ValueError("Participant overlap detected in CV splits")
             
             # Get preference indices for each split
-            train_indices = [i for i, pref in enumerate(dataset.preferences)
-                           if pref.participant_id in train_participants]
-            val_indices = [i for i, pref in enumerate(dataset.preferences)
-                          if pref.participant_id not in train_participants]
+            train_indices = []
+            val_indices = []
             
-            splits.append((np.array(train_indices), np.array(val_indices)))
+            for participant, indices in participant_to_indices.items():
+                if participant in train_participants:
+                    train_indices.extend(indices)
+                elif participant in val_participants:
+                    val_indices.extend(indices)
+            
+            # Verify preference split
+            if set(train_indices) & set(val_indices):
+                raise ValueError("Preference index overlap detected in CV splits")
+            
+            train_indices = np.array(train_indices)
+            val_indices = np.array(val_indices)
+            
+            # Update used indices tracking
+            used_indices.update(train_indices)
+            used_indices.update(val_indices)
+            
+            splits.append((train_indices, val_indices))
+        
+        # Verify all preferences are used
+        if len(used_indices) != total_preferences:
+            raise ValueError(f"Not all preferences used in CV splits: {len(used_indices)} vs {total_preferences}")
             
         return splits
                             

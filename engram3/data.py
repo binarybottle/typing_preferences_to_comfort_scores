@@ -289,18 +289,23 @@ class PreferenceDataset:
             if len(indices) == 0:
                 raise ValueError("Empty indices list provided")
                 
-            # Remove any indices that are out of bounds
-            valid_indices = indices[indices < len(self.preferences)]
-            if len(valid_indices) < len(indices):
-                logger.warning(f"Removed {len(indices) - len(valid_indices)} out-of-bounds indices")
+            if len(set(indices)) != len(indices):
+                logger.warning(f"Duplicate indices detected, will be deduplicated")
+                indices = np.unique(indices)
+                
+            # Check for out of bounds indices
+            if np.any(indices < 0) or np.any(indices >= len(self.preferences)):
+                invalid_indices = indices[(indices < 0) | (indices >= len(self.preferences))]
+                raise ValueError(f"Invalid indices detected: {invalid_indices[:5]}...")
             
-            if len(valid_indices) == 0:
-                raise ValueError("No valid indices after bounds checking")
-
             subset = PreferenceDataset.__new__(PreferenceDataset)
             
-            # Create subset preferences list with validation
-            subset.preferences = [self.preferences[i] for i in valid_indices]
+            # Create subset preferences list
+            subset.preferences = [self.preferences[i] for i in indices]
+            
+            # Verify subset creation
+            if len(subset.preferences) != len(indices):
+                raise ValueError(f"Subset creation failed: size mismatch. Expected {len(indices)}, got {len(subset.preferences)}")
             
             # Copy needed attributes
             subset.file_path = self.file_path
@@ -308,22 +313,32 @@ class PreferenceDataset:
             if subset.config:
                 subset.control_features = subset.config.features.control_features
             else:
-                subset.control_features = []            
-            subset.column_map = self.column_map
-            subset.row_map = self.row_map
-            subset.finger_map = self.finger_map
-            subset.engram_position_values = self.engram_position_values
-            subset.row_position_values = self.row_position_values
+                subset.control_features = []
+                
+            # Copy maps and values
+            for attr in ['column_map', 'row_map', 'finger_map', 
+                        'engram_position_values', 'row_position_values']:
+                if hasattr(self, attr):
+                    setattr(subset, attr, getattr(self, attr))
+                else:
+                    logger.warning(f"Source dataset missing attribute: {attr}")
+            
+            # Set participants based on preferences
             subset.participants = {p.participant_id for p in subset.preferences}
             
             # Copy feature extraction related attributes
-            subset.feature_extractor = self.feature_extractor  # Add this line
+            subset.feature_extractor = self.feature_extractor
             
             # Copy feature-related attributes if they exist
             if hasattr(self, 'all_bigrams'):
-                subset.all_bigrams = self.all_bigrams
-                subset.all_bigram_features = self.all_bigram_features
-                subset.feature_names = self.feature_names
+                for attr in ['all_bigrams', 'all_bigram_features', 'feature_names']:
+                    setattr(subset, attr, getattr(self, attr))
+            
+            # Validate final subset
+            if not subset.preferences:
+                raise ValueError("Created subset has no preferences")
+            if not subset.participants:
+                raise ValueError("Created subset has no participants")
                 
             return subset
                 
@@ -333,7 +348,7 @@ class PreferenceDataset:
             logger.error(f"Indices length: {len(indices)}")
             logger.error(f"Sample of indices: {indices[:10]}")
             raise
-                    
+                            
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
         bigram1 = (row['bigram1'][0], row['bigram1'][1])
