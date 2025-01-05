@@ -324,67 +324,58 @@ class PreferenceModel:
         try:
             self.feature_weights = {}
             
-            if hasattr(self, 'fit'):  # Stan backend
-                # Get main feature weights (beta)
-                beta = self.fit_result.stan_variable('beta')
-                # Deduplicate main features
-                main_features = list(dict.fromkeys(
-                    [f for f in self.feature_names if f not in self.config.features.control_features]
-                ))
+            if not hasattr(self, 'fit_result'):
+                raise ValueError("Model not fitted. Call fit() first.")
                 
-                # Debug logging
-                logger.debug(f"Beta shape: {beta.shape}")
-                logger.debug(f"Main features: {main_features}")
-                
-                # Update weights without modifying selected_features
-                for i, feature in enumerate(main_features):
-                    if i < beta.shape[1]:  # Check array bounds
-                        self.feature_weights[feature] = (
-                            float(np.mean(beta[:, i])),
-                            float(np.std(beta[:, i]))
-                        )
-                
-                # Get control feature weights (gamma)
-                if self.config.features.control_features:
+            # Get main feature weights (beta)
+            beta = self.fit_result.stan_variable('beta')
+            # Deduplicate main features
+            main_features = list(dict.fromkeys(
+                [f for f in self.feature_names if f not in self.config.features.control_features]
+            ))
+            
+            # Debug logging
+            logger.debug(f"Beta shape: {beta.shape}")
+            logger.debug(f"Main features: {main_features}")
+            
+            if beta.shape[1] != len(main_features):
+                raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
+            
+            # Update weights for main features
+            for i, feature in enumerate(main_features):
+                self.feature_weights[feature] = (
+                    float(np.mean(beta[:, i])),
+                    float(np.std(beta[:, i]))
+                )
+            
+            # Get control feature weights (gamma) if any exist
+            control_features = self.config.features.control_features
+            if control_features:
+                try:
                     gamma = self.fit_result.stan_variable('gamma')
-                    for i, feature in enumerate(self.config.features.control_features):
+                    if gamma.shape[1] != len(control_features):
+                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
+                        
+                    for i, feature in enumerate(control_features):
                         self.feature_weights[feature] = (
                             float(np.mean(gamma[:, i])),
                             float(np.std(gamma[:, i]))
                         )
-                
-                logger.debug("Updated weights:")
-                for feature, (mean, std) in self.feature_weights.items():
-                    feature_type = "control" if feature in self.config.features.control_features else "main"
-                    logger.debug(f"  {feature} ({feature_type}): {mean:.4f} ± {std:.4f}")
+                except Exception as e:
+                    logger.error(f"Error processing control features: {str(e)}")
+                    # Continue with main features only
                     
-            elif hasattr(self, 'trace'):  # PyMC backend
-                # Note: PyMC backend would need similar separation of main/control features
-                main_features = [f for f in self.feature_names 
-                            if f not in self.config.features.control_features]
-                for i, feature in enumerate(main_features):
-                    weights = self.trace.get_values('feature_weights')[:, i]
-                    self.feature_weights[feature] = (
-                        float(np.mean(weights)),
-                        float(np.std(weights))
-                    )
-                
-                if self.config.features.control_features:
-                    for i, feature in enumerate(self.config.features.control_features):
-                        weights = self.trace.get_values('control_weights')[:, i]
-                        self.feature_weights[feature] = (
-                            float(np.mean(weights)),
-                            float(np.std(weights))
-                        )
-                        
+            logger.debug("Updated weights:")
+            for feature, (mean, std) in self.feature_weights.items():
+                feature_type = "control" if feature in control_features else "main"
+                logger.debug(f"  {feature} ({feature_type}): {mean:.4f} ± {std:.4f}")
+                    
         except Exception as e:
             logger.error(f"Error updating feature weights: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-                                                            
+            raise
+                                                                    
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
-        logger.info("=== Starting model evaluation ===")
-        logger.info(f"Called from: {traceback.extract_stack()[-2]}")  # Add this to see where evaluate is called from
         logger.info("=== Starting model evaluation ===")
         logger.info(f"Model state:")
         logger.info(f"  Feature names: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
@@ -1288,19 +1279,13 @@ class PreferenceModel:
         Control features are always included but not selected.
         """
         try:
-
             # Check storage requirements upfront    
             self.check_total_storage(dataset, all_features)
-
-            # Setup progress tracking
             start_time = time.time()
             
             print("\n" + "="*80)
             print("FEATURE SELECTION PROCESS".center(80))
             print("="*80 + "\n")
-            logger.debug("\n" + "="*80)
-            logger.debug("FEATURE SELECTION PROCESS".center(80))
-            logger.debug("="*80 + "\n")
             
             # Get thresholds from config
             thresholds = self.config.feature_selection.thresholds
@@ -1311,65 +1296,71 @@ class PreferenceModel:
             print(f"  • Effect consistency threshold: {thresholds.effect_consistency}")
             print(f"  • Predictive power threshold:   {thresholds.predictive_power}")
             print(f"  • Required passing metrics:     {min_metrics}/3\n")
-            logger.debug("Selection Criteria:")
-            logger.debug(f"  • Model effect threshold:      {thresholds.model_effect}")
-            logger.debug(f"  • Effect consistency threshold: {thresholds.effect_consistency}")
-            logger.debug(f"  • Predictive power threshold:   {thresholds.predictive_power}")
-            logger.debug(f"  • Required passing metrics:     {min_metrics}/3\n")
             
-            # Initialize with control features
-            self.selected_features = list(self.config.features.control_features)
-            print("Control Features:")
-            logger.debug("Control Features:")
-            for f in self.selected_features:
+            # Initialize feature sets
+            control_features = list(self.config.features.control_features)
+            self.selected_features = []
+            
+            # Separate base and interaction features
+            base_features = [f for f in all_features if f not in control_features and '_x_' not in f]
+            interaction_features = [f for f in all_features if f not in control_features and '_x_' in f]
+            total_features = len(base_features) + len(interaction_features)
+            
+            print("Control Features (always included):")
+            for f in control_features:
                 print(f"  • {f}")
-                logger.debug(f"  • {f}")
-            print()
-            logger.debug("")
+            print(f"\nFeatures to evaluate:")
+            print(f"  • Base features: {len(base_features)}")
+            print(f"  • Interaction features: {len(interaction_features)}")
+            print("-" * 80)
             
             self.importance_calculator.reset_normalization_factors()
-            main_features = [f for f in all_features if f not in self.config.features.control_features]
-            total_features = len(main_features)
             
-            print(f"Total features to evaluate: {total_features}")
-            print("-" * 80)
-            logger.debug(f"Total features to evaluate: {total_features}")
-            logger.debug("-" * 80)
+            def _meets_thresholds(metrics):
+                """Check if metrics meet minimum threshold requirements"""
+                metrics_passed = (
+                    (metrics['model_effect'] >= thresholds.model_effect) +
+                    (metrics['effect_consistency'] >= thresholds.effect_consistency) +
+                    (metrics['predictive_power'] >= thresholds.predictive_power)
+                )
+                return metrics_passed >= min_metrics
+                
+            def _get_evaluation_context(feature, selected_features, control_features):
+                """Get proper feature context, handling interactions"""
+                if '_x_' in feature:
+                    components = feature.split('_x_')
+                    required_context = [c for c in components if c not in control_features]
+                    if not all(c in selected_features for c in required_context):
+                        return None
+                return list(control_features) + selected_features + [feature]
             
             round_num = 0
-            while True:
+            while base_features or interaction_features:
                 round_num += 1
-                remaining_features = [f for f in main_features 
-                                    if f not in self.selected_features]
                 
-                if not remaining_features:
-                    break
+                # First evaluate base features, then interactions
+                current_features = base_features if base_features else interaction_features
+                feature_type = "base" if base_features else "interaction"
                 
-                features_left = len(remaining_features)
-                print(f"\nROUND {round_num}")
-                print(f"Remaining features: {features_left}")
+                print(f"\nROUND {round_num} - Evaluating {feature_type} features")
+                print(f"Remaining features: {len(current_features)}")
                 print(f"Current feature set: {', '.join(self.selected_features)}")
                 print("-" * 40)
-                logger.debug(f"\nROUND {round_num}")
-                logger.debug(f"Remaining features: {features_left}")
-                logger.debug(f"Current feature set: {', '.join(self.selected_features)}")
-                logger.debug("-" * 40)
                 
-                # Evaluate all remaining features in context of current set
+                # Evaluate features
                 feature_metrics = {}
-                for idx, feature in enumerate(remaining_features, 1):
+                for idx, feature in enumerate(current_features, 1):
                     overall_progress = len(self.selected_features) / total_features * 100
-                    progress_msg = f"Progress: {overall_progress:.1f}% | Round {round_num}: Testing feature {idx}/{features_left}: {feature:<30}"
+                    progress_msg = f"Progress: {overall_progress:.1f}% | Round {round_num}: Testing {feature_type} feature {idx}/{len(current_features)}: {feature:<30}"
                     print(f"\r{progress_msg}", end="")
-                    logger.debug(progress_msg)
                     
-                    # Create candidate feature set with current feature
-                    candidate_features = self.selected_features + [feature]
+                    # Get proper evaluation context
+                    eval_features = _get_evaluation_context(feature, self.selected_features, control_features)
+                    if eval_features is None:
+                        continue  # Skip if context not ready
                     
-                    # Fit model with candidate feature set
-                    self.fit(dataset, candidate_features)
-                    
-                    # Evaluate this feature in context of current set
+                    # Fit and evaluate
+                    self.fit(dataset, eval_features)
                     metrics = self.importance_calculator.evaluate_feature(
                         feature=feature,
                         dataset=dataset,
@@ -1379,14 +1370,23 @@ class PreferenceModel:
                     )
                     feature_metrics[feature] = metrics
                 
+                if not feature_metrics:
+                    # If no features could be evaluated, move to next set
+                    if base_features:
+                        base_features = []
+                    else:
+                        interaction_features = []
+                    continue
+                
                 # Compare features and count wins
-                win_counts = {f: 0 for f in remaining_features}
-                for f1, f2 in combinations(remaining_features, 2):
+                win_counts = {f: 0 for f in current_features if f in feature_metrics}
+                for f1, f2 in combinations(feature_metrics.keys(), 2):
                     if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
                         win_counts[f1] += 1
                     else:
                         win_counts[f2] += 1
                 
+                # Select best feature
                 best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
                 best_metrics = feature_metrics[best_feature]
                 
@@ -1395,80 +1395,81 @@ class PreferenceModel:
                 print(f"  • Model effect:       {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
                 print(f"  • Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
                 print(f"  • Predictive power:   {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-                print("-" * 80)
-                logger.debug(f"\n\nSelected Feature: {best_feature}")
-                logger.debug("Metrics:")
-                logger.debug(f"  • Model effect:       {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-                logger.debug(f"  • Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-                logger.debug(f"  • Predictive power:   {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-                logger.debug("-" * 80)
                 
-                # Add best feature to selected set
+                if _meets_thresholds(best_metrics):
+                    print("✓ Feature meets selection criteria")
+                    self.selected_features.append(best_feature)
+                else:
+                    print("✗ Feature does not meet selection criteria")
+                
+                # Remove from appropriate feature set
+                if '_x_' in best_feature:
+                    interaction_features.remove(best_feature)
+                else:
+                    base_features.remove(best_feature)
+                
+            # Ensure at least one feature is selected
+            if not self.selected_features and feature_metrics:
+                warning_msg = "\nWARNING: No features met selection criteria, selecting best performing feature"
+                print(warning_msg)
+                best_feature = max(feature_metrics.items(), 
+                            key=lambda x: x[1]['model_effect'])[0]
                 self.selected_features.append(best_feature)
             
-            # Ensure at least one main feature is selected
-            if not any(f not in self.config.features.control_features 
-                    for f in self.selected_features):
-                warning_msg = "\nWARNING: No main features selected, forcing selection of best main feature"
-                print(warning_msg)
-                logger.debug(warning_msg)
-                best_main = max(feature_metrics.items(), 
-                            key=lambda x: x[1]['model_effect'])[0]
-                self.selected_features.append(best_main)
-                self.fit(dataset, self.selected_features)
-            
             elapsed_time = time.time() - start_time
+            
+            # Prepare final feature list
+            final_features = control_features + self.selected_features
             
             print("\n" + "="*80)
             print("FEATURE SELECTION COMPLETE".center(80))
             print("="*80)
             print(f"\nTime taken: {elapsed_time:.1f} seconds")
-            print(f"Selected {len(self.selected_features)} features:")
-            logger.debug("\n" + "="*80)
-            logger.debug("FEATURE SELECTION COMPLETE".center(80))
-            logger.debug("="*80)
-            logger.debug(f"\nTime taken: {elapsed_time:.1f} seconds")
-            logger.debug(f"Selected {len(self.selected_features)} features:")
+            print(f"Selected features ({len(self.selected_features)}):")
             for f in self.selected_features:
                 print(f"  • {f}")
-                logger.debug(f"  • {f}")
+            print(f"\nControl features (always included):")
+            for f in control_features:
+                print(f"  • {f}")
             print()
-            logger.debug("")
             
-            return self.selected_features
+            return final_features
             
         finally:
             self.cleanup()
-                                                
+                                                                                    
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
-        Compare two features based on their metrics.
+        Compare two features based on their metrics and thresholds.
         Returns True if feature A is better than feature B.
-        
-        Args:
-            metrics_a: Dictionary of metrics for feature A
-            metrics_b: Dictionary of metrics for feature B
-            
-        Returns:
-            bool: True if feature A wins the comparison
         """
-        effect_a = abs(metrics_a['model_effect'])
-        effect_b = abs(metrics_b['model_effect'])
+        thresholds = self.config.feature_selection.thresholds
+        min_metrics = self.config.feature_selection.min_metrics_passed
         
-        consistency_a = metrics_a['effect_consistency']
-        consistency_b = metrics_b['effect_consistency']
+        # Count passed metrics for each feature
+        metrics_passed_a = (
+            (metrics_a['model_effect'] >= thresholds.model_effect) +
+            (metrics_a['effect_consistency'] >= thresholds.effect_consistency) +
+            (metrics_a['predictive_power'] >= thresholds.predictive_power)
+        )
         
-        predictive_a = metrics_a['predictive_power']
-        predictive_b = metrics_b['predictive_power']
+        metrics_passed_b = (
+            (metrics_b['model_effect'] >= thresholds.model_effect) +
+            (metrics_b['effect_consistency'] >= thresholds.effect_consistency) +
+            (metrics_b['predictive_power'] >= thresholds.predictive_power)
+        )
         
-        # Count how many measures are better
-        better_measures = 0
-        if effect_a > effect_b: better_measures += 1
-        if consistency_a > consistency_b: better_measures += 1
-        if predictive_a > predictive_b: better_measures += 1
+        # If one feature meets minimum metrics and other doesn't, choose the one that does
+        if metrics_passed_a >= min_metrics and metrics_passed_b < min_metrics:
+            return True
+        if metrics_passed_b >= min_metrics and metrics_passed_a < min_metrics:
+            return False
         
-        # Feature A is better if it wins on majority of measures
-        return better_measures >= 2
+        # If neither or both meet minimum metrics, compare their scores
+        score_a = metrics_a['model_effect'] + metrics_a['effect_consistency'] + metrics_a['predictive_power']
+        score_b = metrics_b['model_effect'] + metrics_b['effect_consistency'] + metrics_b['predictive_power']
+        
+        return score_a > score_b
             
     def _calculate_feature_sparsity(self) -> float:
         """Calculate proportion of meaningful feature weights."""

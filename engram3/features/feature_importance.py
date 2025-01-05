@@ -115,199 +115,182 @@ class FeatureImportanceCalculator:
         """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
-                                                            
-    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
-                                all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
-            """Evaluate a feature's importance using multiple metrics."""
+
+    def _compute_baseline_accuracy(self, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
+        """Compute baseline model accuracy using only control features."""
+        try:
+            # Create baseline model with only control features
+            baseline_model = type(model)(config=model.config)
+            baseline_model.feature_extractor = model.feature_extractor
+            baseline_model.is_baseline_model = True  # Flag this as baseline
+            
+            # Use only control features
+            control_features = list(model.config.features.control_features)
+            if not control_features:
+                logger.warning("No control features defined, using dummy feature")
+                return 0.5  # Random chance baseline
+                
             try:
-                # Only log the start of evaluation and baseline computation once
-                if self._baseline_accuracy is None:
-                    logger.info("\nComputing initial baseline model...")
-                    base_model = type(model)(config=model.config)
-                    base_model.feature_extractor = model.feature_extractor
-                    base_model.feature_names = list(model.config.features.control_features)
-                    base_model.selected_features = list(model.config.features.control_features)
-                    base_model.is_baseline_model = True
-                    
-                    base_model.fit(dataset, base_model.selected_features, 
-                                   fit_purpose="Initial baseline model (control features only)")
-                    base_metrics = base_model.evaluate(dataset)
-                    self._baseline_accuracy = base_metrics.get('accuracy', 0.5)
-                    logger.info(f"Baseline accuracy: {self._baseline_accuracy:.4f}")
-
-                # Show clear feature evaluation header
-                logger.info(f"\n{'='*32}")
-                # Add better interaction display
-                if '_x_' in feature:
-                    components = feature.split('_x_')
-                    logger.info(f"EVALUATING {len(components)}-WAY INTERACTION:")
-                    logger.info(f"  {' × '.join(components)}")
-                else:
-                    logger.info(f"EVALUATING BASE FEATURE:")
-                    logger.info(f"  {feature}")
-                logger.info(f"Context: {', '.join(current_selected_features)}")
-                logger.info(f"{'-'*32}")
-
-                # Set up test features silently
-                control_features = list(model.config.features.control_features)
-                test_features = control_features.copy()
-                is_control_feature = feature in control_features
+                baseline_model.fit(dataset, control_features, 
+                                fit_purpose="Computing baseline accuracy")
+                metrics = baseline_model.evaluate(dataset)
+                return float(metrics['accuracy'])
                 
-                if not is_control_feature:
-                    test_features.append(feature)
-                    # Handle higher-order interactions
-                    for interaction in model.config.features.interactions:
-                        # Check if feature is part of this interaction
-                        if feature in interaction:
-                            # Only add interaction if all other components are already selected
-                            other_components = [f for f in interaction if f != feature]
-                            if all(f in current_selected_features for f in other_components):
-                                interaction_name = '_x_'.join(sorted(interaction))
-                                if interaction_name in all_features:
-                                    test_features.append(interaction_name)
-
-                # Fit model silently
-                model_single = type(model)(config=model.config)
-                model_single.feature_extractor = model.feature_extractor
-                model_single.feature_names = test_features
-                model_single.selected_features = test_features
-                model_single.is_baseline_model = len(test_features) == len(control_features)
-                model_single.fit(dataset, test_features, 
-                                 fit_purpose=f"Feature evaluation for {feature}")
-
-                # Calculate metrics
-                weights = model_single.get_feature_weights()
-                raw_effect = abs(weights.get(feature, (0.0, 0.0))[0])
-                category = 'control' if is_control_feature else 'main'
+            finally:
+                baseline_model.cleanup()
                 
-                # Update and normalize effect
-                self._max_effect[category] = max(self._max_effect[category], raw_effect)
-                self._max_effect_seen = max(self._max_effect_seen, raw_effect)
-                model_effect = raw_effect / self._max_effect_seen if self._max_effect_seen > 0 else 0.0
+        except Exception as e:
+            logger.error(f"Error computing baseline accuracy: {str(e)}")
+            return 0.5  # Return random chance on error
 
-                # Calculate consistency
-                raw_consistency = self._calculate_effect_consistency(
-                    feature, dataset, current_selected_features + control_features)
-                self._max_consistency[category] = max(self._max_consistency[category], raw_consistency)
-                self._max_consistency_seen = max(self._max_consistency_seen, raw_consistency)
-                effect_consistency = raw_consistency / self._max_consistency_seen if self._max_consistency_seen > 0 else 0.0
-
-                # Calculate predictive power with detailed logging
-                metrics = model_single.evaluate(dataset)
-                test_accuracy = metrics.get('accuracy', 0.5)
-                epsilon = 1e-10
-
-                logger.info("\nPredictive Power Details:")
-                logger.info(f"  Test accuracy:      {test_accuracy:.6f}")
-                logger.info(f"  Baseline accuracy:  {self._baseline_accuracy:.6f}")
-                logger.info(f"  Raw difference:     {test_accuracy - self._baseline_accuracy:+.6f}")
-
-                # Calculate improvement
-                raw_improvement = max(0.0, test_accuracy - self._baseline_accuracy)
-                logger.info(f"  Clipped improve:    {raw_improvement:.6f}")
-                
-                # Calculate maximum possible improvement
-                max_possible = 1.0 - self._baseline_accuracy
-                logger.info(f"  Max possible:       {max_possible:.6f}")
-
-                # Calculate final power
-                predictive_power = raw_improvement / max_possible if max_possible > epsilon else 0.0
-                logger.info(f"  Final power:        {predictive_power:.6f}")
-
-                # Also log AUC if available
-                if 'auc' in metrics:
-                    logger.info(f"  AUC:               {metrics['auc']:.6f}")
-                
-                # Log any improvements in other metrics
-                for metric_name, value in metrics.items():
-                    if metric_name not in ['accuracy', 'auc']:
-                        logger.info(f"  {metric_name}:          {value:.6f}")
-
-                # Log results clearly
-                logger.info("Results:")
-                logger.info(f"  Effect:      {model_effect:.4f} (raw: {raw_effect:.4f})")
-                logger.info(f"  Consistency: {effect_consistency:.4f} (raw: {raw_consistency:.4f})")
-                logger.info(f"  Power:       {predictive_power:.4f} (acc: {test_accuracy:.4f})")
-                weight, std = weights.get(feature, (0.0, 0.0))
-                logger.info(f"  Weight:      {weight:.4f} ± {std:.4f}")
-                logger.info(f"{'='*32}\n")
-
-                # Cache raw values
-                self.metric_cache.set(f"{feature}_raw_effect", raw_effect)
-                self.metric_cache.set(f"{feature}_raw_consistency", raw_consistency)
-                self.metric_cache.set(f"{feature}_raw_improvement", raw_improvement)
-                self.metric_cache.set(f"{feature}_max_possible", max_possible)
-                self.metric_cache.set(f"{feature}_test_accuracy", test_accuracy)
-
-                return {
-                    'model_effect': model_effect,
-                    'effect_consistency': effect_consistency,
-                    'predictive_power': predictive_power,
-                    'weight': weight,
-                    'weight_std': std,
-                    'test_accuracy': test_accuracy,
-                    'baseline_accuracy': self._baseline_accuracy
-                }
-                            
-            except Exception as e:
-                logger.error(f"Error evaluating {feature}: {str(e)}")
-                logger.error("Traceback:", exc_info=True)
+    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
+                        all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
+        """Evaluate a feature's importance using multiple metrics."""
+        try:
+            # Input validation
+            if not dataset or not model:
+                logger.error("Missing required parameters")
                 return self._get_default_metrics()
-                                                                                                                
-    def _format_interaction_name(self, feature: str) -> str:
-            """Format interaction name for display."""
+            if feature not in all_features:
+                logger.error(f"Feature {feature} not in all_features")
+                return self._get_default_metrics()
+
+            # Compute baseline once and cache it
+            if self._baseline_accuracy is None:
+                self._baseline_accuracy = self._compute_baseline_accuracy(dataset, model)
+            
+            # Log evaluation header
+            logger.info(f"\n{'='*32}")
             if '_x_' in feature:
                 components = feature.split('_x_')
-                return f"{feature} ({' × '.join(components)})"
+                logger.info(f"EVALUATING {len(components)}-WAY INTERACTION:")
+                logger.info(f"  {' × '.join(components)}")
+                # Check if all components are available
+                missing_components = [c for c in components 
+                                    if c not in current_selected_features 
+                                    and c not in model.config.features.control_features]
+                if missing_components:
+                    logger.info(f"Missing components: {missing_components}")
+                    return self._get_default_metrics()
+            else:
+                logger.info(f"EVALUATING BASE FEATURE:")
+                logger.info(f"  {feature}")
+                
+            logger.info(f"Context: {', '.join(current_selected_features)}")
+            logger.info(f"{'-'*32}")
+            
+            # Setup evaluation model
+            eval_model = type(model)(config=model.config)
+            eval_model.feature_extractor = model.feature_extractor
+            eval_features = (list(model.config.features.control_features) + 
+                            current_selected_features + [feature])
+            eval_model.feature_names = eval_features
+            eval_model.selected_features = eval_features
+            
+            try:
+                # Fit evaluation model
+                eval_model.fit(dataset, eval_features, 
+                            fit_purpose=f"Feature evaluation for {feature}")
+                
+                # Get feature effect
+                weights = eval_model.get_feature_weights()
+                if feature not in weights:
+                    logger.warning(f"No weight found for feature {feature}")
+                    return self._get_default_metrics()
+                    
+                effect_mean, effect_std = weights[feature]
+                
+                # Calculate effect consistency
+                consistency = self._calculate_effect_consistency(
+                    feature, dataset, eval_model, current_selected_features)
+                
+                # Calculate predictive power
+                predictive_power = self._calculate_predictive_power(
+                    feature, dataset, eval_model, self._baseline_accuracy)
+                
+                metrics_dict = {
+                    'model_effect': abs(effect_mean),  # Use absolute effect
+                    'effect_consistency': consistency,
+                    'predictive_power': predictive_power
+                }
+                
+                logger.debug(f"Metrics for {feature}: {metrics_dict}")
+                return metrics_dict
+                
+            finally:
+                eval_model.cleanup()
+                
+        except Exception as e:
+            logger.error(f"Error evaluating {feature}: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            return self._get_default_metrics()
+
+    def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, 
+                                model: 'PreferenceModel', baseline_accuracy: float) -> float:
+        """Calculate predictive power as improvement over baseline."""
+        try:
+            # Get accuracy with this feature
+            metrics = model.evaluate(dataset)
+            feature_accuracy = metrics['accuracy']
+            
+            # Calculate improvement over baseline
+            improvement = feature_accuracy - baseline_accuracy
+            
+            # Normalize to [0,1] range assuming max 0.5 improvement possible
+            normalized_power = np.clip(improvement / 0.5, 0, 1)
+            
+            return float(normalized_power)
+            
+        except Exception as e:
+            logger.error(f"Error calculating predictive power: {str(e)}")
+            return 0.0
 
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
-                                    current_features: List[str]) -> float:
-        """
-        Calculate consistency of feature effect across cross-validation splits.
-        Handles both base features and higher-order interactions.
-        
-        Args:
-            feature: Feature to evaluate
-            dataset: Dataset for evaluation
-            current_features: List of currently selected features including controls
-            
-        Returns:
-            float: Consistency score between 0 (inconsistent) and 1 (consistent)
-        """
+                                    model: 'PreferenceModel', current_features: List[str]) -> float:
+        """Calculate consistency of feature effect across cross-validation splits."""
         try:
             n_splits = 5
             effects = []
             interaction_effects = defaultdict(list)
             
-            for split_idx, (train_idx, val_idx) in enumerate(self.model._get_cv_splits(dataset, n_splits), 1):
+            # Get cross-validation splits
+            cv_splits = model._get_cv_splits(dataset, n_splits)
+            
+            for split_idx, (train_idx, val_idx) in enumerate(cv_splits, 1):
                 train_data = dataset._create_subset_dataset(train_idx)
                 
-                features_to_test = list(current_features)  # Copy to avoid modifying input
+                features_to_test = list(current_features)
                 if feature not in features_to_test:
                     features_to_test.append(feature)
                                                         
-                self.model.fit(train_data, features_to_test, 
-                               fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
+                # Create new model instance for this split
+                split_model = type(model)(config=model.config)
+                split_model.feature_extractor = model.feature_extractor
+                
+                try:
+                    split_model.fit(train_data, features_to_test, 
+                                fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
 
-                weights = self.model.get_feature_weights()
+                    weights = split_model.get_feature_weights()
+                    
+                    # Get feature effect
+                    if feature in weights:
+                        effects.append(weights[feature][0])
+                    
+                    # Handle n-way interactions
+                    if '_x_' in feature:
+                        components = feature.split('_x_')
+                        # Track component effects
+                        for component in components:
+                            if component in weights and component != feature:
+                                interaction_effects[f'{feature}_with_{component}'].append(
+                                    weights[component][0])
                 
-                # Get feature effect
-                if feature in weights:
-                    effects.append(weights[feature][0])
-                
-                # Handle n-way interactions
-                for f in weights:
-                    if '_x_' in f:
-                        components = f.split('_x_')
-                        # Check if this feature participates in the interaction
-                        if feature in components:
-                            interaction_effects[f].append(weights[f][0])
-                            # If this is an interaction being evaluated, also track component effects
-                            if f == feature:
-                                for component in components:
-                                    if component in weights and component != feature:
-                                        interaction_effects[f'{feature}_with_{component}'].append(
-                                            weights[component][0])
+                except Exception as e:
+                    logger.error(f"Error in split {split_idx}: {str(e)}")
+                    continue
+                finally:
+                    split_model.cleanup()
             
             if not effects and not interaction_effects:
                 return 0.0
@@ -332,22 +315,29 @@ class FeatureImportanceCalculator:
                         consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
                         interaction_consistencies.append(consistency)
             
-            # Combine base and interaction consistencies
+            # Combine consistencies with proper weighting
             if interaction_consistencies:
-                # Weight the consistencies by the number of interacting features
                 if '_x_' in feature:
                     n_components = len(feature.split('_x_'))
-                    # Give more weight to higher-order interaction consistency
-                    weights = [n_components if i == 0 else 1 for i in range(len(interaction_consistencies))]
+                    weights = [n_components if i == 0 else 1 
+                            for i in range(len(interaction_consistencies))]
                     return float(np.average([base_consistency] + interaction_consistencies, 
                                         weights=weights))
                 return float(np.mean([base_consistency] + interaction_consistencies))
+            
             return float(base_consistency)
             
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-                                    
+
+    def clear_caches(self):
+        """Clear all caches."""
+        if hasattr(self, 'metric_cache'):
+            self.metric_cache.clear()
+        if hasattr(self, 'feature_values_cache'):
+            self.feature_values_cache.clear()
+
     def _get_default_metrics(self) -> Dict[str, float]:
         """Get default metrics dictionary with zero values."""
         return {
@@ -356,3 +346,9 @@ class FeatureImportanceCalculator:
             'predictive_power': 0.0
         }
  
+    def _format_interaction_name(self, feature: str) -> str:
+            """Format interaction name for display."""
+            if '_x_' in feature:
+                components = feature.split('_x_')
+                return f"{feature} ({' × '.join(components)})"
+

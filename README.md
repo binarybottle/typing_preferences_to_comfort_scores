@@ -103,3 +103,37 @@ Workflow
 License
 -------
 MIT License. See LICENSE file for details.
+
+
+poetry add pyyaml numpy pandas scikit-learn matplotlib cmdstanpy adjustText pydantic tenacity 
+# already in python: argparse pathlib psutil logging datetime dataclasses typing math itertools collections time pickle copy traceback tempfile shutil gc
+
+
+# Install Stan on Macos M1/M2 (or through Rosetta):
+# Create directory
+mkdir -p ~/.cmdstan
+cd ~/.cmdstan
+# Clone CmdStan
+git clone --depth 1 --branch v2.36.0 https://github.com/stan-dev/cmdstan.git cmdstan-2.36.0
+cd cmdstan-2.36.0
+# Initialize submodules
+git submodule update --init --recursive
+# Create make/local with very specific Apple Silicon settings
+cat > make/local << EOL
+STAN_OPENCL=false
+CC=/usr/bin/clang
+CXX=/usr/bin/clang++
+CFLAGS=-arch arm64 -target arm64-apple-darwin -isysroot $(xcrun --show-sdk-path)
+CXXFLAGS=-arch arm64 -target arm64-apple-darwin -isysroot $(xcrun --show-sdk-path)
+LDFLAGS=-arch arm64 -target arm64-apple-darwin
+STAN_FLAG_MARCH="-arch arm64"
+GTEST_CXXFLAGS="-arch arm64"
+O=3
+BUILD_ARCH=arm64
+OS=Darwin
+TBB_INTERFACE_NEW=TRUE
+EOL
+# Clean and build
+make clean-all
+STAN_CPU_ARCH=arm64 make build -j4
+

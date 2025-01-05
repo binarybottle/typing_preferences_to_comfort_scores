@@ -29,10 +29,10 @@ feature_selection:
     effect_consistency: 0.3             # Weight for consistency of effect across splits (cross-validation stability)
     predictive_power: 0.3               # Weight for prediction improvement
   thresholds:                           # Selection criteria thresholds
-    model_effect: 0.2                   # Minimum normalized effect size
+    model_effect: 0.3                   # Minimum normalized effect size
     effect_consistency: 0.5             # Minimum effect consistency
-    predictive_power: 0.1               # Minimum improvement over baseline
-  min_metrics_passed: 2                 # Number of metrics that must pass thresholds (2 or 3)
+    predictive_power: 0.2               # Minimum improvement over baseline
+  min_metrics_passed: 3                 # Number of metrics that must pass thresholds (2 or 3)
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
@@ -70,31 +70,33 @@ features:
     - [angle_apart, sum_engram_position_values]
     - [outward_roll, sum_engram_position_values]
     - [outward_roll, sum_row_position_values]
-    - [same_finger, sum_finger_values, rows_apart]
-    - [same_finger, sum_finger_values, sum_row_position_values]
-    #- [same_finger, rows_apart, sum_row_position_values]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart]
-    - [sum_finger_values, adj_finger_diff_row, angle_apart]
-    - [sum_finger_values, adj_finger_diff_row, outward_roll]
-    - [sum_finger_values, adj_finger_diff_row, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, sum_row_position_values]
-    - [sum_finger_values, rows_apart, outward_roll]
-    - [sum_finger_values, rows_apart, sum_engram_position_values]
-    - [sum_finger_values, rows_apart, sum_row_position_values]
-    - [sum_finger_values, angle_apart, outward_roll]
-    - [sum_finger_values, angle_apart, sum_engram_position_values]
-    - [sum_finger_values, outward_roll, sum_engram_position_values]
-    - [sum_finger_values, outward_roll, sum_row_position_values]
-    - [adj_finger_diff_row, rows_apart, outward_roll]
-    - [adj_finger_diff_row, rows_apart, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, sum_row_position_values]
-    - [adj_finger_diff_row, angle_apart, outward_roll]
-    - [adj_finger_diff_row, angle_apart, sum_engram_position_values]
-    - [adj_finger_diff_row, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, outward_roll, sum_row_position_values]
-    - [rows_apart, outward_roll, sum_engram_position_values]
-    - [rows_apart, outward_roll, sum_row_position_values]
-    - [angle_apart, outward_roll, sum_engram_position_values]
+
+    #- [same_finger, sum_finger_values, rows_apart]
+    #- [same_finger, sum_finger_values, sum_row_position_values]
+    ##- [same_finger, rows_apart, sum_row_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, rows_apart]
+    #- [sum_finger_values, adj_finger_diff_row, angle_apart]
+    #- [sum_finger_values, adj_finger_diff_row, outward_roll]
+    #- [sum_finger_values, adj_finger_diff_row, sum_engram_position_values]
+    #- [sum_finger_values, adj_finger_diff_row, sum_row_position_values]
+    #- [sum_finger_values, rows_apart, outward_roll]
+    #- [sum_finger_values, rows_apart, sum_engram_position_values]
+    #- [sum_finger_values, rows_apart, sum_row_position_values]
+    #- [sum_finger_values, angle_apart, outward_roll]
+    #- [sum_finger_values, angle_apart, sum_engram_position_values]
+    #- [sum_finger_values, outward_roll, sum_engram_position_values]
+    #- [sum_finger_values, outward_roll, sum_row_position_values]
+    #- [adj_finger_diff_row, rows_apart, outward_roll]
+    #- [adj_finger_diff_row, rows_apart, sum_engram_position_values]
+    #- [adj_finger_diff_row, rows_apart, sum_row_position_values]
+    #- [adj_finger_diff_row, angle_apart, outward_roll]
+    #- [adj_finger_diff_row, angle_apart, sum_engram_position_values]
+    #- [adj_finger_diff_row, outward_roll, sum_engram_position_values]
+    #- [adj_finger_diff_row, outward_roll, sum_row_position_values]
+    #- [rows_apart, outward_roll, sum_engram_position_values]
+    #- [rows_apart, outward_roll, sum_row_position_values]
+    #- [angle_apart, outward_roll, sum_engram_position_values]
+
     #- [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
     #- [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
     #- [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
@@ -129,22 +131,31 @@ recommendations:
 #-----------------------------------------------------------------------
 # Model training
 #-----------------------------------------------------------------------
-# Model slow vs. fast settings
-__model_slow: &slow
-  chains: 2                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 2000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 5000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
-
-__model_fast: &fast  
+# Settings to debug the model
+__model_fast: &debug  
   chains: 1                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 200                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
   n_samples: 500                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
   max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
 
+# Settings to select features (takes days on an M1/M2 Macbook Pro)
+__model_feature_selection: &feature_selection
+  chains: 2                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 1000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 3000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+
+# Settings to train the model on the selected features
+__model_slow: &model_train
+  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+
 model:                                  # Bayesian model parameters (Stan)
-  <<: *slow                             # Change to *fast for fast settings
-  #<<: *fast                             # Change to *slow for slow settings
+  #<<: *debug                            # Model debug settings
+  <<: *feature_selection                # Model feature selection settings
+  #<<: *model_train                      # Model training settings
   adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
   feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
