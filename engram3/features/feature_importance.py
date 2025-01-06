@@ -1,28 +1,28 @@
 # engram3/features/feature_importance.py
 """
-Feature importance calculation module for keyboard layout preference analysis.
+Feature importance calculation and selection for keyboard layout preference analysis.
 
-Provides comprehensive feature evaluation through three independent metrics:
-  - model_effect: Feature's impact based on model weights
-  - effect_consistency: Feature's stability across cross-validation splits  
-  - predictive_power: Model performance improvement from feature
+Core functionality:
+- Statistical evaluation of individual features using multiple metrics:
+  * model_effect: Direct impact on predictions
+  * effect_consistency: Stability across cross-validation splits
+  * predictive_power: Incremental prediction improvement
+- Interaction feature analysis and evaluation
+- Round-robin tournament selection process
+- Cross-validation based stability assessment
+- Performance optimization via result caching
+- Comprehensive metric reporting
 
-Key functionality:
-  - Pairwise feature comparison using all three metrics
-  - Round-robin tournament selection in context of previously selected features
-  - Efficient caching of feature computations
-  - Special handling for interaction features
-  - Support for typing time and other keyboard-specific features
-  - Cross-validation based stability assessment
-  - Detailed metric reporting and logging
-  - Error handling and fallback mechanisms
+The FeatureImportanceCalculator class:
+- Manages feature evaluation pipeline
+- Handles feature standardization and validation
+- Provides detailed diagnostic information
+- Supports both base and interaction features
+- Implements efficient caching mechanisms
+- Produces detailed evaluation reports
 
-The module centers around the FeatureImportanceCalculator class which:
-  - Evaluates individual features using multiple independent metrics
-  - Compares features based on wins across all metrics
-  - Handles feature value computation and caching
-  - Generates detailed metrics reports
-  - Provides robust error handling
+Used by the main feature selection pipeline to identify optimal feature sets
+for the keyboard layout preference model.
 """
 import numpy as np
 from typing import Dict, List, Union

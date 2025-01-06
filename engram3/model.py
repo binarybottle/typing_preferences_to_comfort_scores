@@ -8,6 +8,7 @@ Core functionality:
     - Participant-level random effects
     - Uncertainty quantification via MCMC sampling
     - Stan backend integration
+    - Automated resource management
 
 Key components:
   1. Sequential Feature Selection:
@@ -18,18 +19,21 @@ Key components:
       * Effect consistency across cross-validation
       * Predictive power
     - Feature interaction handling
+    - Control feature separation
 
   2. Model Operations:
     - Efficient data preparation for Stan
     - MCMC sampling with diagnostics
     - Cross-validation with participant grouping
     - Feature weight extraction and caching
+    - Memory usage optimization
 
   3. Prediction Pipeline:
     - Bigram comfort score estimation
     - Preference probability prediction
     - Uncertainty quantification
     - Cached predictions for efficiency
+    - Baseline model handling
 
   4. Evaluation Mechanisms:
     - Classification metrics (accuracy, AUC)
@@ -37,16 +41,23 @@ Key components:
     - Cross-validation stability
     - Model diagnostics
     - Transitivity checks
+    - Parameter convergence monitoring
 
   5. Output Handling:
     - Detailed metric reporting
     - State serialization
     - Comprehensive logging
     - CSV export capabilities
+    - Diagnostic information export
 
-The PreferenceModel class provides a complete pipeline for learning and predicting
-keyboard layout preferences while maintaining efficiency through caching and
-proper error handling.
+Classes:
+    PreferenceModel: Main class implementing the Bayesian preference learning pipeline
+        Methods:
+            fit(): Train model on preference data
+            predict_preference(): Generate predictions for bigram pairs
+            evaluate(): Compute model performance metrics
+            cross_validate(): Perform cross-validation analysis
+            save()/load(): Model serialization
 
 Example:
     >>> model = PreferenceModel(config)
@@ -60,6 +71,16 @@ Notes:
     - Thread-safe Stan implementation
     - Comprehensive error handling
     - Detailed logging system
+    - Automatic resource cleanup
+    - Memory usage monitoring
+    - Temporary file management
+
+Dependencies:
+    - cmdstanpy: Stan model compilation and sampling
+    - numpy: Numerical computations
+    - pandas: Data management
+    - sklearn: Evaluation metrics
+    - psutil: Resource monitoring
 """
 import cmdstanpy
 import numpy as np
@@ -1263,136 +1284,69 @@ class PreferenceModel:
     # Feature selection and evaluation methods
     #--------------------------------------------                          
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """Select features using round-robin comparison."""
-        try:
-            self.check_total_storage(dataset, all_features)
-            start_time = time.time()
-            
-            print("\n" + "="*80)
-            print("FEATURE SELECTION PROCESS".center(80))
-            print("="*80 + "\n")
-            
-            # Initialize feature tracking
-            control_features = list(dict.fromkeys(self.config.features.control_features))
-            self.selected_features = []
-            features_evaluated = 0
-            
-            # Separate and deduplicate feature lists
-            base_features = list(dict.fromkeys([f for f in all_features 
-                                            if f not in control_features and '_x_' not in f]))
-            interaction_features = list(dict.fromkeys([f for f in all_features 
-                                                    if f not in control_features and '_x_' in f]))
-            total_features = len(base_features) + len(interaction_features)
-            
-            # Get thresholds from config
-            thresholds = self.config.feature_selection.thresholds
-            min_metrics = self.config.feature_selection.min_metrics_passed
-            
-            print("Selection Criteria:")
-            print(f"  • Model effect threshold:      {thresholds.model_effect}")
-            print(f"  • Effect consistency threshold: {thresholds.effect_consistency}")
-            print(f"  • Predictive power threshold:   {thresholds.predictive_power}")
-            print(f"  • Required passing metrics:     {min_metrics}/3\n")
-            
-            print("\nFeature Selection Status:")
-            print(f"Base features to evaluate: {len(base_features)}")
-            print(f"Interaction features to evaluate: {len(interaction_features)}")
-            print("Control Features (always included):")
-            for f in control_features:
-                print(f"  • {f}")
-            print("-" * 80)
-            
-            self.importance_calculator.reset_normalization_factors()
-            
-            round_num = 0
-            while base_features or interaction_features:
-                round_num += 1
-                current_features = base_features if base_features else interaction_features
-                feature_type = "base" if base_features else "interaction"
+        """Select features using round-robin comparison with threshold elimination."""
+        self.selected_features = []
+        control_features = self.config.features.control_features
+        base_features = [f for f in all_features if f not in control_features and '_x_' not in f]
+        interaction_features = [f for f in all_features if f not in control_features and '_x_' in f]
+        
+        max_rounds = len(base_features) + len(interaction_features)  # Dynamic based on feature count
+
+        thresholds = self.config.feature_selection.thresholds
+        min_metrics_passed = self.config.feature_selection.min_metrics_passed
+        
+        for round_num in range(1, max_rounds + 1):
+            remaining_features = base_features if base_features else interaction_features
+            if not remaining_features:
+                break
                 
-                print(f"\nROUND {round_num} - Evaluating {feature_type} features")
-                print(f"Remaining features: {len(current_features)}")
-                print(f"Currently selected: {', '.join(self.selected_features)}")
-                print("-" * 40)
+            # Evaluate all remaining features
+            feature_metrics = {}
+            for feature in remaining_features:
+                metrics = self.importance_calculator.evaluate_feature(
+                    feature=feature,
+                    dataset=dataset,
+                    model=self,
+                    all_features=all_features,
+                    current_selected_features=self.selected_features
+                )
                 
-                # Evaluate features
-                feature_metrics = {}
-                for idx, feature in enumerate(current_features, 1):
-                    overall_progress = (features_evaluated / total_features) * 100
-                    progress_msg = f"Progress: {overall_progress:.1f}% | Round {round_num}: Testing {feature_type} feature {idx}/{len(current_features)}: {feature:<30}"
-                    print(f"\r{progress_msg}", end="", flush=True)
+                # Count how many metrics pass thresholds
+                metrics_passed = sum([
+                    metrics['model_effect'] >= thresholds.model_effect,
+                    metrics['effect_consistency'] >= thresholds.effect_consistency,
+                    metrics['predictive_power'] >= thresholds.predictive_power
+                ])
+                
+                if metrics_passed >= min_metrics_passed:
+                    feature_metrics[feature] = metrics
+                else:
+                    logger.info(f"Feature {feature} eliminated (passed {metrics_passed}/{min_metrics_passed} metrics)")
                     
-                    # Get evaluation context
-                    eval_features = self._get_evaluation_context(feature, self.selected_features, control_features)
-                    if eval_features is None:
-                        continue
-                    
-                    # Fit and evaluate
-                    try:
-                        self.fit(dataset, eval_features, 
-                                fit_purpose=f"Evaluating {feature} in round {round_num}")
-                        metrics = self.importance_calculator.evaluate_feature(
-                            feature=feature,
-                            dataset=dataset,
-                            model=self,
-                            all_features=all_features,
-                            current_selected_features=self.selected_features
-                        )
-                        feature_metrics[feature] = metrics
-                    except Exception as e:
-                        logger.error(f"Error evaluating {feature}: {str(e)}")
-                        continue
-                    
-                    features_evaluated += 1
+            # Remove features that didn't meet thresholds
+            if base_features:
+                base_features = list(feature_metrics.keys())
+            else:
+                interaction_features = list(feature_metrics.keys())
                 
-                print()  # New line after progress
-                
-                if not feature_metrics:
-                    if base_features:
-                        base_features = []
-                    else:
-                        interaction_features = []
-                    continue
-                
-                # Select best feature
-                best_feature = self._select_best_feature(feature_metrics)
-                if best_feature:
-                    print(f"\nSelected: {best_feature}")
-                    self.selected_features.append(best_feature)
-                    if best_feature in base_features:
-                        base_features.remove(best_feature)
-                    else:
-                        interaction_features.remove(best_feature)
-                
-            # Ensure at least one feature is selected
-            if not self.selected_features and feature_metrics:
-                warning_msg = "\nWARNING: No features met selection criteria, selecting best performing feature"
-                print(warning_msg)
+            # Select best remaining feature
+            if feature_metrics:
                 best_feature = max(feature_metrics.items(), 
-                            key=lambda x: x[1]['model_effect'])[0]
-                self.selected_features.append(best_feature)
-            
-            elapsed_time = time.time() - start_time
-            
-            # Prepare final feature list
-            final_features = list(dict.fromkeys(control_features + self.selected_features))
-            
-            print("\n" + "="*80)
-            print("FEATURE SELECTION COMPLETE".center(80))
-            print("="*80)
-            print(f"\nTime taken: {elapsed_time:.1f} seconds")
-            print(f"Selected features ({len(self.selected_features)}):")
-            for f in self.selected_features:
-                print(f"  • {f}")
-            print(f"\nControl features (always included):")
-            for f in control_features:
-                print(f"  • {f}")
-            print()
-            
-            return final_features
-            
-        finally:
-            self.cleanup()
+                                key=lambda x: sum(x[1].values()))  # Sum all metrics
+                self.selected_features.append(best_feature[0])
+                
+                # Remove selected feature from remaining features
+                if best_feature[0] in base_features:
+                    base_features.remove(best_feature[0])
+                if best_feature[0] in interaction_features:
+                    interaction_features.remove(best_feature[0])
+                    
+            logger.info(f"\nRound {round_num} complete:")
+            logger.info(f"Selected features: {self.selected_features}")
+            logger.info(f"Remaining base features: {len(base_features)}")
+            logger.info(f"Remaining interaction features: {len(interaction_features)}")
+        
+        return self.selected_features
 
     def _select_best_feature(self, feature_metrics: Dict[str, Dict[str, float]]) -> Optional[str]:
         """Select best feature based on metrics."""

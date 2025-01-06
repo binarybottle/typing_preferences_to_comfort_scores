@@ -1,10 +1,21 @@
 # engram3/config.yaml
-# Configuration file for the keyboard preference learning system:
-#   - data: Data handling configuration
-#   - features: Feature selection settings
-#   - model: Bayesian model parameters
-#   - logging: System logging configuration
-#   - recommendations: Bigram recommendation settings
+# Configuration file for keyboard layout preference learning system
+#
+# Core components:
+# - data: Dataset and layout configuration
+# - features: Feature selection and interaction settings
+# - model: Bayesian model parameters and MCMC settings
+# - recommendations: Bigram pair recommendation parameters
+# - visualization: Plot configuration
+# - logging: System logging settings
+#
+# The system supports three operational modes:
+# 1. Feature selection: Identifies optimal feature set
+# 2. Model training: Trains preference model
+# 3. Recommendations: Generates bigram pairs for data collection
+#
+# Each section includes detailed parameter documentation and
+# typical values/ranges where appropriate.
 
 #-----------------------------------------------------------------------
 # Input data and key layout
