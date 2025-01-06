@@ -176,11 +176,6 @@ class PreferenceModel:
         """Access feature data cache with initialization check."""
         return self._feature_data_cache_
 
-    @_feature_data_cache.setter
-    def _feature_data_cache(self, value: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """Set feature data cache."""
-        self._feature_data_cache_ = value
-
     # Remaining class methods
     def clear_caches(self) -> None:
         """Clear all caches to free memory."""
@@ -991,13 +986,6 @@ class PreferenceModel:
                 logger.error(f"Error preparing data: {str(e)}")
                 raise
 
-    def _compute_interaction_value(self, components: List[str], features: Dict[str, float]) -> float:
-        """Compute value for a higher-order interaction."""
-        value = 1.0
-        for component in components:
-            value *= features.get(component, 0.0)
-        return value
-
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -1275,19 +1263,26 @@ class PreferenceModel:
     # Feature selection and evaluation methods
     #--------------------------------------------                          
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """
-        Select features using round-robin comparison, evaluating each candidate
-        in the context of previously selected features plus control features.
-        Control features are always included but not selected.
-        """
+        """Select features using round-robin comparison."""
         try:
-            # Check storage requirements upfront    
             self.check_total_storage(dataset, all_features)
             start_time = time.time()
             
             print("\n" + "="*80)
             print("FEATURE SELECTION PROCESS".center(80))
             print("="*80 + "\n")
+            
+            # Initialize feature tracking
+            control_features = list(dict.fromkeys(self.config.features.control_features))
+            self.selected_features = []
+            features_evaluated = 0
+            
+            # Separate and deduplicate feature lists
+            base_features = list(dict.fromkeys([f for f in all_features 
+                                            if f not in control_features and '_x_' not in f]))
+            interaction_features = list(dict.fromkeys([f for f in all_features 
+                                                    if f not in control_features and '_x_' in f]))
+            total_features = len(base_features) + len(interaction_features)
             
             # Get thresholds from config
             thresholds = self.config.feature_selection.thresholds
@@ -1299,116 +1294,75 @@ class PreferenceModel:
             print(f"  • Predictive power threshold:   {thresholds.predictive_power}")
             print(f"  • Required passing metrics:     {min_metrics}/3\n")
             
-            # Initialize feature sets
-            control_features = list(self.config.features.control_features)
-            self.selected_features = []
-            
-            # Separate base and interaction features
-            base_features = [f for f in all_features if f not in control_features and '_x_' not in f]
-            interaction_features = [f for f in all_features if f not in control_features and '_x_' in f]
-            total_features = len(base_features) + len(interaction_features)
-            
+            print("\nFeature Selection Status:")
+            print(f"Base features to evaluate: {len(base_features)}")
+            print(f"Interaction features to evaluate: {len(interaction_features)}")
             print("Control Features (always included):")
             for f in control_features:
                 print(f"  • {f}")
-            print(f"\nFeatures to evaluate:")
-            print(f"  • Base features: {len(base_features)}")
-            print(f"  • Interaction features: {len(interaction_features)}")
             print("-" * 80)
             
             self.importance_calculator.reset_normalization_factors()
             
-            def _meets_thresholds(metrics):
-                """Check if metrics meet minimum threshold requirements"""
-                metrics_passed = (
-                    (metrics['model_effect'] >= thresholds.model_effect) +
-                    (metrics['effect_consistency'] >= thresholds.effect_consistency) +
-                    (metrics['predictive_power'] >= thresholds.predictive_power)
-                )
-                return metrics_passed >= min_metrics
-                
-            def _get_evaluation_context(feature, selected_features, control_features):
-                """Get proper feature context, handling interactions"""
-                if '_x_' in feature:
-                    components = feature.split('_x_')
-                    required_context = [c for c in components if c not in control_features]
-                    if not all(c in selected_features for c in required_context):
-                        return None
-                return list(control_features) + selected_features + [feature]
-            
             round_num = 0
             while base_features or interaction_features:
                 round_num += 1
-                
-                # First evaluate base features, then interactions
                 current_features = base_features if base_features else interaction_features
                 feature_type = "base" if base_features else "interaction"
                 
                 print(f"\nROUND {round_num} - Evaluating {feature_type} features")
                 print(f"Remaining features: {len(current_features)}")
-                print(f"Current feature set: {', '.join(self.selected_features)}")
+                print(f"Currently selected: {', '.join(self.selected_features)}")
                 print("-" * 40)
                 
                 # Evaluate features
                 feature_metrics = {}
                 for idx, feature in enumerate(current_features, 1):
-                    overall_progress = len(self.selected_features) / total_features * 100
+                    overall_progress = (features_evaluated / total_features) * 100
                     progress_msg = f"Progress: {overall_progress:.1f}% | Round {round_num}: Testing {feature_type} feature {idx}/{len(current_features)}: {feature:<30}"
-                    print(f"\r{progress_msg}", end="")
+                    print(f"\r{progress_msg}", end="", flush=True)
                     
-                    # Get proper evaluation context
-                    eval_features = _get_evaluation_context(feature, self.selected_features, control_features)
+                    # Get evaluation context
+                    eval_features = self._get_evaluation_context(feature, self.selected_features, control_features)
                     if eval_features is None:
-                        continue  # Skip if context not ready
+                        continue
                     
                     # Fit and evaluate
-                    self.fit(dataset, eval_features)
-                    metrics = self.importance_calculator.evaluate_feature(
-                        feature=feature,
-                        dataset=dataset,
-                        model=self,
-                        all_features=all_features,
-                        current_selected_features=self.selected_features
-                    )
-                    feature_metrics[feature] = metrics
+                    try:
+                        self.fit(dataset, eval_features, 
+                                fit_purpose=f"Evaluating {feature} in round {round_num}")
+                        metrics = self.importance_calculator.evaluate_feature(
+                            feature=feature,
+                            dataset=dataset,
+                            model=self,
+                            all_features=all_features,
+                            current_selected_features=self.selected_features
+                        )
+                        feature_metrics[feature] = metrics
+                    except Exception as e:
+                        logger.error(f"Error evaluating {feature}: {str(e)}")
+                        continue
+                    
+                    features_evaluated += 1
+                
+                print()  # New line after progress
                 
                 if not feature_metrics:
-                    # If no features could be evaluated, move to next set
                     if base_features:
                         base_features = []
                     else:
                         interaction_features = []
                     continue
                 
-                # Compare features and count wins
-                win_counts = {f: 0 for f in current_features if f in feature_metrics}
-                for f1, f2 in combinations(feature_metrics.keys(), 2):
-                    if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
-                        win_counts[f1] += 1
-                    else:
-                        win_counts[f2] += 1
-                
                 # Select best feature
-                best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
-                best_metrics = feature_metrics[best_feature]
-                
-                print(f"\n\nSelected Feature: {best_feature}")
-                print("Metrics:")
-                print(f"  • Model effect:       {best_metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-                print(f"  • Effect consistency: {best_metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-                print(f"  • Predictive power:   {best_metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-                
-                if _meets_thresholds(best_metrics):
-                    print("✓ Feature meets selection criteria")
+                best_feature = self._select_best_feature(feature_metrics)
+                if best_feature:
+                    print(f"\nSelected: {best_feature}")
                     self.selected_features.append(best_feature)
-                else:
-                    print("✗ Feature does not meet selection criteria")
-                
-                # Remove from appropriate feature set
-                if '_x_' in best_feature:
-                    interaction_features.remove(best_feature)
-                else:
-                    base_features.remove(best_feature)
+                    if best_feature in base_features:
+                        base_features.remove(best_feature)
+                    else:
+                        interaction_features.remove(best_feature)
                 
             # Ensure at least one feature is selected
             if not self.selected_features and feature_metrics:
@@ -1421,7 +1375,7 @@ class PreferenceModel:
             elapsed_time = time.time() - start_time
             
             # Prepare final feature list
-            final_features = control_features + self.selected_features
+            final_features = list(dict.fromkeys(control_features + self.selected_features))
             
             print("\n" + "="*80)
             print("FEATURE SELECTION COMPLETE".center(80))
@@ -1439,7 +1393,60 @@ class PreferenceModel:
             
         finally:
             self.cleanup()
-                                                                                    
+
+    def _select_best_feature(self, feature_metrics: Dict[str, Dict[str, float]]) -> Optional[str]:
+        """Select best feature based on metrics."""
+        if not feature_metrics:
+            return None
+            
+        thresholds = self.config.feature_selection.thresholds
+        min_metrics = self.config.feature_selection.min_metrics_passed
+        
+        # Count wins for each feature
+        win_counts = {f: 0 for f in feature_metrics}
+        for f1, f2 in combinations(feature_metrics.keys(), 2):
+            if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
+                win_counts[f1] += 1
+            else:
+                win_counts[f2] += 1
+        
+        # Select feature with most wins that meets thresholds
+        best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
+        metrics = feature_metrics[best_feature]
+        
+        # Print metrics for best feature
+        print(f"\nBest feature metrics ({best_feature}):")
+        print(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
+        print(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
+        print(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
+        
+        metrics_passed = (
+            (metrics['model_effect'] >= thresholds.model_effect) +
+            (metrics['effect_consistency'] >= thresholds.effect_consistency) +
+            (metrics['predictive_power'] >= thresholds.predictive_power)
+        )
+        
+        if metrics_passed >= min_metrics:
+            return best_feature
+        return None
+
+    def _get_evaluation_context(self, feature: str, current_selected: List[str], 
+                            control_features: List[str]) -> Optional[List[str]]:
+        """Get evaluation context for a feature."""
+        if '_x_' in feature:
+            components = feature.split('_x_')
+            if not all(c in current_selected for c in components):
+                return None
+        
+        # Build context with no duplicates
+        context = list(dict.fromkeys(
+            control_features +  # Control features first
+            current_selected +  # Currently selected features
+            [feature]          # Feature being evaluated
+        ))
+        
+        return context
+                                                                                                
     def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
         """
         Compare two features based on their metrics and thresholds.
@@ -1472,150 +1479,7 @@ class PreferenceModel:
         score_b = metrics_b['model_effect'] + metrics_b['effect_consistency'] + metrics_b['predictive_power']
         
         return score_a > score_b
-            
-    def _calculate_feature_sparsity(self) -> float:
-        """Calculate proportion of meaningful feature weights."""
-        try:
-            weights = self.get_feature_weights()
-            if not weights:
-                return 0.0
-                
-            # Count weights above threshold
-            threshold = getattr(self.config, 'model', {}).get('sparsity_threshold', 0.1)
-            significant_weights = sum(1 for w, _ in weights.values() if abs(w) > threshold)
-            
-            return significant_weights / len(weights)
-            
-        except Exception as e:
-            logger.warning(f"Error calculating feature sparsity: {str(e)}")
-            return 0.0
-
-    def _check_transitivity(self) -> float:
-        """Check transitivity violations more efficiently."""
-        try:
-            # Pre-compute all predictions to avoid redundant calculations
-            predictions = {}
-            for pref in self.dataset.preferences:
-                key = (pref.bigram1, pref.bigram2)
-                if key not in predictions:
-                    prediction = self.predict_preference(key[0], key[1])
-                    predictions[key] = prediction.probability  # Original order
-                    predictions[(key[1], key[0])] = 1 - prediction.probability  # Reversed order
-
-            violations = 0
-            total = 0     
-
-            # Check transitivity using pre-computed predictions
-            seen_triples = set()
-            for i, pref_i in enumerate(self.dataset.preferences[:-2]):
-                for j, pref_j in enumerate(self.dataset.preferences[i+1:-1]):
-                    for pref_k in self.dataset.preferences[j+1:]:
-                        bigrams = {pref_i.bigram1, pref_i.bigram2,
-                                pref_j.bigram1, pref_j.bigram2,
-                                pref_k.bigram1, pref_k.bigram2}
-                        
-                        if len(bigrams) < 3:
-                            continue
-                            
-                        triple = tuple(sorted(bigrams))
-                        if triple in seen_triples:
-                            continue
-                        seen_triples.add(triple)
-                        
-                        pred_ij = predictions[(pref_i.bigram1, pref_i.bigram2)]
-                        pred_jk = predictions[(pref_j.bigram1, pref_j.bigram2)]
-                        pred_ik = predictions[(pref_i.bigram1, pref_k.bigram2)]
-                        
-                        if ((pred_ij > 0.5 and pred_jk > 0.5 and pred_ik < 0.5) or
-                            (pred_ij < 0.5 and pred_jk < 0.5 and pred_ik > 0.5)):
-                            violations += 1
-                        total += 1
-            
-            return 1.0 - (violations / total) if total > 0 else 1.0
-            
-        except Exception as e:
-            logger.error(f"Error checking transitivity: {str(e)}")
-            return 0.0
-                
-    def _compute_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
-        """
-        Compute feature values without caching.
-        
-        Args:
-            feature: Feature name or interaction feature (containing '_x_')
-            dataset: PreferenceDataset containing preferences
-            
-        Returns:
-            np.ndarray of feature differences between bigram pairs
-        """
-        try:
-            # Handle interaction features
-            if '_x_' in feature:
-                components = feature.split('_x_')
-                # Get component values
-                component_values = []
-                for comp in components:
-                    values = self._compute_single_feature_values(comp, dataset)
-                    component_values.append(values)
-                
-                # Multiply components for interaction
-                feature_diffs = component_values[0]
-                for values in component_values[1:]:
-                    feature_diffs = feature_diffs * values
-                return feature_diffs
-                
-            else:
-                # Handle single features
-                return self._compute_single_feature_values(feature, dataset)
-                
-        except Exception as e:
-            logger.error(f"Error computing feature values for {feature}: {str(e)}")
-            return np.zeros(len(dataset.preferences))
-
-    def _compute_single_feature_values(self, feature: str, dataset: PreferenceDataset) -> np.ndarray:
-        """
-        Compute values for a single (non-interaction) feature.
-        
-        Args:
-            feature: Feature name (e.g., 'typing_time', 'same_finger', etc.)
-            dataset: PreferenceDataset containing preferences
-            
-        Returns:
-            np.ndarray of feature differences between bigram pairs
-        """
-        try:
-            # Initialize array for feature differences
-            feature_diffs = np.zeros(len(dataset.preferences))
-            
-            # For each preference, compute feature difference
-            for i, pref in enumerate(dataset.preferences):
-                # Get feature values for both bigrams
-                value1 = pref.features1.get(feature, 0.0)
-                value2 = pref.features2.get(feature, 0.0)
-                
-                # Special handling for typing_time
-                if feature == 'typing_time':
-                    if value1 is None or value2 is None:
-                        # If either typing time is missing, nullify this comparison
-                        value1 = 0.0
-                        value2 = 0.0
-                        logger.debug(f"Nullifying typing time comparison due to missing data")
-                
-                # Compute difference
-                feature_diffs[i] = value1 - value2
-                
-            # Debug logging
-            logger.debug(f"Feature {feature} difference stats:")
-            logger.debug(f"  mean: {np.mean(feature_diffs):.4f}")
-            logger.debug(f"  std: {np.std(feature_diffs):.4f}")
-            logger.debug(f"  range: [{np.min(feature_diffs):.4f}, {np.max(feature_diffs):.4f}]")
-            
-            return feature_diffs
-        
-        except Exception as e:
-            logger.error(f"Error computing feature values for {feature}: {str(e)}")
-            return np.zeros(len(dataset.preferences))
-                                                                                                                                    
+                                                                                                                                                       
     def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
         """Generate and save a detailed metrics report."""
         report_df = pd.DataFrame([
@@ -1800,92 +1664,23 @@ class PreferenceModel:
                             
             except Exception as e:
                 logger.warning(f"Error in diagnostics: {str(e)}")
-                                                                        
-    def _compute_model_metrics(self) -> Dict[str, float]:
-        """Compute model-specific performance metrics."""
-        metrics = {}
-        try:
-            # Classification metrics
-            y_true = []
-            y_pred = []
-            uncertainties = []
-            
-            for pref in self.dataset.preferences:
-                prediction = self.predict_preference(pref.bigram1, pref.bigram2)
-                pred_prob = prediction.probability
-                pred_std = prediction.uncertainty
-                
-                y_true.append(1.0 if pref.preferred else 0.0)
-                y_pred.append(pred_prob)
-                uncertainties.append(pred_std)
-            
-            metrics['accuracy'] = accuracy_score(y_true, y_pred > 0.5)
-            metrics['auc'] = roc_auc_score(y_true, y_pred)
-            metrics['uncertainty'] = float(np.mean(uncertainties))
-            metrics['transitivity'] = self._check_transitivity()
-            metrics['feature_sparsity'] = self._calculate_feature_sparsity()
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error computing model metrics: {str(e)}")
-            return {}
-
-    def _calculate_model_metrics(self, feature: str, dataset: PreferenceDataset) -> Dict[str, float]:
-        """
-        Calculate model-specific metrics for a feature.
-        
-        Args:
-            feature: Feature to evaluate
-            dataset: Dataset to evaluate on
-            
-        Returns:
-            Dict containing model-specific metrics:
-            - model_effect: Absolute effect size
-            - effect_consistency: Cross-validation based consistency
-            - predictive_power: Improvement in model predictions
-            - feature_weight: Current weight in model
-            - weight_uncertainty: Uncertainty in weight estimate
-        """
-        try:
-            metrics = {}
-            
-            # Get feature weight and uncertainty
-            weights = self.get_feature_weights()
-            if feature in weights:
-                weight_mean, weight_std = weights[feature]
-                metrics['feature_weight'] = weight_mean
-                metrics['weight_uncertainty'] = weight_std
-                metrics['model_effect'] = abs(weight_mean)
-            else:
-                metrics['feature_weight'] = 0.0
-                metrics['weight_uncertainty'] = 1.0
-                metrics['model_effect'] = 0.0
-                
-            # Calculate effect consistency through cross-validation
-            metrics['effect_consistency'] = self._calculate_effect_consistency(feature, dataset)
-            
-            # Calculate predictive power
-            metrics['predictive_power'] = self._calculate_predictive_power(feature, dataset, self)
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error calculating model metrics for {feature}: {str(e)}")
-            return {
-                'feature_weight': 0.0,
-                'weight_uncertainty': 1.0,
-                'model_effect': 0.0,
-                'effect_consistency': 1.0,
-                'predictive_power': 0.0  # Add this line
-            }
-                
+                                                                                        
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------
     def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Get cross-validation splits preserving participant structure with validation."""
         from sklearn.model_selection import KFold
+        
+        # Check for dataset size consistency
+        if not hasattr(self, '_dataset_size'):
+            self._dataset_size = len(dataset.preferences)
+            self._dataset_participants = len(dataset.participants)
+        else:
+            if len(dataset.preferences) != self._dataset_size:
+                raise ValueError(f"Dataset size changed: {len(dataset.preferences)} vs {self._dataset_size}")
+            if len(dataset.participants) != self._dataset_participants:
+                raise ValueError(f"Participant count changed: {len(dataset.participants)} vs {self._dataset_participants}")
         
         # Get unique participants and their preferences
         participants = list(dataset.participants)

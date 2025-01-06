@@ -587,17 +587,6 @@ class BigramRecommender:
         
         return pref_graph
 
-    def _get_metric_difference(self, pair: Tuple[str, str], 
-                            metrics_df: pd.DataFrame, 
-                            metric_name: str) -> float:
-        """Get difference in metric values between bigrams."""
-        try:
-            value1 = metrics_df[metrics_df['feature_name'] == pair[0]][metric_name].iloc[0]
-            value2 = metrics_df[metrics_df['feature_name'] == pair[1]][metric_name].iloc[0]
-            return abs(value1 - value2)
-        except Exception:
-            return 0.0
-
     def _get_metric_average(self, pair: Tuple[str, str],
                         metrics_df: pd.DataFrame,
                         metric_name: str) -> float:
@@ -638,4 +627,3 @@ class BigramRecommender:
             for pair, _, _ in scored_pairs[:self.n_recommendations]
         ]).to_csv(self.config.recommendations.recommendations_file, index=False)
 
-    

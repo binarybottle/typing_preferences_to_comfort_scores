@@ -346,9 +346,3 @@ class FeatureImportanceCalculator:
             'predictive_power': 0.0
         }
  
-    def _format_interaction_name(self, feature: str) -> str:
-            """Format interaction name for display."""
-            if '_x_' in feature:
-                components = feature.split('_x_')
-                return f"{feature} ({' × '.join(components)})"
-

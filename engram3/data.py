@@ -172,58 +172,7 @@ class PreferenceDataset:
             data.file_path = self.file_path
 
         return train_data, test_data
-    
-    def check_transitivity(self) -> Dict[str, float]:
-        """
-        Check for transitivity violations in preferences.
         
-        Returns:
-            Dict containing:
-            - violations: Number of transitivity violations
-            - total_triples: Total number of transitive triples checked
-            - violation_rate: Proportion of triples that violate transitivity
-        """
-        # Build preference graph
-        pref_graph = {}
-        for pref in self.preferences:
-            if pref.preferred:
-                better, worse = pref.bigram1, pref.bigram2
-            else:
-                better, worse = pref.bigram2, pref.bigram1
-                
-            if better not in pref_graph:
-                pref_graph[better] = set()
-            pref_graph[better].add(worse)
-
-        # Check all possible triples
-        violations = 0
-        triples = 0
-        
-        for a in pref_graph:
-            for b in pref_graph.get(a, set()):
-                for c in pref_graph.get(b, set()):
-                    triples += 1
-                    # If a > b and b > c, then we should have a > c
-                    # If we find c > a, that's a violation
-                    if c in pref_graph.get(a, set()):  # Transitive
-                        continue
-                    if a in pref_graph.get(c, set()):  # Violation
-                        violations += 1
-
-        violation_rate = violations / triples if triples > 0 else 0.0
-        
-        results = {
-            'violations': violations,
-            'total_triples': triples,
-            'violation_rate': violation_rate
-        }
-        
-        logger.info("\nTransitivity check results:")
-        logger.info(f"Total transitive triples checked: {triples}")
-        logger.info(f"Number of violations: {violations}")
-        
-        return results
-    
     def _load_csv(self):
         """Load and validate preference data from CSV."""
         if not self.file_path.exists():
