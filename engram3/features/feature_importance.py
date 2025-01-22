@@ -262,7 +262,7 @@ class FeatureImportanceCalculator:
                 features_to_test = list(current_features)
                 if feature not in features_to_test:
                     features_to_test.append(feature)
-                                                        
+                                        
                 # Create new model instance for this split
                 split_model = type(model)(config=model.config)
                 split_model.feature_extractor = model.feature_extractor
@@ -275,7 +275,7 @@ class FeatureImportanceCalculator:
                     
                     # Get feature effect
                     if feature in weights:
-                        effects.append(weights[feature][0])
+                        effects.append(weights[feature][0])  # Store raw effect (not absolute)
                     
                     # Handle n-way interactions
                     if '_x_' in feature:
@@ -284,7 +284,7 @@ class FeatureImportanceCalculator:
                         for component in components:
                             if component in weights and component != feature:
                                 interaction_effects[f'{feature}_with_{component}'].append(
-                                    weights[component][0])
+                                    weights[component][0])  # Store raw effects
                 
                 except Exception as e:
                     logger.error(f"Error in split {split_idx}: {str(e)}")
@@ -299,20 +299,33 @@ class FeatureImportanceCalculator:
             effects = np.array(effects)
             base_consistency = 0.0
             if len(effects) > 0:
+                # Calculate magnitude consistency
+                mean_effect = np.mean(effects)  # Use raw mean, not absolute
                 mean_abs_effect = np.mean(np.abs(effects))
                 if mean_abs_effect > 0:
-                    mad = np.mean(np.abs(effects - np.mean(effects)))
-                    base_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+                    mad = np.mean(np.abs(effects - mean_effect))  # Deviation from raw mean
+                    magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+                else:
+                    magnitude_consistency = 0.0
+                    
+                # Calculate direction consistency
+                sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
+                
+                # Combine both metrics - a feature must be consistent in both magnitude and direction
+                base_consistency = magnitude_consistency * sign_consistency
             
             # Calculate consistency for interactions and components
             interaction_consistencies = []
             for effects in interaction_effects.values():
                 if effects:
                     effects = np.array(effects)
+                    mean_effect = np.mean(effects)
                     mean_abs_effect = np.mean(np.abs(effects))
                     if mean_abs_effect > 0:
-                        mad = np.mean(np.abs(effects - np.mean(effects)))
-                        consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+                        mad = np.mean(np.abs(effects - mean_effect))
+                        magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
+                        sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
+                        consistency = magnitude_consistency * sign_consistency
                         interaction_consistencies.append(consistency)
             
             # Combine consistencies with proper weighting
@@ -330,7 +343,7 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-
+        
     def clear_caches(self):
         """Clear all caches."""
         if hasattr(self, 'metric_cache'):
