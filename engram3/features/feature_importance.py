@@ -268,6 +268,7 @@ class FeatureImportanceCalculator:
                 split_model.feature_extractor = model.feature_extractor
                 
                 try:
+                    logger.info(f"\nCalculating consistency for {feature}:")
                     split_model.fit(train_data, features_to_test, 
                                 fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
 
@@ -300,8 +301,12 @@ class FeatureImportanceCalculator:
             base_consistency = 0.0
             if len(effects) > 0:
                 # Calculate magnitude consistency
+                logger.info(f"  Raw effects across folds: {effects}")
                 mean_effect = np.mean(effects)  # Use raw mean, not absolute
                 mean_abs_effect = np.mean(np.abs(effects))
+                logger.info(f"  Mean effect: {mean_effect:.4f}")
+                logger.info(f"  Mean absolute effect: {mean_abs_effect:.4f}")
+
                 if mean_abs_effect > 0:
                     mad = np.mean(np.abs(effects - mean_effect))  # Deviation from raw mean
                     magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
@@ -313,6 +318,12 @@ class FeatureImportanceCalculator:
                 
                 # Combine both metrics - a feature must be consistent in both magnitude and direction
                 base_consistency = magnitude_consistency * sign_consistency
+
+                logger.info(f"  Magnitude consistency: {magnitude_consistency:.4f}")
+                logger.info(f"  Sign consistency: {sign_consistency:.4f}")
+                logger.info(f"  Final consistency score: {base_consistency:.4f}")
+            else:
+                logger.warning(f"  No effects collected for {feature}")
             
             # Calculate consistency for interactions and components
             interaction_consistencies = []
