@@ -51,15 +51,15 @@ because:
 # - We're interested in "better vs worse" rather than exact effect sizes
 # - Performance (speed) becomes more important since we're doing many comparisons
 feature_selection:
-  metric_weights:                       # Weights for combining different metrics (must sum to 1)
-    model_effect: 0.4                   # Weight for feature's effect in model
-    effect_consistency: 0.3             # Weight for consistency of effect across splits (cross-validation stability)
+  metric_weights:                       # Weights for combining different metrics (must sum to 1): prioritize stable, predictive features
+    effect_consistency: 0.5             # Weight for consistency of effect across splits (cross-validation stability)
     predictive_power: 0.3               # Weight for prediction improvement
+    model_effect: 0.2                   # Weight for feature's effect in model
   thresholds:                           # Selection criteria thresholds
-    model_effect: 0.3                   # Minimum normalized effect size
-    effect_consistency: 0.5             # Minimum effect consistency
-    predictive_power: 0.2               # Minimum improvement over baseline
-  min_metrics_passed: 3                 # Number of metrics that must pass thresholds (2 or 3)
+    effect_consistency: 0.2             # Minimum effect consistency (0.2 from, e.g., 60% variation in magnitude and same direction in 3/5 folds)
+    predictive_power: 0.05              # Minimum improvement over baseline (0.05 represents 2.5% accuracy improvement)
+    model_effect: 0.001                 # Minimum normalized effect size (too small risks including numerical noise)
+  min_metrics_passed: 3                 # Number of metrics that must pass thresholds
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
