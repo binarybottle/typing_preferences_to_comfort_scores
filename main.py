@@ -588,7 +588,7 @@ def main():
                 raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
             feature_metrics_df = pd.read_csv(feature_metrics_file)
             selected_features = (feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist() + 
-                                list(config.features.control_features))  # Add control features
+                                 list(config.features.control_features))
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
             
@@ -628,7 +628,7 @@ def main():
             feature_metrics_df = pd.read_csv(feature_metrics_file)
             # Change to handle control features
             selected_features = (feature_metrics_df[feature_metrics_df['selected'] == 1]['feature_name'].tolist() + 
-                                list(config.features.control_features))  # Add control features
+                                 list(config.features.control_features))
             if not selected_features:
                 raise ValueError("No features were selected in feature selection phase")
 

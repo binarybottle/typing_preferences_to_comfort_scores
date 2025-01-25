@@ -1285,15 +1285,17 @@ class PreferenceModel:
     #--------------------------------------------                          
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features using round-robin comparison with threshold elimination."""
-        self.selected_features = []
+        self.selected_features = []  # Start empty
         control_features = self.config.features.control_features
         base_features = [f for f in all_features if f not in control_features and '_x_' not in f]
         interaction_features = [f for f in all_features if f not in control_features and '_x_' in f]
         
-        max_rounds = len(base_features) + len(interaction_features)  # Dynamic based on feature count
-
+        max_rounds = len(base_features) + len(interaction_features)
         thresholds = self.config.feature_selection.thresholds
         min_metrics_passed = self.config.feature_selection.min_metrics_passed
+        
+        # Add control features to selected_features first
+        self.selected_features.extend(control_features)  # Add this line
         
         for round_num in range(1, max_rounds + 1):
             remaining_features = base_features if base_features else interaction_features
@@ -1303,12 +1305,15 @@ class PreferenceModel:
             # Evaluate all remaining features
             feature_metrics = {}
             for feature in remaining_features:
+                # Log current context for debugging
+                logger.info(f"\nEvaluating {feature} with context: {self.selected_features}")  # Add this line
+                
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
                     dataset=dataset,
                     model=self,
                     all_features=all_features,
-                    current_selected_features=self.selected_features
+                    current_selected_features=self.selected_features  # This now includes control features
                 )
                 
                 # Count how many metrics pass thresholds

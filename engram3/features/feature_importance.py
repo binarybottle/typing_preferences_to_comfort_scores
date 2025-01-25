@@ -143,55 +143,32 @@ class FeatureImportanceCalculator:
             logger.error(f"Error computing baseline accuracy: {str(e)}")
             return 0.5  # Return random chance on error
 
-    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, model: 'PreferenceModel',
-                        all_features: List[str], current_selected_features: List[str]) -> Dict[str, float]:
+    def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
+                        model: 'PreferenceModel', all_features: List[str],
+                        current_selected_features: List[str]) -> Dict[str, float]:
         """Evaluate a feature's importance using multiple metrics."""
         try:
-            # Input validation
-            if not dataset or not model:
-                logger.error("Missing required parameters")
-                return self._get_default_metrics()
-            if feature not in all_features:
-                logger.error(f"Feature {feature} not in all_features")
-                return self._get_default_metrics()
-
-            # Compute baseline once and cache it
-            if self._baseline_accuracy is None:
-                self._baseline_accuracy = self._compute_baseline_accuracy(dataset, model)
+            # Input validation and logging
+            logger.info(f"\nEvaluating feature: {feature}")
+            logger.info(f"Current selected features: {current_selected_features}")
             
-            # Log evaluation header
-            logger.info(f"\n{'='*32}")
-            if '_x_' in feature:
-                components = feature.split('_x_')
-                logger.info(f"EVALUATING {len(components)}-WAY INTERACTION:")
-                logger.info(f"  {' × '.join(components)}")
-                # Check if all components are available
-                missing_components = [c for c in components 
-                                    if c not in current_selected_features 
-                                    and c not in model.config.features.control_features]
-                if missing_components:
-                    logger.info(f"Missing components: {missing_components}")
-                    return self._get_default_metrics()
-            else:
-                logger.info(f"EVALUATING BASE FEATURE:")
-                logger.info(f"  {feature}")
-                
-            logger.info(f"Context: {', '.join(current_selected_features)}")
-            logger.info(f"{'-'*32}")
+            # Create evaluation context with ALL currently selected features
+            evaluation_features = list(dict.fromkeys(
+                current_selected_features +  # Already includes control features
+                [feature]                    # Add feature being evaluated
+            ))
+            logger.info(f"Evaluation context: {evaluation_features}")
             
-            # Setup evaluation model
+            # Fit model with proper context
             eval_model = type(model)(config=model.config)
             eval_model.feature_extractor = model.feature_extractor
-            eval_features = (list(model.config.features.control_features) + 
-                            current_selected_features + [feature])
-            eval_model.feature_names = eval_features
-            eval_model.selected_features = eval_features
+            eval_model.feature_names = evaluation_features
+            eval_model.selected_features = evaluation_features
             
             try:
-                # Fit evaluation model
-                eval_model.fit(dataset, eval_features, 
+                eval_model.fit(dataset, evaluation_features,
                             fit_purpose=f"Feature evaluation for {feature}")
-                
+
                 # Get feature effect
                 weights = eval_model.get_feature_weights()
                 if feature not in weights:
@@ -249,26 +226,29 @@ class FeatureImportanceCalculator:
                                     model: 'PreferenceModel', current_features: List[str]) -> float:
         """Calculate consistency of feature effect across cross-validation splits."""
         try:
-            n_splits = 5
+            logger.info(f"\nCalculating consistency for {feature}:")
             effects = []
             interaction_effects = defaultdict(list)
             
             # Get cross-validation splits
-            cv_splits = model._get_cv_splits(dataset, n_splits)
+            cv_splits = model._get_cv_splits(dataset, n_splits=5)
             
             for split_idx, (train_idx, val_idx) in enumerate(cv_splits, 1):
                 train_data = dataset._create_subset_dataset(train_idx)
                 
+                # Define features to use in this split
                 features_to_test = list(current_features)
                 if feature not in features_to_test:
                     features_to_test.append(feature)
                                         
-                # Create new model instance for this split
+                # Create new model instance with proper state
                 split_model = type(model)(config=model.config)
+                # Copy necessary attributes
                 split_model.feature_extractor = model.feature_extractor
+                split_model.feature_names = features_to_test  # Add this
+                split_model.selected_features = features_to_test  # Add this
                 
                 try:
-                    logger.info(f"\nCalculating consistency for {feature}:")
                     split_model.fit(train_data, features_to_test, 
                                 fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
 
@@ -276,16 +256,20 @@ class FeatureImportanceCalculator:
                     
                     # Get feature effect
                     if feature in weights:
-                        effects.append(weights[feature][0])  # Store raw effect (not absolute)
+                        effect = weights[feature][0]
+                        effects.append(effect)
+                        logger.debug(f"Split {split_idx}: effect = {effect:.4f}")
+                    else:
+                        logger.warning(f"Feature {feature} missing from weights in split {split_idx}")
+                        logger.debug(f"Available weights: {list(weights.keys())}")
                     
                     # Handle n-way interactions
                     if '_x_' in feature:
                         components = feature.split('_x_')
-                        # Track component effects
                         for component in components:
                             if component in weights and component != feature:
                                 interaction_effects[f'{feature}_with_{component}'].append(
-                                    weights[component][0])  # Store raw effects
+                                    weights[component][0])
                 
                 except Exception as e:
                     logger.error(f"Error in split {split_idx}: {str(e)}")
@@ -293,68 +277,41 @@ class FeatureImportanceCalculator:
                 finally:
                     split_model.cleanup()
             
-            if not effects and not interaction_effects:
+            if not effects:
+                logger.warning(f"No effects collected for {feature}")
                 return 0.0
             
-            # Calculate consistency for base feature
+            # Calculate consistency metrics
             effects = np.array(effects)
-            base_consistency = 0.0
-            if len(effects) > 0:
-                # Calculate magnitude consistency
-                logger.info(f"  Raw effects across folds: {effects}")
-                mean_effect = np.mean(effects)  # Use raw mean, not absolute
-                mean_abs_effect = np.mean(np.abs(effects))
-                logger.info(f"  Mean effect: {mean_effect:.4f}")
-                logger.info(f"  Mean absolute effect: {mean_abs_effect:.4f}")
+            logger.info(f"Raw effects across folds: {effects}")
+            mean_effect = np.mean(effects)
+            mean_abs_effect = np.mean(np.abs(effects))
+            logger.info(f"Mean effect: {mean_effect:.4f}")
+            logger.info(f"Mean absolute effect: {mean_abs_effect:.4f}")
 
-                if mean_abs_effect > 0:
-                    mad = np.mean(np.abs(effects - mean_effect))  # Deviation from raw mean
-                    magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
-                else:
-                    magnitude_consistency = 0.0
-                    
-                # Calculate direction consistency
-                sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
-                
-                # Combine both metrics - a feature must be consistent in both magnitude and direction
-                base_consistency = magnitude_consistency * sign_consistency
-
-                logger.info(f"  Magnitude consistency: {magnitude_consistency:.4f}")
-                logger.info(f"  Sign consistency: {sign_consistency:.4f}")
-                logger.info(f"  Final consistency score: {base_consistency:.4f}")
+            # Calculate magnitude consistency
+            if mean_abs_effect > 0:
+                mad = np.mean(np.abs(effects - mean_effect))
+                magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
             else:
-                logger.warning(f"  No effects collected for {feature}")
+                magnitude_consistency = 0.0
             
-            # Calculate consistency for interactions and components
-            interaction_consistencies = []
-            for effects in interaction_effects.values():
-                if effects:
-                    effects = np.array(effects)
-                    mean_effect = np.mean(effects)
-                    mean_abs_effect = np.mean(np.abs(effects))
-                    if mean_abs_effect > 0:
-                        mad = np.mean(np.abs(effects - mean_effect))
-                        magnitude_consistency = 1.0 - np.clip(mad / mean_abs_effect, 0, 1)
-                        sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
-                        consistency = magnitude_consistency * sign_consistency
-                        interaction_consistencies.append(consistency)
+            # Calculate direction consistency
+            sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
             
-            # Combine consistencies with proper weighting
-            if interaction_consistencies:
-                if '_x_' in feature:
-                    n_components = len(feature.split('_x_'))
-                    weights = [n_components if i == 0 else 1 
-                            for i in range(len(interaction_consistencies))]
-                    return float(np.average([base_consistency] + interaction_consistencies, 
-                                        weights=weights))
-                return float(np.mean([base_consistency] + interaction_consistencies))
+            # Combine both metrics
+            final_consistency = magnitude_consistency * sign_consistency
             
-            return float(base_consistency)
+            logger.info(f"Magnitude consistency: {magnitude_consistency:.4f}")
+            logger.info(f"Sign consistency: {sign_consistency:.4f}")
+            logger.info(f"Final consistency score: {final_consistency:.4f}")
             
+            return float(final_consistency)
+                
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-        
+                
     def clear_caches(self):
         """Clear all caches."""
         if hasattr(self, 'metric_cache'):
