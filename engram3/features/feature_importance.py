@@ -127,22 +127,34 @@ class FeatureImportanceCalculator:
             # Use only control features
             control_features = list(model.config.features.control_features)
             if not control_features:
-                logger.warning("No control features defined, using dummy feature")
+                logger.warning("No control features defined, using random chance baseline")
                 return 0.5  # Random chance baseline
+                
+            # Initialize model properly
+            baseline_model.feature_names = control_features
+            baseline_model.selected_features = control_features
                 
             try:
                 baseline_model.fit(dataset, control_features, 
                                 fit_purpose="Computing baseline accuracy")
                 metrics = baseline_model.evaluate(dataset)
-                return float(metrics['accuracy'])
+                accuracy = metrics.get('accuracy')
+                
+                if accuracy is None:
+                    logger.warning("Could not compute baseline accuracy, using random chance")
+                    return 0.5
+                    
+                logger.info(f"Baseline accuracy: {accuracy:.4f}")
+                return float(accuracy)
                 
             finally:
                 baseline_model.cleanup()
-                
+                    
         except Exception as e:
             logger.error(f"Error computing baseline accuracy: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             return 0.5  # Return random chance on error
-
+        
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
                         model: 'PreferenceModel', all_features: List[str],
                         current_selected_features: List[str]) -> Dict[str, float]:
@@ -206,12 +218,31 @@ class FeatureImportanceCalculator:
                                 model: 'PreferenceModel', baseline_accuracy: float) -> float:
         """Calculate predictive power as improvement over baseline."""
         try:
+            # Ensure we have a valid baseline
+            if baseline_accuracy is None:
+                logger.warning("No baseline accuracy provided, computing new baseline")
+                baseline_accuracy = self._compute_baseline_accuracy(dataset, model)
+            
+            if baseline_accuracy is None:
+                logger.error("Could not compute baseline accuracy")
+                return 0.0
+
             # Get accuracy with this feature
             metrics = model.evaluate(dataset)
-            feature_accuracy = metrics['accuracy']
+            feature_accuracy = metrics.get('accuracy')
             
+            if feature_accuracy is None:
+                logger.error(f"Could not get accuracy for feature {feature}")
+                return 0.0
+                
             # Calculate improvement over baseline
             improvement = feature_accuracy - baseline_accuracy
+            
+            # Log values for debugging
+            logger.info(f"Predictive power calculation:")
+            logger.info(f"  Baseline accuracy: {baseline_accuracy:.4f}")
+            logger.info(f"  Feature accuracy: {feature_accuracy:.4f}")
+            logger.info(f"  Improvement: {improvement:.4f}")
             
             # Normalize to [0,1] range assuming max 0.5 improvement possible
             normalized_power = np.clip(improvement / 0.5, 0, 1)
@@ -220,8 +251,9 @@ class FeatureImportanceCalculator:
             
         except Exception as e:
             logger.error(f"Error calculating predictive power: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             return 0.0
-
+        
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     model: 'PreferenceModel', current_features: List[str]) -> float:
         """Calculate consistency of feature effect across cross-validation splits."""
