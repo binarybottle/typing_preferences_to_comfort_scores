@@ -1326,7 +1326,7 @@ class PreferenceModel:
     # Feature selection and evaluation methods
     #--------------------------------------------  
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """Select features using round-robin comparison with threshold elimination."""
+        """Select features using forward selection with threshold elimination."""
         self.dataset = dataset  # Set dataset first
         
         # Preprocess dataset to handle NaN values consistently
@@ -1343,100 +1343,83 @@ class PreferenceModel:
             if valid:
                 valid_prefs.append(pref)
         
+        if not valid_prefs:
+            raise ValueError("No valid preferences after filtering")
+            
         # Create preprocessed dataset
-        processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
-        processed_dataset.preferences = valid_prefs
-        processed_dataset.participants = {p.participant_id for p in valid_prefs}
-        processed_dataset.file_path = dataset.file_path
-        processed_dataset.config = dataset.config
-        processed_dataset.control_features = dataset.control_features
-        processed_dataset.feature_extractor = dataset.feature_extractor
-        processed_dataset.feature_names = dataset.feature_names
-        processed_dataset.all_bigrams = dataset.all_bigrams
-        processed_dataset.all_bigram_features = dataset.all_bigram_features
+        self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)  # Store as instance variable
+        self.processed_dataset.preferences = valid_prefs
+        self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
+        self.processed_dataset.file_path = dataset.file_path
+        self.processed_dataset.config = dataset.config
+        self.processed_dataset.control_features = dataset.control_features
+        self.processed_dataset.feature_extractor = dataset.feature_extractor
+        self.processed_dataset.feature_names = dataset.feature_names
+        self.processed_dataset.all_bigrams = dataset.all_bigrams
+        self.processed_dataset.all_bigram_features = dataset.all_bigram_features
         
-        # Copy the maps to make cleaner logs and 
-        # prevent potential issues if these attributes are referenced elsewhere
-        processed_dataset.column_map = getattr(dataset, 'column_map', None)
-        processed_dataset.row_map = getattr(dataset, 'row_map', None)
-        processed_dataset.finger_map = getattr(dataset, 'finger_map', None)
-        processed_dataset.engram_position_values = getattr(dataset, 'engram_position_values', None)
-        processed_dataset.row_position_values = getattr(dataset, 'row_position_values', None)
-
+        # Copy the maps
+        self.processed_dataset.column_map = getattr(dataset, 'column_map', None)
+        self.processed_dataset.row_map = getattr(dataset, 'row_map', None)
+        self.processed_dataset.finger_map = getattr(dataset, 'finger_map', None)
+        self.processed_dataset.engram_position_values = getattr(dataset, 'engram_position_values', None)
+        self.processed_dataset.row_position_values = getattr(dataset, 'row_position_values', None)
+        
         logger.info(f"Preprocessed dataset:")
         logger.info(f"  Original size: {len(dataset.preferences)} preferences")
-        logger.info(f"  After filtering: {len(processed_dataset.preferences)} preferences")
-        logger.info(f"  Participants: {len(processed_dataset.participants)}")
+        logger.info(f"  After filtering: {len(self.processed_dataset.preferences)} preferences")
+        logger.info(f"  Participants: {len(self.processed_dataset.participants)}")
         
         # Initialize selection and tracking
         self.selected_features = []
         selected_so_far = []  # Track selected features separately
         control_features = self.config.features.control_features
-        base_features = [f for f in all_features if f not in control_features and '_x_' not in f]
-        interaction_features = [f for f in all_features if f not in control_features and '_x_' in f]
-
-        max_rounds = len(base_features) + len(interaction_features)
+        candidate_features = [f for f in all_features if f not in control_features]
         thresholds = self.config.feature_selection.thresholds
         min_metrics_passed = self.config.feature_selection.min_metrics_passed
 
-        # First evaluate control features
+        # First add control features to context
+        logger.info("\nInitializing with control features:")
         for feature in control_features:
-            metrics = self.importance_calculator.evaluate_feature(
-                feature=feature,
-                dataset=processed_dataset,
-                model=self,
-                all_features=all_features,
-                current_selected_features=selected_so_far  # Use tracking list consistently
-            )
-            if sum([
-                metrics['model_effect'] >= thresholds.model_effect,
-                metrics['effect_consistency'] >= thresholds.effect_consistency,
-                metrics['predictive_power'] >= thresholds.predictive_power
-            ]) >= min_metrics_passed:
-                self.selected_features.append(feature)
-                selected_so_far.append(feature)  # Update tracking list
-
-
-
-        for round_num in range(1, max_rounds + 1):
-            remaining_features = base_features if base_features else interaction_features
-            if not remaining_features:
-                break
-                
+            selected_so_far.append(feature)
+            self.selected_features.append(feature)
+        
+        logger.info(f"Starting feature selection with {len(candidate_features)} candidate features")
+        
+        # Keep selecting features until no more pass thresholds
+        while candidate_features:
+            logger.info(f"\nCurrent selected features: {selected_so_far}")
+            
             # Evaluate all remaining features
             feature_metrics = {}
-            for feature in remaining_features:
+            for feature in candidate_features:
+                logger.info(f"\nEvaluating feature {feature} with current selected: {selected_so_far}")
+                
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
-                    dataset=processed_dataset,
+                    dataset=self.processed_dataset,  # Use instance variable
                     model=self,
                     all_features=all_features,
-                    current_selected_features=self.selected_features
+                    current_selected_features=selected_so_far
                 )
-
+                
                 passes = [
                     metrics['model_effect'] >= thresholds.model_effect,
                     metrics['effect_consistency'] >= thresholds.effect_consistency,
                     metrics['predictive_power'] >= thresholds.predictive_power
                 ]
                 metrics_passed = sum(passes)
-
-                logger.info(f"\nFeature {feature} metrics:")
+                
+                logger.info(f"Feature {feature} metrics:")
                 logger.info(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
                 logger.info(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
                 logger.info(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
                 logger.info(f"  Metrics passed: {metrics_passed}/{min_metrics_passed}")
-
+                
                 if metrics_passed >= min_metrics_passed:
                     feature_metrics[feature] = metrics
-                    
-            # Remove features that didn't meet thresholds
-            if base_features:
-                base_features = list(feature_metrics.keys())
-            else:
-                interaction_features = list(feature_metrics.keys())
-
-            # Select best remaining feature (single scoring block)
+            
+            # Select best remaining feature that passed thresholds
             if feature_metrics:
                 weights = self.config.feature_selection.metric_weights
                 best_score = float('-inf')
@@ -1457,14 +1440,15 @@ class PreferenceModel:
                 if best_feature is not None:
                     logger.info(f"Selected feature {best_feature} with score {best_score:.4f}")
                     self.selected_features.append(best_feature)
-                    selected_so_far.append(best_feature)  # Update tracking list
-                    
-                    # Remove selected feature
-                    if best_feature in base_features:
-                        base_features.remove(best_feature)
-                    if best_feature in interaction_features:
-                        interaction_features.remove(best_feature)
+                    selected_so_far.append(best_feature)
+                    candidate_features.remove(best_feature)
+                    continue
+            
+            # If no features passed thresholds, end selection
+            break
 
+        logger.info("\nFeature selection complete:")
+        logger.info(f"Final selected features: {self.selected_features}")
         return self.selected_features
 
     def _select_best_feature(self, feature_metrics: Dict[str, Dict[str, float]]) -> Optional[str]:

@@ -269,9 +269,7 @@ class PreferenceDataset:
     def _create_subset_dataset(self, indices: Union[List[int], np.ndarray]) -> 'PreferenceDataset':
         """Create a new dataset containing only the specified preferences."""
         try:
-            # Convert indices to numpy array if not already
             indices = np.array(indices)
-            
             # Validate indices
             if len(indices) == 0:
                 raise ValueError("Empty indices list provided")
@@ -284,11 +282,23 @@ class PreferenceDataset:
             if np.any(indices < 0) or np.any(indices >= len(self.preferences)):
                 invalid_indices = indices[(indices < 0) | (indices >= len(self.preferences))]
                 raise ValueError(f"Invalid indices detected: {invalid_indices[:5]}...")
-            
+                        
+            logger.debug(f"Creating subset with:")
+            logger.debug(f"  Indices count: {len(indices)}")
+            logger.debug(f"  Indices range: {indices.min()} to {indices.max()}")
+            logger.debug(f"  Original dataset size: {len(self.preferences)}")
+            logger.debug(f"  Original participants: {len(self.participants)}")
+
+            # Create subset preferences list, and participants based on preferences
             subset = PreferenceDataset.__new__(PreferenceDataset)
-            
-            # Create subset preferences list
             subset.preferences = [self.preferences[i] for i in indices]
+            subset.participants = {p.participant_id for p in subset.preferences}
+
+            logger.debug(f"Created subset:")
+            logger.debug(f"  Preferences: {len(subset.preferences)}")
+            logger.debug(f"  Participants: {len(subset.participants)}")
+            logger.debug(f"  Dropped preferences: {len(self.preferences) - len(subset.preferences)}")
+            logger.debug(f"  Dropped participants: {len(self.participants) - len(subset.participants)}")
             
             # Verify subset creation
             if len(subset.preferences) != len(indices):
@@ -309,9 +319,6 @@ class PreferenceDataset:
                     setattr(subset, attr, getattr(self, attr))
                 else:
                     logger.warning(f"Source dataset missing attribute: {attr}")
-            
-            # Set participants based on preferences
-            subset.participants = {p.participant_id for p in subset.preferences}
             
             # Copy feature extraction related attributes
             subset.feature_extractor = self.feature_extractor

@@ -86,7 +86,7 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
     Load existing train/test split or create and save a new one.
     """
     split_file = Path(config.data.splits['split_data_file'])
-    
+
     try:
         if split_file.exists():
             logger.info("Loading existing train/test split...")
@@ -94,32 +94,31 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
             
             # Validate indices against current dataset size
             if np.any(split_data['train_indices'] >= len(dataset.preferences)) or \
-               np.any(split_data['test_indices'] >= len(dataset.preferences)):
-                logger.warning("Existing split file contains invalid indices for current dataset size")
-                logger.warning(f"Current dataset size: {len(dataset.preferences)}")
-                logger.warning("Creating new split...")
+                np.any(split_data['test_indices'] >= len(dataset.preferences)):
+                logger.warning("Invalid indices, creating new split...")
             else:
                 try:
+                    # Verify all preferences and participants before creating subsets
+                    total_indices = np.concatenate([split_data['train_indices'], split_data['test_indices']])
+                    if len(np.unique(total_indices)) != len(dataset.preferences):
+                        logger.warning("Missing preferences in split, creating new split...")
+                        raise ValueError("Incomplete split")
+                        
                     train_data = dataset._create_subset_dataset(split_data['train_indices'])
                     test_data = dataset._create_subset_dataset(split_data['test_indices'])
                     
-                    # Verify all preferences and participants are included
-                    total_indices = np.concatenate([split_data['train_indices'], split_data['test_indices']])
-                    assert len(np.unique(total_indices)) == len(dataset.preferences), "Some preferences missing from split"
-                    
-                    # Verify participant and preference counts
+                    # Verify counts after creating subsets
                     split_participant_count = len(train_data.participants) + len(test_data.participants)
-                    assert split_participant_count == len(dataset.participants), f"Participant count mismatch: {split_participant_count} vs {len(dataset.participants)}"
-                    
                     split_preference_count = len(train_data.preferences) + len(test_data.preferences)
-                    assert split_preference_count == len(dataset.preferences), f"Preference count mismatch: {split_preference_count} vs {len(dataset.preferences)}"
+                    
+                    if (split_participant_count != len(dataset.participants) or 
+                        split_preference_count != len(dataset.preferences)):
+                        logger.warning("Split verification failed, creating new split...")
+                        raise ValueError("Data loss in split")
                     
                     return train_data, test_data
-                
                 except ValueError as e:
                     logger.warning(f"Error loading split: {e}")
-                    logger.warning("Creating new split...")
-                    # Let it fall through to create new split
 
         logger.info("Creating new train/test split...")
                     
@@ -156,6 +155,11 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         train_indices = np.array(train_indices)
         test_indices = np.array(test_indices)
 
+        logger.debug(f"Original indices: {len(participant_to_indices)}")
+        logger.debug(f"Train indices: {len(train_indices)}")
+        logger.debug(f"Test indices: {len(test_indices)}")
+        logger.debug(f"Total split indices: {len(train_indices) + len(test_indices)}")
+        
         # Verify splits contain all preferences and participants
         total_indices = np.concatenate([train_indices, test_indices])
         assert len(np.unique(total_indices)) == len(dataset.preferences), "Some preferences missing from split"

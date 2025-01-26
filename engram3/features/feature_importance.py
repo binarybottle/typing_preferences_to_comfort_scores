@@ -122,6 +122,9 @@ class FeatureImportanceCalculator:
     def _compute_baseline_accuracy(self, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
         """Compute baseline model accuracy using only control features."""
         try:
+            if not dataset.preferences:
+                raise ValueError("Empty dataset")
+                
             # Create baseline model with only control features
             baseline_model = type(model)(config=model.config)
             baseline_model.feature_extractor = model.feature_extractor
@@ -158,7 +161,6 @@ class FeatureImportanceCalculator:
             logger.error("Traceback:", exc_info=True)
             return 0.5  # Return random chance on error
 
-
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
                         model: 'PreferenceModel', all_features: List[str],
                         current_selected_features: List[str]) -> Dict[str, float]:
@@ -168,9 +170,9 @@ class FeatureImportanceCalculator:
             logger.info(f"\nEvaluating feature: {feature}")
             logger.info(f"Current selected features: {current_selected_features}")
             
-            # Create evaluation context with ALL currently selected features
+            # Create evaluation context with ALL currently selected features plus the new one
             evaluation_features = list(dict.fromkeys(
-                current_selected_features +  # Already includes control features
+                current_selected_features +  # Already selected features including control
                 [feature]                    # Add feature being evaluated
             ))
             logger.info(f"Evaluation context: {evaluation_features}")
