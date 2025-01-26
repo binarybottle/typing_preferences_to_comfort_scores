@@ -398,10 +398,10 @@ class PreferenceModel:
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance on a dataset."""
         logger.info("=== Starting model evaluation ===")
-        logger.info(f"Model state:")
-        logger.info(f"  Feature names: {list(dict.fromkeys(self.feature_names)) if hasattr(self, 'feature_names') else 'No feature_names'}")
-        logger.info(f"  Selected features: {list(dict.fromkeys(self.selected_features)) if hasattr(self, 'selected_features') else 'No selected_features'}")
-        logger.info(f"  Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
+        #logger.info(f"Model state:")
+        #logger.info(f"Feature names: {list(dict.fromkeys(self.feature_names)) if hasattr(self, 'feature_names') else 'No feature_names'}")
+        logger.info(f"Selected features: {list(dict.fromkeys(self.selected_features)) if hasattr(self, 'selected_features') else 'No selected_features'}")
+        logger.info(f"Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
         
         try:
             if not hasattr(self, 'fit_result') or self.fit_result is None:
@@ -412,7 +412,7 @@ class PreferenceModel:
             actuals = []
             feature_values = defaultdict(list)  # Track feature values
             
-            logger.info(f"Evaluating model on {len(dataset.preferences)} preferences")
+            #logger.info(f"Evaluating model on {len(dataset.preferences)} preferences")
             
             # Sample some predictions for debugging
             debug_samples = []
@@ -757,9 +757,8 @@ class PreferenceModel:
                 if not is_control_only and not main_features:
                     raise ValueError("No main features provided for model fitting")
                     
-                logger.info(f"Preparing data:")
-                logger.info(f"  Main features ({len(main_features)}): {main_features}")
-                logger.info(f"  Control features ({len(control_features)}): {control_features}")
+                logger.info(f"Main features ({len(main_features)}): {main_features}")
+                logger.info(f"Control features ({len(control_features)}): {control_features}")
                 
                 # Create participant ID mapping
                 participant_ids = sorted(list(dataset.participants))
@@ -768,8 +767,8 @@ class PreferenceModel:
                 # Track feature statistics for standardization
                 feature_stats = defaultdict(lambda: {'values': [], 'mean': None, 'std': None})
                 
-                # First pass: collect values for standardization
-                logger.info("First pass: collecting values for standardization")
+                # First pass: collect values and standardize
+                logger.info("First pass: collect values and standardize")
                 for pref in dataset.preferences:
                     # Collect main feature values
                     if not is_control_only:
@@ -824,9 +823,7 @@ class PreferenceModel:
                         feat1 = pref.features1.get(feature, 0.0)
                         feat2 = pref.features2.get(feature, 0.0)
                         feature_stats[feature]['values'].extend([feat1, feat2])
-                
                 # Calculate standardization parameters
-                logger.info("Computing standardization parameters")
                 for feature, stats in feature_stats.items():
                     values = np.array(stats['values'])
 
@@ -845,7 +842,7 @@ class PreferenceModel:
 
                 # Second pass: build standardized matrices
                 processed_features.clear()  # Reset before second pass
-                logger.info("Second pass: building standardized matrices")
+                logger.info("Second pass: build standardized matrices")
                 X1, X2 = [], []  # Main feature matrices
                 C1, C2 = [], []  # Control feature matrices
                 participant = []
@@ -1007,16 +1004,16 @@ class PreferenceModel:
                     raise ValueError("NaN values found in feature matrices")
 
                 # Log dimensions and statistics
-                logger.info(f"\nData dimensions:")
-                logger.info(f"  N (preferences): {len(y)}")
-                logger.info(f"  P (participants): {len(participant_ids)}")
+                logger.info(f"Data dimensions:")
+                logger.info(f"  Preferences: {len(y)}")
+                logger.info(f"  Participants: {len(participant_ids)}")
                 if is_control_only:
                     logger.info("  Using dummy main feature for control-only model")
-                logger.info(f"  F (main features): {1 if is_control_only else len(main_features)}")
-                logger.info(f"  C (control features): {len(control_features)}")
+                logger.info(f"  Main features: {1 if is_control_only else len(main_features)}")
+                logger.info(f"  Control features: {len(control_features)}")
 
                 # Log original and standardized statistics
-                logger.info("\nFeature statistics:")
+                logger.info("Feature statistics:")
                 if not is_control_only:
                     for i, feature in enumerate(main_features):
                         logger.info(f"\n{feature} (main):")

@@ -242,18 +242,17 @@ class PreferenceDataset:
                     success_count += 1
                     
                     if success_count == 1:
-                        print(f"Bigram 1: {pref.bigram1}")
-                        print(f"Bigram 2: {pref.bigram2}")
-                        print(f"Participant: {pref.participant_id}")
-                        print(f"Preferred: {pref.preferred}")
-                        print(f"Features Bigram 1: {pref.features1}")
-                        print(f"Features Bigram 2: {pref.features2}")
+                        logger.info(f"Example bigram pair: {pref.bigram1}, {pref.bigram2}")
+                        logger.info(f"Participant ID: {pref.participant_id}")
+                        logger.info(f"Preferred?: {pref.preferred}")
+                        logger.info(f"Features Bigram 1: {pref.features1}")
+                        #print(f"\nFeatures Bigram 2: {pref.features2}")
                 except Exception as e:
-                    print(f"\nError processing row {idx}:")
-                    print(f"Error: {str(e)}")
+                    logger.info(f"\nError processing row {idx}:")
+                    logger.info(f"Error: {str(e)}")
                     continue
 
-            print(f"\nSuccessfully processed {success_count} out of {len(data)} rows")
+            logger.info(f"\nSuccessfully processed {success_count} out of {len(data)} rows")
 
             if not self.preferences:
                 raise ValueError("No valid preferences found in data")
@@ -262,7 +261,7 @@ class PreferenceDataset:
                   f"{len(self.participants)} participants")
 
         except Exception as e:
-            print(f"Error loading CSV: {str(e)}")
+            logger.info(f"Error loading CSV: {str(e)}")
             raise
 
 # In data.py

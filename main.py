@@ -98,12 +98,24 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
                 logger.warning("Existing split file contains invalid indices for current dataset size")
                 logger.warning(f"Current dataset size: {len(dataset.preferences)}")
                 logger.warning("Creating new split...")
-                # Let it fall through to create new split
             else:
                 try:
                     train_data = dataset._create_subset_dataset(split_data['train_indices'])
                     test_data = dataset._create_subset_dataset(split_data['test_indices'])
+                    
+                    # Verify all preferences and participants are included
+                    total_indices = np.concatenate([split_data['train_indices'], split_data['test_indices']])
+                    assert len(np.unique(total_indices)) == len(dataset.preferences), "Some preferences missing from split"
+                    
+                    # Verify participant and preference counts
+                    split_participant_count = len(train_data.participants) + len(test_data.participants)
+                    assert split_participant_count == len(dataset.participants), f"Participant count mismatch: {split_participant_count} vs {len(dataset.participants)}"
+                    
+                    split_preference_count = len(train_data.preferences) + len(test_data.preferences)
+                    assert split_preference_count == len(dataset.preferences), f"Preference count mismatch: {split_preference_count} vs {len(dataset.preferences)}"
+                    
                     return train_data, test_data
+                
                 except ValueError as e:
                     logger.warning(f"Error loading split: {e}")
                     logger.warning("Creating new split...")
@@ -143,7 +155,12 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         
         train_indices = np.array(train_indices)
         test_indices = np.array(test_indices)
-        
+
+        # Verify splits contain all preferences and participants
+        total_indices = np.concatenate([train_indices, test_indices])
+        assert len(np.unique(total_indices)) == len(dataset.preferences), "Some preferences missing from split"
+        assert len(train_participants) + len(test_participants) == len(participant_to_indices), "Some participants missing from split"
+
         # Save new split
         split_file.parent.mkdir(parents=True, exist_ok=True)
         np.savez(split_file, train_indices=train_indices, test_indices=test_indices)
@@ -152,6 +169,14 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         train_data = dataset._create_subset_dataset(train_indices)
         test_data = dataset._create_subset_dataset(test_indices)
         
+        # Verify participant split
+        split_participant_count = len(train_data.participants) + len(test_data.participants)
+        assert split_participant_count == len(dataset.participants), f"Participant count mismatch: {split_participant_count} vs {len(dataset.participants)}"
+
+        # Verify preference split
+        split_preference_count = len(train_data.preferences) + len(test_data.preferences)
+        assert split_preference_count == len(dataset.preferences), f"Preference count mismatch: {split_preference_count} vs {len(dataset.preferences)}"
+
         return train_data, test_data
             
     except Exception as e:
@@ -170,10 +195,8 @@ def main():
                        help='Pipeline mode: feature selection, model training, or bigram recommendations')
     args = parser.parse_args()
     
-    print("\n=== DEBUG: Program Start ===")
+    print("\n=== Program Start ===")
     print(f"Mode argument: {args.mode}")
-    print(f"Mode type: {type(args.mode)}")
-    print(f"Mode comparison: {'select_features' == args.mode}")
 
     try:
         # Load configuration and convert to Pydantic model
@@ -182,11 +205,6 @@ def main():
         config = Config(**config_dict)
         print(f"Config features: {config.features}")
 
-        if args.mode == 'select_features':
-            print("=== DEBUG: select_features mode triggered ===")
-        else:
-            print(f"=== DEBUG: different mode triggered: {args.mode} ===")
-                    
         # Setup logging using LoggingManager
         LoggingManager(config).setup_logging()        
         
@@ -241,10 +259,10 @@ def main():
         # Select features
         #---------------------------------
         if args.mode == 'select_features':
-            print("\n=== MAIN: FEATURE SELECTION MODE STARTING ===")
-            print(f"Config base features: {config.features.base_features}")
-            print(f"Config interactions: {config.features.interactions}")
-            print(f"Config control features: {config.features.control_features}")
+            logger.info("\n=== SELECT FEATURES MODE ===")
+            logger.info(f"Config base features: {config.features.base_features}")
+            logger.info(f"Config interactions: {config.features.interactions}")
+            logger.info(f"Config control features: {config.features.control_features}")
             
             # Define all features first
             base_features = config.features.base_features
@@ -286,11 +304,11 @@ def main():
             logger.info(f"  After filtering: {len(processed_train.preferences)} preferences")
             logger.info(f"  Participants: {len(processed_train.participants)}")
 
-            print("\nFeatures prepared:")
-            print(f"Base features: {base_features}")
-            print(f"Interaction features: {interaction_features}")
-            print(f"Control features: {control_features}")
-            print(f"All features: {all_features}")
+            logger.info("\nFeatures prepared:")
+            logger.info(f"Base features: {base_features}")
+            logger.info(f"Interaction features: {interaction_features}")
+            logger.info(f"Control features: {control_features}")
+            logger.info(f"All features: {all_features}")
 
             model = PreferenceModel(config=config)
             
@@ -373,8 +391,8 @@ def main():
         # Visualize feature space
         #---------------------------------
         if args.mode == 'visualize_feature_space':
-            logger.info("Generating feature analysis visualizations...")
-            
+            logger.info("\n=== VISUALIZE FEATURE SPACE MODE ===")
+
             # Load feature selection model
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
@@ -555,7 +573,8 @@ def main():
         # Recommend bigram pairs
         #---------------------------------
         elif args.mode == 'recommend_bigram_pairs':
-            logger.info("Starting recommendation of bigram pairs...")
+            logger.info("\n=== RECOMMEND BIGRAM PAIRS MODE ===")
+
             # Load feature selection trained model
             logger.info("Loading feature selection trained model...")
             selection_model_save_path = Path(config.feature_selection.model_file)
@@ -586,7 +605,8 @@ def main():
         # Train model
         #---------------------------------
         elif args.mode == 'train_model':
-            logger.info("Starting model training...")
+            logger.info("\n=== TRAIN MODEL MODE ===")
+
             # Load train/test split
             train_data, test_data = load_or_create_split(dataset, config)
             
@@ -627,7 +647,7 @@ def main():
         # Predict bigram scores
         #---------------------------------
         elif args.mode == 'predict_bigram_scores':
-            logger.info("Starting bigram score prediction...")
+            logger.info("\n=== PREDICT BIGRAM SCORES MODE ===")
 
             # Load selected features
             feature_metrics_file = Path(config.feature_selection.metrics_file)
