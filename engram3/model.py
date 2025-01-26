@@ -1358,6 +1358,14 @@ class PreferenceModel:
         processed_dataset.all_bigrams = dataset.all_bigrams
         processed_dataset.all_bigram_features = dataset.all_bigram_features
         
+        # Copy the maps to make cleaner logs and 
+        # prevent potential issues if these attributes are referenced elsewhere
+        processed_dataset.column_map = getattr(dataset, 'column_map', None)
+        processed_dataset.row_map = getattr(dataset, 'row_map', None)
+        processed_dataset.finger_map = getattr(dataset, 'finger_map', None)
+        processed_dataset.engram_position_values = getattr(dataset, 'engram_position_values', None)
+        processed_dataset.row_position_values = getattr(dataset, 'row_position_values', None)
+
         logger.info(f"Preprocessed dataset:")
         logger.info(f"  Original size: {len(dataset.preferences)} preferences")
         logger.info(f"  After filtering: {len(processed_dataset.preferences)} preferences")

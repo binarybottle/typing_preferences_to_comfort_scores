@@ -246,20 +246,20 @@ def main():
             print(f"Config interactions: {config.features.interactions}")
             print(f"Config control features: {config.features.control_features}")
             
-            # Get train/test split
-            train_data, holdout_data = load_or_create_split(dataset, config)
-            print(f"Split complete: {len(train_data.preferences)} train, {len(holdout_data.preferences)} test")
-            
-            # Get all features including interactions and control features
+            # Define all features first
             base_features = config.features.base_features
             interaction_features = config.features.get_all_interaction_names()
             control_features = config.features.control_features
             all_features = base_features + interaction_features + control_features
             
-            # Preprocess training data to remove any NaN values
-            logger.info("Preprocessing training data...")
+            # Split data for feature selection
+            train_data, holdout_data = load_or_create_split(dataset, config)
+            feature_select_train, feature_select_val = train_data.split_by_participants(test_fraction=0.2)
+
+            # Preprocess feature selection training data
+            logger.info("Preprocessing feature selection training data...")
             valid_prefs = []
-            for pref in train_data.preferences:
+            for pref in feature_select_train.preferences:
                 valid = True
                 for feature in all_features:
                     if (pref.features1.get(feature) is None or 
@@ -268,65 +268,54 @@ def main():
                         break
                 if valid:
                     valid_prefs.append(pref)
-            
-            # Create preprocessed dataset with all necessary attributes
+
+            # Create processed dataset for feature selection
             processed_train = PreferenceDataset.__new__(PreferenceDataset)
             processed_train.preferences = valid_prefs
             processed_train.participants = {p.participant_id for p in valid_prefs}
-            processed_train.file_path = train_data.file_path
-            processed_train.config = train_data.config
-            processed_train.control_features = train_data.control_features
-            processed_train.feature_extractor = train_data.feature_extractor
-            processed_train.feature_names = train_data.feature_names
-            processed_train.all_bigrams = train_data.all_bigrams
-            processed_train.all_bigram_features = train_data.all_bigram_features
-            
-            logger.info(f"Preprocessed training data:")
-            logger.info(f"  Original size: {len(train_data.preferences)} preferences")
+            processed_train.file_path = feature_select_train.file_path
+            processed_train.config = feature_select_train.config
+            processed_train.control_features = feature_select_train.control_features
+            processed_train.feature_extractor = feature_select_train.feature_extractor
+            processed_train.feature_names = feature_select_train.feature_names
+            processed_train.all_bigrams = feature_select_train.all_bigrams
+            processed_train.all_bigram_features = feature_select_train.all_bigram_features
+
+            logger.info(f"Preprocessed feature selection training data:")
+            logger.info(f"  Original size: {len(feature_select_train.preferences)} preferences")
             logger.info(f"  After filtering: {len(processed_train.preferences)} preferences")
             logger.info(f"  Participants: {len(processed_train.participants)}")
-            
+
             print("\nFeatures prepared:")
             print(f"Base features: {base_features}")
             print(f"Interaction features: {interaction_features}")
             print(f"Control features: {control_features}")
             print(f"All features: {all_features}")
-            
-            # Initialize model
+
             model = PreferenceModel(config=config)
             
             try:
-                # Select features using round-robin tournament with preprocessed data
+                # Select features using training subset
                 logger.info("Calling model.select_features()...")
                 selected_features = model.select_features(processed_train, all_features)
                 logger.info(f"Feature selection completed. Selected features: {selected_features}")
-                
-                # Final fit with selected features
-                logger.info("Fitting final model with selected features...")
-                model.fit(train_data, selected_features,
-                          fit_purpose="Fitting final model with selected features")
 
-                # Save the trained model
-                model_save_path = Path(config.feature_selection.model_file)
-                logger.info(f"Saving model to {model_save_path}")
-                model.save(model_save_path)
-                
+                # Validate on held-out validation set
+                model.fit(feature_select_train, selected_features)
+                val_metrics = model.evaluate(feature_select_val)
+                logger.info(f"Validation metrics - Accuracy: {val_metrics['accuracy']:.4f}, AUC: {val_metrics['auc']:.4f}")
+
                 # Get final weights and metrics
-                feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
+                feature_weights = model.get_feature_weights(include_control=True)
 
-                # Create comprehensive results DataFrame
-                logger.info("\n=== Starting feature evaluation loop ===")
-                logger.info(f"All features: {all_features}")
-
-                # Define selectable features BEFORE trying to log it
-                selectable_features = [f for f in all_features if f not in config.features.control_features]
-                logger.info(f"Selectable features: {selectable_features}")
-
+                # Evaluate features using feature selection training data
                 results = []
-                for feature_name in selectable_features:  # Only evaluate non-control features
+                selectable_features = [f for f in all_features if f not in config.features.control_features]
+                
+                for feature_name in selectable_features:
                     metrics = model.importance_calculator.evaluate_feature(
                         feature=feature_name,
-                        dataset=train_data,
+                        dataset=feature_select_train,  # Changed from train_data
                         model=model,
                         all_features=all_features,
                         current_selected_features=selected_features
@@ -343,39 +332,32 @@ def main():
                         'effect_consistency': metrics.get('effect_consistency', 0.0),
                         'predictive_power': metrics.get('predictive_power', 0.0),
                         'weight': weight,
-                        'weight_std': std
+                        'weight_std': std,
+                        'validation_accuracy': val_metrics['accuracy'],
+                        'validation_auc': val_metrics['auc']
                     })
 
-                # Log final results
-                logger.info("\n=== Feature evaluation complete ===")
-                logger.info(f"Final model state:")
-                logger.info(f"  Feature names: {model.feature_names}")
-                logger.info(f"  Selected features: {model.selected_features}")
-                logger.info(f"Results dataframe:")
-                for result in results:
-                    logger.info(f"  {result}")
-                
-                # Save comprehensive metrics
+                # Save results and metrics
                 metrics_file = Path(config.feature_selection.metrics_file)
                 pd.DataFrame(results).to_csv(metrics_file, index=False)
                 
-                # Print summary
-                logger.info("\nFeature selection summary:")
-                logger.info(f"Total features evaluated: {len(all_features)}")
-                logger.info(f"Base features: {len(base_features)}")
-                logger.info(f"Interaction features: {len(interaction_features)}")
-                logger.info(f"Features selected: {len(selected_features)}")
+                # Final model fit on full training data
+                model.fit(train_data, selected_features, fit_purpose="Final model fit with selected features")
+                model_save_path = Path(config.feature_selection.model_file)
+                model.save(model_save_path)
 
-                logger.info("\nSelected features:")
-                # Change this part
-                feature_weights = model.get_feature_weights(include_control=True)  # Add include_control=True
+                # Log final results and summary
+                logger.info("\nFeature selection summary:")
+                logger.info(f"Features selected: {len(selected_features)}/{len(selectable_features)}")
+                logger.info(f"Validation AUC: {val_metrics['auc']:.4f}")
+                
                 for feature in selected_features:
-                    weight, std = feature_weights.get(feature, (0.0, 0.0))  # Use .get() with default
+                    weight, std = feature_weights.get(feature, (0.0, 0.0))
                     metrics = model.importance_calculator.evaluate_feature(
                         feature=feature,
-                        dataset=train_data,
+                        dataset=feature_select_train,  # Changed from train_data
                         model=model,
-                        all_features=all_features,  # We have this from earlier
+                        all_features=all_features,
                         current_selected_features=selected_features
                     )
                     logger.info(f"\n{feature}:")
@@ -386,7 +368,7 @@ def main():
             
             finally:
                 model.cleanup()
-
+                
         #---------------------------------
         # Visualize feature space
         #---------------------------------
