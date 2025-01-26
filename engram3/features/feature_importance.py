@@ -87,6 +87,9 @@ class FeatureImportanceCalculator:
         # Initialize tracking variables
         self._init_tracking_variables()
 
+        # Calculate baseline accuracy once
+        self._baseline_accuracy = self._compute_baseline_accuracy(model.dataset, model)
+
     def _init_tracking_variables(self):
         """Initialize all tracking variables for feature importance calculation."""
         # Global tracking
@@ -154,7 +157,8 @@ class FeatureImportanceCalculator:
             logger.error(f"Error computing baseline accuracy: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             return 0.5  # Return random chance on error
-        
+
+
     def evaluate_feature(self, feature: str, dataset: PreferenceDataset, 
                         model: 'PreferenceModel', all_features: List[str],
                         current_selected_features: List[str]) -> Dict[str, float]:
@@ -195,8 +199,9 @@ class FeatureImportanceCalculator:
                 
                 # Calculate predictive power
                 predictive_power = self._calculate_predictive_power(
-                    feature, dataset, eval_model, self._baseline_accuracy)
-                
+                        feature, dataset, eval_model, self._baseline_accuracy,
+                        current_selected_features) 
+
                 metrics_dict = {
                     'model_effect': abs(effect_mean),  # Use absolute effect
                     'effect_consistency': consistency,
@@ -214,112 +219,96 @@ class FeatureImportanceCalculator:
             logger.error("Traceback:", exc_info=True)
             return self._get_default_metrics()
 
+
     def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, 
-                                model: 'PreferenceModel', baseline_accuracy: float) -> float:
+                                model: 'PreferenceModel', baseline_accuracy: float,
+                                current_selected_features: List[str]) -> float:
         """Calculate predictive power as improvement over baseline."""
         try:
-            # Ensure we have a valid baseline
-            if baseline_accuracy is None:
-                logger.warning("No baseline accuracy provided, computing new baseline")
-                baseline_accuracy = self._compute_baseline_accuracy(dataset, model)
+            logger.debug(f"\n=== Calculating predictive power for {feature} ===")
+            logger.debug(f"Dataset size: {len(dataset.preferences)} preferences")
+            logger.debug(f"Current selected features: {current_selected_features}")
             
-            if baseline_accuracy is None:
-                logger.error("Could not compute baseline accuracy")
-                return 0.0
-
-            # Get accuracy with this feature
-            metrics = model.evaluate(dataset)
-            feature_accuracy = metrics.get('accuracy')
-            
-            if feature_accuracy is None:
-                logger.error(f"Could not get accuracy for feature {feature}")
-                return 0.0
+            with model._create_temp_model() as baseline_model:
+                baseline_model.is_baseline_model = True
                 
-            # Calculate improvement over baseline
-            improvement = feature_accuracy - baseline_accuracy
+                # Configure baseline model features
+                baseline_features = list(dict.fromkeys(
+                    list(model.config.features.control_features) +
+                    [f for f in current_selected_features if f != feature]
+                ))
+                
+                logger.debug(f"Baseline features: {baseline_features}")
+                logger.debug(f"Full model features: {model.feature_names}")
+                
+                baseline_model.feature_names = baseline_features
+                baseline_model.selected_features = baseline_features
+                
+                # Fit and evaluate baseline model
+                baseline_model.fit(dataset, baseline_features)
+                baseline_metrics = baseline_model.evaluate(dataset)
+                baseline_auc = baseline_metrics.get('auc', 0.5)
+                logger.debug(f"Baseline model AUC: {baseline_auc:.4f}")
+                
+            # Evaluate feature model (which is already fit)
+            feature_metrics = model.evaluate(dataset)
+            feature_auc = feature_metrics.get('auc', 0.5)
+            logger.debug(f"Feature model AUC: {feature_auc:.4f}")
             
-            # Log values for debugging
-            logger.info(f"Predictive power calculation:")
-            logger.info(f"  Baseline accuracy: {baseline_accuracy:.4f}")
-            logger.info(f"  Feature accuracy: {feature_accuracy:.4f}")
-            logger.info(f"  Improvement: {improvement:.4f}")
+            improvement = feature_auc - baseline_auc
+            logger.debug(f"Raw improvement: {improvement:.4f}")
             
-            # Normalize to [0,1] range assuming max 0.5 improvement possible
-            normalized_power = np.clip(improvement / 0.5, 0, 1)
+            # Use empirical max improvement
+            if not hasattr(self, '_max_improvement'):
+                self._max_improvement = 0.0
+            self._max_improvement = max(self._max_improvement, abs(improvement))
+            
+            # Normalize based on empirical max
+            if self._max_improvement > 0:
+                normalized_power = improvement / self._max_improvement
+            else:
+                normalized_power = 0.0
+            
+            logger.debug(f"Max improvement seen: {self._max_improvement:.4f}")
+            logger.debug(f"Normalized power: {normalized_power:.4f}")
             
             return float(normalized_power)
-            
+                
         except Exception as e:
             logger.error(f"Error calculating predictive power: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
             return 0.0
-        
+                
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     model: 'PreferenceModel', current_features: List[str]) -> float:
         """Calculate consistency of feature effect across cross-validation splits."""
         try:
-            logger.info(f"\nCalculating consistency for {feature}:")
             effects = []
-            interaction_effects = defaultdict(list)
-            
-            # Get cross-validation splits
             cv_splits = model._get_cv_splits(dataset, n_splits=5)
             
             for split_idx, (train_idx, val_idx) in enumerate(cv_splits, 1):
-                train_data = dataset._create_subset_dataset(train_idx)
-                
-                # Define features to use in this split
-                features_to_test = list(current_features)
-                if feature not in features_to_test:
-                    features_to_test.append(feature)
+                with model._create_temp_model() as split_model:
+                    train_data = dataset._create_subset_dataset(train_idx)
+                    
+                    features_to_test = list(current_features)
+                    if feature not in features_to_test:
+                        features_to_test.append(feature)
                                         
-                # Create new model instance with proper state
-                split_model = type(model)(config=model.config)
-                # Copy necessary attributes
-                split_model.feature_extractor = model.feature_extractor
-                split_model.feature_names = features_to_test  # Add this
-                split_model.selected_features = features_to_test  # Add this
-                
-                try:
-                    split_model.fit(train_data, features_to_test, 
-                                fit_purpose=f"Cross-validation split {split_idx}/5 for {feature}")
-
+                    split_model.feature_extractor = model.feature_extractor
+                    split_model.feature_names = features_to_test
+                    split_model.selected_features = features_to_test
+                    
+                    split_model.fit(train_data, features_to_test)
                     weights = split_model.get_feature_weights()
                     
-                    # Get feature effect
                     if feature in weights:
-                        effect = weights[feature][0]
-                        effects.append(effect)
-                        logger.debug(f"Split {split_idx}: effect = {effect:.4f}")
-                    else:
-                        logger.warning(f"Feature {feature} missing from weights in split {split_idx}")
-                        logger.debug(f"Available weights: {list(weights.keys())}")
-                    
-                    # Handle n-way interactions
-                    if '_x_' in feature:
-                        components = feature.split('_x_')
-                        for component in components:
-                            if component in weights and component != feature:
-                                interaction_effects[f'{feature}_with_{component}'].append(
-                                    weights[component][0])
-                
-                except Exception as e:
-                    logger.error(f"Error in split {split_idx}: {str(e)}")
-                    continue
-                finally:
-                    split_model.cleanup()
+                        effects.append(weights[feature][0])
             
             if not effects:
-                logger.warning(f"No effects collected for {feature}")
                 return 0.0
             
-            # Calculate consistency metrics
             effects = np.array(effects)
-            logger.info(f"Raw effects across folds: {effects}")
             mean_effect = np.mean(effects)
             mean_abs_effect = np.mean(np.abs(effects))
-            logger.info(f"Mean effect: {mean_effect:.4f}")
-            logger.info(f"Mean absolute effect: {mean_abs_effect:.4f}")
 
             # Calculate magnitude consistency
             if mean_abs_effect > 0:
@@ -331,19 +320,12 @@ class FeatureImportanceCalculator:
             # Calculate direction consistency
             sign_consistency = np.mean(np.sign(effects) == np.sign(mean_effect))
             
-            # Combine both metrics
-            final_consistency = magnitude_consistency * sign_consistency
-            
-            logger.info(f"Magnitude consistency: {magnitude_consistency:.4f}")
-            logger.info(f"Sign consistency: {sign_consistency:.4f}")
-            logger.info(f"Final consistency score: {final_consistency:.4f}")
-            
-            return float(final_consistency)
+            return float(magnitude_consistency * sign_consistency)
                 
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-                
+                        
     def clear_caches(self):
         """Clear all caches."""
         if hasattr(self, 'metric_cache'):

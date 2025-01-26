@@ -91,10 +91,24 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         if split_file.exists():
             logger.info("Loading existing train/test split...")
             split_data = np.load(split_file)
-            train_data = dataset._create_subset_dataset(split_data['train_indices'])
-            test_data = dataset._create_subset_dataset(split_data['test_indices'])
-            return train_data, test_data
             
+            # Validate indices against current dataset size
+            if np.any(split_data['train_indices'] >= len(dataset.preferences)) or \
+               np.any(split_data['test_indices'] >= len(dataset.preferences)):
+                logger.warning("Existing split file contains invalid indices for current dataset size")
+                logger.warning(f"Current dataset size: {len(dataset.preferences)}")
+                logger.warning("Creating new split...")
+                # Let it fall through to create new split
+            else:
+                try:
+                    train_data = dataset._create_subset_dataset(split_data['train_indices'])
+                    test_data = dataset._create_subset_dataset(split_data['test_indices'])
+                    return train_data, test_data
+                except ValueError as e:
+                    logger.warning(f"Error loading split: {e}")
+                    logger.warning("Creating new split...")
+                    # Let it fall through to create new split
+
         logger.info("Creating new train/test split...")
                     
         # Get test size from config
@@ -130,34 +144,21 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
         train_indices = np.array(train_indices)
         test_indices = np.array(test_indices)
         
-        logger.info(f"Split preferences: {len(train_indices)} train, {len(test_indices)} test")
-        
-        # Save split
+        # Save new split
         split_file.parent.mkdir(parents=True, exist_ok=True)
         np.savez(split_file, train_indices=train_indices, test_indices=test_indices)
         
-        # Create datasets
+        # Create datasets using new split
         train_data = dataset._create_subset_dataset(train_indices)
         test_data = dataset._create_subset_dataset(test_indices)
         
-        # Verify no overlap in participants
-        train_participants_actual = set(p.participant_id for p in train_data.preferences)
-        test_participants_actual = set(p.participant_id for p in test_data.preferences)
-        
-        if train_participants_actual & test_participants_actual:
-            overlap = train_participants_actual & test_participants_actual
-            logger.error(f"Train participants: {len(train_participants_actual)}")
-            logger.error(f"Test participants: {len(test_participants_actual)}")
-            logger.error(f"Overlap: {len(overlap)}")
-            logger.error(f"Sample overlapping IDs: {list(overlap)[:5]}")
-            raise ValueError("Train and test sets contain overlapping participants")
-            
         return train_data, test_data
-        
+            
     except Exception as e:
         logger.error(f"Error in split creation: {str(e)}")
         logger.error(f"Dataset preferences: {len(dataset.preferences)}")
-        logger.error(f"Total participants: {len(participant_to_indices)}")
+        if 'participant_to_indices' in locals():
+            logger.error(f"Total participants: {len(participant_to_indices)}")
         raise
 
 def main():
@@ -244,35 +245,60 @@ def main():
             print(f"Config base features: {config.features.base_features}")
             print(f"Config interactions: {config.features.interactions}")
             print(f"Config control features: {config.features.control_features}")
-
+            
             # Get train/test split
             train_data, holdout_data = load_or_create_split(dataset, config)
             print(f"Split complete: {len(train_data.preferences)} train, {len(holdout_data.preferences)} test")
-
+            
             # Get all features including interactions and control features
             base_features = config.features.base_features
             interaction_features = config.features.get_all_interaction_names()
             control_features = config.features.control_features
             all_features = base_features + interaction_features + control_features
             
+            # Preprocess training data to remove any NaN values
+            logger.info("Preprocessing training data...")
+            valid_prefs = []
+            for pref in train_data.preferences:
+                valid = True
+                for feature in all_features:
+                    if (pref.features1.get(feature) is None or 
+                        pref.features2.get(feature) is None):
+                        valid = False
+                        break
+                if valid:
+                    valid_prefs.append(pref)
+            
+            # Create preprocessed dataset with all necessary attributes
+            processed_train = PreferenceDataset.__new__(PreferenceDataset)
+            processed_train.preferences = valid_prefs
+            processed_train.participants = {p.participant_id for p in valid_prefs}
+            processed_train.file_path = train_data.file_path
+            processed_train.config = train_data.config
+            processed_train.control_features = train_data.control_features
+            processed_train.feature_extractor = train_data.feature_extractor
+            processed_train.feature_names = train_data.feature_names
+            processed_train.all_bigrams = train_data.all_bigrams
+            processed_train.all_bigram_features = train_data.all_bigram_features
+            
+            logger.info(f"Preprocessed training data:")
+            logger.info(f"  Original size: {len(train_data.preferences)} preferences")
+            logger.info(f"  After filtering: {len(processed_train.preferences)} preferences")
+            logger.info(f"  Participants: {len(processed_train.participants)}")
+            
             print("\nFeatures prepared:")
             print(f"Base features: {base_features}")
             print(f"Interaction features: {interaction_features}")
             print(f"Control features: {control_features}")
             print(f"All features: {all_features}")
-
+            
             # Initialize model
             model = PreferenceModel(config=config)
             
             try:
-                print("\nAbout to call model.select_features with:")
-                print(f"all_features: {all_features}")
-                selected_features = model.select_features(train_data, all_features)
-                print(f"select_features returned: {selected_features}")
-                                        
-                # Select features using round-robin tournament
+                # Select features using round-robin tournament with preprocessed data
                 logger.info("Calling model.select_features()...")
-                selected_features = model.select_features(train_data, all_features)
+                selected_features = model.select_features(processed_train, all_features)
                 logger.info(f"Feature selection completed. Selected features: {selected_features}")
                 
                 # Final fit with selected features

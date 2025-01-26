@@ -54,7 +54,6 @@ class PreferenceDataset:
         
         # Store the config
         self.config = config
-
         # Initialize logging
         if config:
             self.logging_manager = LoggingManager(config)
@@ -64,9 +63,10 @@ class PreferenceDataset:
             self.control_features = config.features.control_features
         else:
             self.control_features = []
-        
+
         # Handle feature extraction setup
         if feature_extractor:
+
             # Use provided feature extractor
             self.feature_extractor = feature_extractor
             
@@ -121,6 +121,22 @@ class PreferenceDataset:
         # Load and process data
         self._load_csv()
 
+        # Filter out preferences with NaN typing times
+        if hasattr(self, 'feature_names') and 'typing_time' in self.feature_names:
+            original_count = len(self.preferences)
+            valid_prefs = []
+            for pref in self.preferences:
+                if (pref.features1.get('typing_time') is not None and 
+                    pref.features2.get('typing_time') is not None):
+                    valid_prefs.append(pref)
+            
+            n_filtered = original_count - len(valid_prefs)
+            logger.info(f"Filtered out {n_filtered} preferences with NaN typing times")
+            self.preferences = valid_prefs
+            self.participants = {p.participant_id for p in self.preferences}
+            logger.info(f"Remaining preferences: {len(self.preferences)}")
+            logger.info(f"Remaining participants: {len(self.participants)}")
+
     def get_feature_names(self, include_control: bool = True) -> List[str]:
         """Get list of all feature names, optionally including control features."""
         if hasattr(self, 'feature_names'):
@@ -149,7 +165,7 @@ class PreferenceDataset:
         n_test = max(1, int(len(self.participants) * test_fraction))
         test_participants = set(np.random.choice(
             list(self.participants), n_test, replace=False))
-
+        
         # Split preferences
         train_prefs = []
         test_prefs = []
@@ -159,18 +175,41 @@ class PreferenceDataset:
                 test_prefs.append(pref)
             else:
                 train_prefs.append(pref)
-
-        # Create new datasets
+                
+        # Create new datasets using __new__ to skip __init__
         train_data = PreferenceDataset.__new__(PreferenceDataset)
         test_data = PreferenceDataset.__new__(PreferenceDataset)
         
-        # Set attributes
-        for data, prefs in [(train_data, train_prefs), 
-                           (test_data, test_prefs)]:
+        # Set attributes for both datasets
+        for data, prefs in [(train_data, train_prefs), (test_data, test_prefs)]:
+            # Core attributes
             data.preferences = prefs
             data.participants = {p.participant_id for p in prefs}
             data.file_path = self.file_path
-
+            data.config = self.config
+            data.control_features = self.control_features
+            
+            # Feature extraction related
+            data.feature_extractor = self.feature_extractor
+            
+            # Copy feature-related attributes
+            if hasattr(self, 'feature_names'):
+                data.feature_names = self.feature_names
+            if hasattr(self, 'all_bigrams'):
+                data.all_bigrams = self.all_bigrams
+            if hasattr(self, 'all_bigram_features'):
+                data.all_bigram_features = self.all_bigram_features
+                
+            # Copy maps and values
+            for attr in ['column_map', 'row_map', 'finger_map', 
+                        'engram_position_values', 'row_position_values']:
+                if hasattr(self, attr):
+                    setattr(data, attr, getattr(self, attr))
+        
+        logger.info(f"Split dataset:")
+        logger.info(f"  Train: {len(train_prefs)} preferences, {len(train_data.participants)} participants")
+        logger.info(f"  Test: {len(test_prefs)} preferences, {len(test_data.participants)} participants")
+        
         return train_data, test_data
         
     def _load_csv(self):
