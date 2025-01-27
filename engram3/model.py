@@ -246,19 +246,6 @@ class PreferenceModel:
                 if hasattr(self, attr):
                     delattr(self, attr)
 
-            # Clean temp directories
-            temp_dirs = [tempfile.gettempdir(), self.config.paths.stan_temp]
-            for temp_dir in temp_dirs:
-                for pattern in ["preference_model*", "stanModel*", "stan_*"]:
-                    for file in Path(temp_dir).glob(pattern):
-                        try:
-                            if file.is_file():
-                                file.unlink()
-                            elif file.is_dir():
-                                shutil.rmtree(file)
-                        except OSError:
-                            pass
-
             if fit_purpose:
                 logger.info(f"\nFitting model: {fit_purpose}")
 
@@ -266,7 +253,7 @@ class PreferenceModel:
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
-            # Validate features
+            # Validate and process features
             if not features:
                 features = dataset.get_feature_names()
             if not features:
@@ -276,63 +263,53 @@ class PreferenceModel:
             control_features = self.config.features.control_features
             main_features = [f for f in features if f not in control_features]
             
-            # Store unique features (no duplicates)
-            self.feature_names = list(dict.fromkeys(main_features + list(control_features)))
-            self.selected_features = list(dict.fromkeys(main_features + list(control_features)))
+            logger.info(f"Main features ({len(main_features)}): {main_features}")
+            logger.info(f"Control features ({len(control_features)}): {control_features}")
 
-            # Prepare data for Stan
-            stan_data = self.prepare_data(dataset, features)
-            
-            # Validate Stan data
-            if stan_data['F'] < 1:
-                raise ValueError(f"Invalid number of features: {stan_data['F']}")
+            # Prepare feature matrices for Stan
+            processed_data = self._prepare_feature_matrices(
+                dataset=dataset,
+                main_features=main_features,
+                control_features=control_features
+            )
+
+            # Store feature information
+            self.feature_names = main_features + list(control_features)
+            self.selected_features = main_features + list(control_features)
+
+            # Log data dimensions
+            logger.info("Data dimensions:")
+            logger.info(f"  Preferences: {processed_data['N']}")
+            logger.info(f"  Participants: {processed_data['J']}")
+            if not main_features:
+                logger.info("  Using dummy main feature for control-only model")
+            logger.info(f"  Main features: {processed_data['F']}")
+            logger.info(f"  Control features: {processed_data['C']}")
 
             # Log sampling configuration
-            sampling_msg = (f"Starting sampling with {self.config.model.chains} chains, "
-                        f"{self.config.model.warmup} warmup iterations, "
-                        f"{self.config.model.n_samples} sampling iterations")
-            if fit_purpose:
-                sampling_msg += f" ({fit_purpose})"
-            logger.info(sampling_msg)
+            logger.info("Starting sampling with "
+                    f"{self.config.model.chains} chains, "
+                    f"{self.config.model.warmup} warmup iterations, "
+                    f"{self.config.model.n_samples} sampling iterations"
+                    f"{f' ({fit_purpose})' if fit_purpose else ''}")
 
-            logger.info("Stan configuration:")
-            logger.info(f"  Chains: {self.config.model.chains}")
-            logger.info(f"  Warmup: {self.config.model.warmup}")
-            logger.info(f"  Samples: {self.config.model.n_samples}")
-            logger.info(f"  Max treedepth: {self.config.model.max_treedepth}")
-            logger.info(f"  Adapt delta: {self.config.model.adapt_delta}")
+            # Stan sampling
+            self.fit_result = self._sample_with_retry(
+                data=processed_data,
+                chains=self.config.model.chains,
+                iter_warmup=self.config.model.warmup,
+                iter_sampling=self.config.model.n_samples,
+                adapt_delta=self.config.model.adapt_delta,
+                max_treedepth=self.config.model.max_treedepth
+            )
 
-            # Force garbage collection before sampling
-            gc.collect()
-
-            try:
-                self.fit_result = self._sample_with_retry(
-                    data=stan_data,
-                    chains=self.config.model.chains,
-                    iter_warmup=self.config.model.warmup,
-                    iter_sampling=self.config.model.n_samples,
-                    adapt_delta=self.config.model.adapt_delta,
-                    max_treedepth=self.config.model.max_treedepth,
-                    show_progress=True,
-                    refresh=max(1, min(self.config.model.n_samples // 10, 100))
-                )
-            except Exception as stan_error:
-                logger.error("Stan sampling error details:")
-                for f in Path(self.config.paths.stan_temp).glob("*-std*.txt"):
-                    logger.error(f"\n{f.name}:")
-                    logger.error(f.read_text())
-                raise RuntimeError(f"Stan sampling failed: {str(stan_error)}")
-
-            # Force garbage collection after sampling
-            gc.collect()
-
-            self._check_diagnostics()
             self._update_feature_weights()
 
         except Exception as e:
-            logger.error(f"Error fitting model: {str(e)}")
+            logger.error(f"Error in fit: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             raise
-        
+                    
     def _update_feature_weights(self) -> None:
         """Update feature weights from fitted model for both main and control features."""
         try:
@@ -391,40 +368,27 @@ class PreferenceModel:
         """Evaluate model performance."""
         try:
             logger.info("=== Starting model evaluation ===")
-            
             if not hasattr(self, 'fit_result'):
-                raise ValueError("Model not fitted. Call fit() first.")
-                
-            logger.info(f"Selected features: {self.selected_features}")
+                raise ValueError("Model not fitted")
             
-            # Get feature weights for logging
+            logger.info(f"Selected features: {self.selected_features}")
             weights = self.get_feature_weights()
             logger.info(f"Feature weights: {weights}")
             
-            # Make predictions
             y_pred = []
             y_true = []
             
             for pref in dataset.preferences:
-                try:
-                    prediction = self.predict_preference(pref.bigram1, pref.bigram2)
-                    y_pred.append(prediction.probability)
-                    y_true.append(float(pref.preferred))
-                except Exception as e:
-                    logger.warning(f"Error predicting preference: {str(e)}")
-                    continue
+                prediction = self.predict_preference(pref.bigram1, pref.bigram2)
+                y_pred.append(prediction.probability)
+                y_true.append(float(pref.preferred))
                     
-            if not y_pred:
-                raise ValueError("No valid predictions made")
-                
             y_pred = np.array(y_pred)
             y_true = np.array(y_true)
             
             logger.info(f"Made predictions for {len(y_pred)} preferences")
             
-            # Calculate metrics
             accuracy = np.mean((y_pred > 0.5) == y_true)
-            
             try:
                 auc = roc_auc_score(y_true, y_pred)
             except Exception as e:
@@ -440,9 +404,10 @@ class PreferenceModel:
             return metrics
             
         except Exception as e:
-            logger.error(f"Error evaluating model: {str(e)}")
+            logger.error(f"Error in evaluate: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             return {'accuracy': 0.5, 'auc': 0.5}
-                                
+                                        
     def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Dict[str, Any]:
         """Perform cross-validation with multiple validation strategies."""
         feature_names = dataset.get_feature_names()
@@ -1445,6 +1410,122 @@ class PreferenceModel:
         
         return score_a > score_b
                                                                                                                                                        
+    def _prepare_feature_matrices(self, dataset: PreferenceDataset,
+                            main_features: List[str],
+                            control_features: List[str]) -> Dict[str, Any]:
+        """Prepare feature matrices for Stan model."""
+        try:
+            # First collect all feature values
+            feature_values = defaultdict(list)
+            for feature in main_features + control_features:
+                for pref in dataset.preferences:
+                    feat1 = pref.features1.get(feature, 0.0)
+                    feat2 = pref.features2.get(feature, 0.0)
+                    if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                        feat1 = 0.0
+                        feat2 = 0.0
+                    feature_values[feature].extend([feat1, feat2])
+
+            # Calculate statistics and standardize
+            feature_stats = {}
+            for feature in main_features + control_features:
+                values = np.array([v for v in feature_values[feature] if v is not None])
+                mean = float(np.mean(values)) if len(values) > 0 else 0.0
+                std = float(np.std(values)) if len(values) > 0 else 1.0
+                feature_stats[feature] = {'mean': mean, 'std': std}
+                
+                logger.info(f"\n{feature} ({'main' if feature in main_features else 'control'}):")
+                logger.info(f"  Original - mean: {mean:.3f}, std: {std:.3f}")
+
+            # Build standardized matrices
+            X1, X2 = [], []  # Main feature matrices
+            C1, C2 = [], []  # Control feature matrices
+            participant = []
+            y = []
+
+            for pref in dataset.preferences:
+                # Process main features
+                if not main_features:
+                    features1_main = [0.0]  # Dummy feature
+                    features2_main = [0.0]
+                else:
+                    features1_main = []
+                    features2_main = []
+                    for feature in main_features:
+                        feat1 = pref.features1.get(feature, 0.0)
+                        feat2 = pref.features2.get(feature, 0.0)
+                        if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                            feat1 = 0.0
+                            feat2 = 0.0
+                        mean = feature_stats[feature]['mean']
+                        std = feature_stats[feature]['std']
+                        features1_main.append((feat1 - mean) / std)
+                        features2_main.append((feat2 - mean) / std)
+
+                # Process control features
+                features1_control = []
+                features2_control = []
+                for feature in control_features:
+                    feat1 = pref.features1.get(feature, 0.0)
+                    feat2 = pref.features2.get(feature, 0.0)
+                    mean = feature_stats[feature]['mean']
+                    std = feature_stats[feature]['std']
+                    features1_control.append((feat1 - mean) / std)
+                    features2_control.append((feat2 - mean) / std)
+
+                X1.append(features1_main)
+                X2.append(features2_main)
+                C1.append(features1_control)
+                C2.append(features2_control)
+                participant.append(pref.participant_id)
+                y.append(1 if pref.preferred else 0)
+
+            # Convert to numpy arrays
+            X1 = np.array(X1, dtype=np.float64)
+            X2 = np.array(X2, dtype=np.float64)
+            C1 = np.array(C1, dtype=np.float64)
+            C2 = np.array(C2, dtype=np.float64)
+            
+            # Map participant IDs to integers
+            unique_participants = sorted(set(participant))
+            participant_map = {pid: i for i, pid in enumerate(unique_participants)}
+            participant = np.array([participant_map[p] for p in participant], dtype=np.int32)
+            y = np.array(y, dtype=np.int32)
+
+            # Log standardization results
+            for feature in main_features + control_features:
+                mean = np.mean(np.concatenate([
+                    X1[:, main_features.index(feature)] if feature in main_features 
+                    else C1[:, control_features.index(feature)],
+                    X2[:, main_features.index(feature)] if feature in main_features
+                    else C2[:, control_features.index(feature)]
+                ]))
+                std = np.std(np.concatenate([
+                    X1[:, main_features.index(feature)] if feature in main_features
+                    else C1[:, control_features.index(feature)],
+                    X2[:, main_features.index(feature)] if feature in main_features
+                    else C2[:, control_features.index(feature)]
+                ]))
+                logger.info(f"  Standardized - mean: {mean:.3f}, std: {std:.3f}")
+
+            return {
+                'N': len(y),
+                'J': len(unique_participants),
+                'F': X1.shape[1],
+                'C': C1.shape[1],
+                'participant': participant + 1,  # Stan uses 1-based indexing
+                'X1': X1,
+                'X2': X2,
+                'C1': C1,
+                'C2': C2,
+                'y': y
+            }
+
+        except Exception as e:
+            logger.error(f"Error preparing feature matrices: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            raise
+                                
     def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
         """Generate and save a detailed metrics report."""
         report_df = pd.DataFrame([

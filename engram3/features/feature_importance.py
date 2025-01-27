@@ -231,33 +231,34 @@ class FeatureImportanceCalculator:
             logger.debug(f"Dataset size: {len(dataset.preferences)} preferences")
             logger.debug(f"Current selected features: {current_selected_features}")
             
+            # First fit baseline model with current selected features
             with model._create_temp_model() as baseline_model:
                 baseline_model.is_baseline_model = True
-                
-                # Configure baseline model features
-                baseline_features = list(dict.fromkeys(
-                    list(model.config.features.control_features) +
-                    [f for f in current_selected_features if f != feature]
-                ))
+                baseline_features = list(current_selected_features)
                 
                 logger.debug(f"Baseline features: {baseline_features}")
-                logger.debug(f"Full model features: {model.feature_names}")
-                
                 baseline_model.feature_names = baseline_features
                 baseline_model.selected_features = baseline_features
-                
-                # Fit and evaluate baseline model
-                baseline_model.fit(dataset, baseline_features)
+                baseline_model.fit(dataset, baseline_features, 
+                                fit_purpose="Computing predictive power baseline")
                 baseline_metrics = baseline_model.evaluate(dataset)
                 baseline_auc = baseline_metrics.get('auc', 0.5)
-                logger.debug(f"Baseline model AUC: {baseline_auc:.4f}")
                 
-            # Evaluate feature model (which is already fit)
-            feature_metrics = model.evaluate(dataset)
-            feature_auc = feature_metrics.get('auc', 0.5)
-            logger.debug(f"Feature model AUC: {feature_auc:.4f}")
-            
+            # Then fit model with new feature added
+            with model._create_temp_model() as feature_model:
+                feature_features = baseline_features + [feature]
+                logger.debug(f"Feature model features: {feature_features}")
+                feature_model.feature_names = feature_features
+                feature_model.selected_features = feature_features
+                feature_model.fit(dataset, feature_features,
+                            fit_purpose=f"Computing predictive power with {feature}")
+                feature_metrics = feature_model.evaluate(dataset)
+                feature_auc = feature_metrics.get('auc', 0.5)
+
+            # Calculate improvement
             improvement = feature_auc - baseline_auc
+            logger.debug(f"Baseline AUC: {baseline_auc:.4f}")
+            logger.debug(f"Feature AUC: {feature_auc:.4f}")
             logger.debug(f"Raw improvement: {improvement:.4f}")
             
             # Use empirical max improvement
@@ -278,8 +279,9 @@ class FeatureImportanceCalculator:
                 
         except Exception as e:
             logger.error(f"Error calculating predictive power: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
             return 0.0
-                
+                        
     def _calculate_effect_consistency(self, feature: str, dataset: PreferenceDataset, 
                                     model: 'PreferenceModel', current_features: List[str]) -> float:
         """Calculate consistency of feature effect across cross-validation splits."""
