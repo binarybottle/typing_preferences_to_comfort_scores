@@ -194,14 +194,23 @@ class PreferenceModel:
         """Access feature data cache with initialization check."""
         return self._feature_data_cache_
 
-    @contextmanager
     def _create_temp_model(self):
-        """Context manager for temporary model instances."""
+        """Create a temporary model copy for evaluation."""
         temp_model = type(self)(config=self.config)
-        try:
-            yield temp_model
-        finally:
-            temp_model.cleanup()
+        temp_model.feature_extractor = self.feature_extractor
+        if hasattr(self, 'processed_dataset'):
+            temp_model.processed_dataset = self.processed_dataset
+        
+        # Create context manager for cleanup
+        class ModelContext:
+            def __init__(self, model):
+                self.model = model
+            def __enter__(self):
+                return self.model
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                self.model.cleanup()
+                
+        return ModelContext(temp_model)
 
     # Remaining class methods
     def clear_caches(self) -> None:
@@ -228,28 +237,11 @@ class PreferenceModel:
         """Attempt sampling with retries on failure"""
         return self.model.sample(**kwargs)
 
-    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None, fit_purpose: str = None) -> None:
-        """
-        Fit the model to the given dataset.
-        
-        Args:
-            dataset: Dataset to fit
-            features: Optional list of features to use (default: all available)
-            fit_purpose: Description of what this fit is for (logging purposes)
-        """
+    def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None,
+            fit_purpose: Optional[str] = None) -> None:
+        """Fit model with specified features."""
         try:
-
-            # Initial validation
-            if not dataset or not hasattr(dataset, 'preferences') or len(dataset.preferences) == 0:
-                raise ValueError("Empty dataset")
-            if features is not None and len(features) == 0:
-                raise ValueError("Empty features list")
-
-            # Resource checks
-            self._check_memory()
-            self._check_temp_space()
-
-            # Clear previous results
+            # Cleanup before fitting
             for attr in ['fit_result', 'feature_weights']:
                 if hasattr(self, attr):
                     delattr(self, attr)
@@ -270,6 +262,7 @@ class PreferenceModel:
             if fit_purpose:
                 logger.info(f"\nFitting model: {fit_purpose}")
 
+            # Store dataset and feature extractor
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
@@ -284,24 +277,24 @@ class PreferenceModel:
             main_features = [f for f in features if f not in control_features]
             
             # Store unique features (no duplicates)
-            self.feature_names = list(dict.fromkeys(main_features + control_features))
-            self.selected_features = list(dict.fromkeys(main_features + control_features))
+            self.feature_names = list(dict.fromkeys(main_features + list(control_features)))
+            self.selected_features = list(dict.fromkeys(main_features + list(control_features)))
 
-            # Prepare data
+            # Prepare data for Stan
             stan_data = self.prepare_data(dataset, features)
             
             # Validate Stan data
             if stan_data['F'] < 1:
                 raise ValueError(f"Invalid number of features: {stan_data['F']}")
 
-            sampling_msg = f"Starting sampling with {self.config.model.chains} chains, " + \
-                                f"{self.config.model.warmup} warmup iterations, " + \
-                                f"{self.config.model.n_samples} sampling iterations"
+            # Log sampling configuration
+            sampling_msg = (f"Starting sampling with {self.config.model.chains} chains, "
+                        f"{self.config.model.warmup} warmup iterations, "
+                        f"{self.config.model.n_samples} sampling iterations")
             if fit_purpose:
                 sampling_msg += f" ({fit_purpose})"
             logger.info(sampling_msg)
 
-            # Log Stan configuration
             logger.info("Stan configuration:")
             logger.info(f"  Chains: {self.config.model.chains}")
             logger.info(f"  Warmup: {self.config.model.warmup}")
@@ -321,8 +314,7 @@ class PreferenceModel:
                     adapt_delta=self.config.model.adapt_delta,
                     max_treedepth=self.config.model.max_treedepth,
                     show_progress=True,
-                    refresh=max(1, min(self.config.model.n_samples // 10, 100)),
-                    save_warmup=False
+                    refresh=max(1, min(self.config.model.n_samples // 10, 100))
                 )
             except Exception as stan_error:
                 logger.error("Stan sampling error details:")
@@ -340,7 +332,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error fitting model: {str(e)}")
             raise
-
+        
     def _update_feature_weights(self) -> None:
         """Update feature weights from fitted model for both main and control features."""
         try:
@@ -396,108 +388,61 @@ class PreferenceModel:
             raise
                                                                             
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
-        """Evaluate model performance on a dataset."""
-        logger.info("=== Starting model evaluation ===")
-        #logger.info(f"Model state:")
-        #logger.info(f"Feature names: {list(dict.fromkeys(self.feature_names)) if hasattr(self, 'feature_names') else 'No feature_names'}")
-        logger.info(f"Selected features: {list(dict.fromkeys(self.selected_features)) if hasattr(self, 'selected_features') else 'No selected_features'}")
-        logger.info(f"Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
-        
+        """Evaluate model performance."""
         try:
-            if not hasattr(self, 'fit_result') or self.fit_result is None:
-                logger.error("Model must be fit before evaluation")
-                raise RuntimeError("Model must be fit before evaluation")
+            logger.info("=== Starting model evaluation ===")
+            
+            if not hasattr(self, 'fit_result'):
+                raise ValueError("Model not fitted. Call fit() first.")
                 
-            predictions = []
-            actuals = []
-            feature_values = defaultdict(list)  # Track feature values
+            logger.info(f"Selected features: {self.selected_features}")
             
-            #logger.info(f"Evaluating model on {len(dataset.preferences)} preferences")
+            # Get feature weights for logging
+            weights = self.get_feature_weights()
+            logger.info(f"Feature weights: {weights}")
             
-            # Sample some predictions for debugging
-            debug_samples = []
+            # Make predictions
+            y_pred = []
+            y_true = []
             
-            for pref_idx, pref in enumerate(dataset.preferences):
+            for pref in dataset.preferences:
                 try:
-                    # Get prediction probability - now handling ModelPrediction object
                     prediction = self.predict_preference(pref.bigram1, pref.bigram2)
-                    if not np.isnan(prediction.probability):
-                        predictions.append(prediction.probability)
-                        actuals.append(1.0 if pref.preferred else 0.0)
-                        
-                        # Track feature values for debugging
-                        for feature in self.feature_names:
-                            val1 = pref.features1.get(feature, 0.0)
-                            val2 = pref.features2.get(feature, 0.0)
-                            feature_values[feature].append(val1 - val2)
-                        
-                        # Store some samples for debugging
-                        if pref_idx < 5:  # First 5 examples
-                            debug_samples.append({
-                                'bigrams': (pref.bigram1, pref.bigram2),
-                                'features': {f: (pref.features1.get(f, 0.0), 
-                                            pref.features2.get(f, 0.0))
-                                        for f in self.feature_names},
-                                'prediction': prediction.probability,
-                                'actual': 1.0 if pref.preferred else 0.0
-                            })
-                            
+                    y_pred.append(prediction.probability)
+                    y_true.append(float(pref.preferred))
                 except Exception as e:
-                    logger.debug(f"Skipping preference in evaluation due to: {str(e)}")
+                    logger.warning(f"Error predicting preference: {str(e)}")
                     continue
                     
-            if not predictions:
-                logger.warning("No valid predictions for evaluation")
-                return {
-                    'accuracy': 0.5,
-                    'auc': 0.5,
-                    'n_evaluated': 0
-                }
-            
-            logger.info(f"Made predictions for {len(predictions)} preferences")
-            
-            # Log feature value statistics
-            logger.debug("\nFeature value distributions:")
-            for feature in self.feature_names:
-                values = np.array(feature_values[feature])
-                logger.debug(f"{feature}:")
-                logger.debug(f"  Mean: {np.mean(values):.4f}")
-                logger.debug(f"  Std: {np.std(values):.4f}")
-                logger.debug(f"  Range: [{np.min(values):.4f}, {np.max(values):.4f}]")
-            
-            # Log some example predictions
-            logger.debug("\nExample predictions:")
-            for sample in debug_samples:
-                logger.debug(f"\nBigrams: {sample['bigrams']}")
-                logger.debug(f"Features: {sample['features']}")
-                logger.debug(f"Prediction: {sample['prediction']:.4f}")
-                logger.debug(f"Actual: {sample['actual']}")
+            if not y_pred:
+                raise ValueError("No valid predictions made")
                 
-            predictions = np.array(predictions)
-            actuals = np.array(actuals)
+            y_pred = np.array(y_pred)
+            y_true = np.array(y_true)
+            
+            logger.info(f"Made predictions for {len(y_pred)} preferences")
             
             # Calculate metrics
-            accuracy = np.mean((predictions > 0.5) == actuals)
-            auc = roc_auc_score(actuals, predictions)
+            accuracy = np.mean((y_pred > 0.5) == y_true)
+            
+            try:
+                auc = roc_auc_score(y_true, y_pred)
+            except Exception as e:
+                logger.warning(f"Error calculating AUC: {str(e)}")
+                auc = 0.5
+                
+            metrics = {
+                'accuracy': float(accuracy),
+                'auc': float(auc)
+            }
             
             logger.info(f"Evaluation results - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
-            logger.debug(f"Prediction stats - Mean: {np.mean(predictions):.4f}, Std: {np.std(predictions):.4f}")
+            return metrics
             
-            return {
-                'accuracy': float(accuracy),
-                'auc': float(auc),
-                'n_evaluated': len(predictions)
-            }
-                
         except Exception as e:
-            logger.error(f"Error in model evaluation: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            return {
-                'accuracy': 0.5,
-                'auc': 0.5,
-                'n_evaluated': 0
-            }
-                        
+            logger.error(f"Error evaluating model: {str(e)}")
+            return {'accuracy': 0.5, 'auc': 0.5}
+                                
     def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Dict[str, Any]:
         """Perform cross-validation with multiple validation strategies."""
         feature_names = dataset.get_feature_names()
@@ -1177,80 +1122,51 @@ class PreferenceModel:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
         
-    def get_feature_weights(self, include_control: bool = False) -> Dict[str, Tuple[float, float]]:
-        """
-        Get feature weights from fitted model.
-        
-        Args:
-            include_control: Whether to include control feature weights in output
-            
-        Returns:
-            Dictionary mapping feature names to (mean, std) tuples
-        """
-        if not self.fit_result:
-            raise NotFittedError("Model must be fit before getting weights")
-            
-        if self.feature_weights is not None:
-            if include_control:
-                return self.feature_weights.copy()
-            else:
-                # Filter out control features
-                return {k: v for k, v in self.feature_weights.items() 
-                    if k not in self.config.features.control_features}
+    def get_feature_weights(self, include_control: bool = True) -> Dict[str, Tuple[float, float]]:
+        """Get feature weights and their uncertainties."""
+        if not hasattr(self, 'fit_result'):
+            raise ValueError("Model not fitted. Call fit() first.")
             
         try:
-            summary = self.fit_result.summary()
-            logger.info("\nAvailable features in summary:")
-            logger.info(f"Summary index: {list(summary.index)}")
+            weights = {}
             
-            weights: Dict[str, Tuple[float, float]] = {}
-            
-            # Process main features (beta parameters)
-            logger.info("\nProcessing main features:")
+            # Get main feature weights (beta)
             main_features = [f for f in self.feature_names 
                             if f not in self.config.features.control_features]
-            for feature in main_features:
-                logger.info(f"Processing main feature: {feature}")
-                param_name = f"beta[{main_features.index(feature) + 1}]"
-                if param_name in summary.index:
-                    mean_val = float(summary.loc[param_name, 'mean'])
-                    std_val = float(summary.loc[param_name, 'sd'])
-                    logger.info(f"Found weights - mean: {mean_val}, std: {std_val}")
-                    weights[feature] = (mean_val, std_val)
-                else:
-                    logger.warning(f"Feature {feature} not found in model summary")
             
-            # Process control features (gamma parameters) if requested
+            if main_features:  # Only process beta if we have main features
+                beta = self.fit_result.stan_variable('beta')
+                
+                if beta.shape[1] != len(main_features):
+                    raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
+                
+                for i, feature in enumerate(main_features):
+                    weights[feature] = (
+                        float(np.mean(beta[:, i])),
+                        float(np.std(beta[:, i]))
+                    )
+            
+            # Get control feature weights (gamma) if requested
             if include_control:
-                logger.info("\nProcessing control features:")
                 control_features = self.config.features.control_features
-                for feature in control_features:
-                    logger.info(f"Processing control feature: {feature}")
-                    param_name = f"gamma[{control_features.index(feature) + 1}]"
-                    if param_name in summary.index:
-                        mean_val = float(summary.loc[param_name, 'mean'])
-                        std_val = float(summary.loc[param_name, 'sd'])
-                        logger.info(f"Found weights - mean: {mean_val}, std: {std_val}")
-                        weights[feature] = (mean_val, std_val)
-                    else:
-                        logger.warning(f"Control feature {feature} not found in model summary")
+                if control_features:
+                    gamma = self.fit_result.stan_variable('gamma')
+                    
+                    if gamma.shape[1] != len(control_features):
+                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
+                    
+                    for i, feature in enumerate(control_features):
+                        weights[feature] = (
+                            float(np.mean(gamma[:, i])),
+                            float(np.std(gamma[:, i]))
+                        )
             
-            # Cache the results
-            logger.info(f"\nFinal weights dictionary: {weights}")
-            self.feature_weights = weights
-            
-            if include_control:
-                return weights.copy()
-            else:
-                # Filter out control features for return
-                return {k: v for k, v in weights.items() 
-                    if k not in self.config.features.control_features}
+            return weights
             
         except Exception as e:
-            logger.error(f"Error extracting feature weights: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            raise FeatureError(f"Failed to extract feature weights: {str(e)}")
-
+            logger.error(f"Error getting feature weights: {str(e)}")
+            return {}
+        
     def calculate_storage_requirements(self, dataset: PreferenceDataset, all_features: List[str]) -> int:
         """
         Calculate approximate storage requirements for the entire feature selection process.
@@ -1327,13 +1243,12 @@ class PreferenceModel:
     #--------------------------------------------  
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features using forward selection with threshold elimination."""
-        self.dataset = dataset  # Set dataset first
+        self.dataset = dataset
         
-        # Preprocess dataset to handle NaN values consistently
+        # Preprocess dataset
         logger.info("Preprocessing dataset for feature selection...")
         valid_prefs = []
         for pref in dataset.preferences:
-            # Check all main features (not just typing_time) for NaN values
             valid = True
             for feature in all_features:
                 if (pref.features1.get(feature) is None or 
@@ -1343,11 +1258,8 @@ class PreferenceModel:
             if valid:
                 valid_prefs.append(pref)
         
-        if not valid_prefs:
-            raise ValueError("No valid preferences after filtering")
-            
         # Create preprocessed dataset
-        self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)  # Store as instance variable
+        self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
         self.processed_dataset.preferences = valid_prefs
         self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
         self.processed_dataset.file_path = dataset.file_path
@@ -1359,66 +1271,60 @@ class PreferenceModel:
         self.processed_dataset.all_bigram_features = dataset.all_bigram_features
         
         # Copy the maps
-        self.processed_dataset.column_map = getattr(dataset, 'column_map', None)
-        self.processed_dataset.row_map = getattr(dataset, 'row_map', None)
-        self.processed_dataset.finger_map = getattr(dataset, 'finger_map', None)
-        self.processed_dataset.engram_position_values = getattr(dataset, 'engram_position_values', None)
-        self.processed_dataset.row_position_values = getattr(dataset, 'row_position_values', None)
+        for attr in ['column_map', 'row_map', 'finger_map', 
+                    'engram_position_values', 'row_position_values']:
+            setattr(self.processed_dataset, attr, getattr(dataset, attr, None))
         
         logger.info(f"Preprocessed dataset:")
         logger.info(f"  Original size: {len(dataset.preferences)} preferences")
         logger.info(f"  After filtering: {len(self.processed_dataset.preferences)} preferences")
         logger.info(f"  Participants: {len(self.processed_dataset.participants)}")
-        
-        # Initialize selection and tracking
-        self.selected_features = []
-        selected_so_far = []  # Track selected features separately
+
+        # Initialize feature sets
         control_features = self.config.features.control_features
         candidate_features = [f for f in all_features if f not in control_features]
-        thresholds = self.config.feature_selection.thresholds
-        min_metrics_passed = self.config.feature_selection.min_metrics_passed
+        selected_features = list(control_features)  # Start with control features
 
-        # First add control features to context
-        logger.info("\nInitializing with control features:")
-        for feature in control_features:
-            selected_so_far.append(feature)
-            self.selected_features.append(feature)
-        
-        logger.info(f"Starting feature selection with {len(candidate_features)} candidate features")
-        
+        logger.info("\nStarting feature selection:")
+        logger.info(f"Control features: {selected_features}")
+        logger.info(f"Candidate features: {len(candidate_features)}")
+
         # Keep selecting features until no more pass thresholds
+        round_num = 1
         while candidate_features:
-            logger.info(f"\nCurrent selected features: {selected_so_far}")
+            logger.info(f"\nSelection Round {round_num}")
+            logger.info(f"Currently selected features: {selected_features}")
+            logger.info(f"Remaining candidates: {len(candidate_features)}")
             
-            # Evaluate all remaining features
+            # Evaluate all remaining features against current selected set
             feature_metrics = {}
             for feature in candidate_features:
-                logger.info(f"\nEvaluating feature {feature} with current selected: {selected_so_far}")
+                logger.info(f"\nEvaluating feature {feature} with current selected: {selected_features}")
                 
                 metrics = self.importance_calculator.evaluate_feature(
                     feature=feature,
-                    dataset=self.processed_dataset,  # Use instance variable
+                    dataset=self.processed_dataset,
                     model=self,
                     all_features=all_features,
-                    current_selected_features=selected_so_far
+                    current_selected_features=selected_features  # Pass full set of selected features
                 )
                 
                 passes = [
-                    metrics['model_effect'] >= thresholds.model_effect,
-                    metrics['effect_consistency'] >= thresholds.effect_consistency,
-                    metrics['predictive_power'] >= thresholds.predictive_power
+                    metrics['model_effect'] >= self.config.feature_selection.thresholds.model_effect,
+                    metrics['effect_consistency'] >= self.config.feature_selection.thresholds.effect_consistency,
+                    metrics['predictive_power'] >= self.config.feature_selection.thresholds.predictive_power
                 ]
                 metrics_passed = sum(passes)
                 
                 logger.info(f"Feature {feature} metrics:")
-                logger.info(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-                logger.info(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-                logger.info(f"  Metrics passed: {metrics_passed}/{min_metrics_passed}")
+                logger.info(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {self.config.feature_selection.thresholds.model_effect})")
+                logger.info(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {self.config.feature_selection.thresholds.effect_consistency})")
+                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {self.config.feature_selection.thresholds.predictive_power})")
+                logger.info(f"  Metrics passed: {metrics_passed}/{self.config.feature_selection.min_metrics_passed}")
                 
-                if metrics_passed >= min_metrics_passed:
+                if metrics_passed >= self.config.feature_selection.min_metrics_passed:
                     feature_metrics[feature] = metrics
-            
+
             # Select best remaining feature that passed thresholds
             if feature_metrics:
                 weights = self.config.feature_selection.metric_weights
@@ -1427,9 +1333,9 @@ class PreferenceModel:
                 
                 for feature, metrics in feature_metrics.items():
                     score = (
-                        metrics['model_effect'] * weights['model_effect'] +
-                        metrics['effect_consistency'] * weights['effect_consistency'] + 
-                        metrics['predictive_power'] * weights['predictive_power']
+                        metrics['model_effect'] * weights.model_effect +
+                        metrics['effect_consistency'] * weights.effect_consistency + 
+                        metrics['predictive_power'] * weights.predictive_power
                     )
                     logger.info(f"Feature {feature} score: {score:.4f}")
                     
@@ -1438,18 +1344,20 @@ class PreferenceModel:
                         best_feature = feature
                 
                 if best_feature is not None:
-                    logger.info(f"Selected feature {best_feature} with score {best_score:.4f}")
-                    self.selected_features.append(best_feature)
-                    selected_so_far.append(best_feature)
-                    candidate_features.remove(best_feature)
+                    logger.info(f"\nSelected feature {best_feature} with score {best_score:.4f}")
+                    selected_features.append(best_feature)  # Add to selected set
+                    candidate_features.remove(best_feature)  # Remove from candidates
+                    round_num += 1
                     continue
             
             # If no features passed thresholds, end selection
+            logger.info("\nNo remaining features pass thresholds, stopping selection")
             break
 
         logger.info("\nFeature selection complete:")
-        logger.info(f"Final selected features: {self.selected_features}")
-        return self.selected_features
+        logger.info(f"Selected features: {selected_features}")
+        self.selected_features = selected_features
+        return selected_features
 
     def _select_best_feature(self, feature_metrics: Dict[str, Dict[str, float]]) -> Optional[str]:
         """Select best feature based on metrics."""

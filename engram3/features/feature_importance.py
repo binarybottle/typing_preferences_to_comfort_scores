@@ -177,17 +177,18 @@ class FeatureImportanceCalculator:
             ))
             logger.info(f"Evaluation context: {evaluation_features}")
             
-            # Fit model with proper context
+            # Create model with all context features
             eval_model = type(model)(config=model.config)
             eval_model.feature_extractor = model.feature_extractor
             eval_model.feature_names = evaluation_features
             eval_model.selected_features = evaluation_features
             
             try:
+                # Fit model with full feature context
                 eval_model.fit(dataset, evaluation_features,
                             fit_purpose=f"Feature evaluation for {feature}")
 
-                # Get feature effect
+                # Get feature weight in context of other features
                 weights = eval_model.get_feature_weights()
                 if feature not in weights:
                     logger.warning(f"No weight found for feature {feature}")
@@ -195,32 +196,31 @@ class FeatureImportanceCalculator:
                     
                 effect_mean, effect_std = weights[feature]
                 
-                # Calculate effect consistency
+                # Calculate effect consistency across CV splits
                 consistency = self._calculate_effect_consistency(
                     feature, dataset, eval_model, current_selected_features)
                 
-                # Calculate predictive power
+                # Calculate predictive power improvement over current set
                 predictive_power = self._calculate_predictive_power(
-                        feature, dataset, eval_model, self._baseline_accuracy,
-                        current_selected_features) 
+                    feature, dataset, eval_model, self._baseline_accuracy,
+                    current_selected_features)
 
-                metrics_dict = {
-                    'model_effect': abs(effect_mean),  # Use absolute effect
+                metrics = {
+                    'model_effect': abs(effect_mean),
                     'effect_consistency': consistency,
                     'predictive_power': predictive_power
                 }
                 
-                logger.debug(f"Metrics for {feature}: {metrics_dict}")
-                return metrics_dict
+                logger.debug(f"Metrics for {feature} in context of {current_selected_features}: {metrics}")
+                return metrics
                 
             finally:
                 eval_model.cleanup()
-                
+                    
         except Exception as e:
             logger.error(f"Error evaluating {feature}: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             return self._get_default_metrics()
-
 
     def _calculate_predictive_power(self, feature: str, dataset: PreferenceDataset, 
                                 model: 'PreferenceModel', baseline_accuracy: float,
@@ -311,7 +311,6 @@ class FeatureImportanceCalculator:
             effects = np.array(effects)
             mean_effect = np.mean(effects)
             mean_abs_effect = np.mean(np.abs(effects))
-
             # Calculate magnitude consistency
             if mean_abs_effect > 0:
                 mad = np.mean(np.abs(effects - mean_effect))
@@ -327,7 +326,7 @@ class FeatureImportanceCalculator:
         except Exception as e:
             logger.error(f"Error calculating effect consistency: {str(e)}")
             return 0.0
-                        
+                         
     def clear_caches(self):
         """Clear all caches."""
         if hasattr(self, 'metric_cache'):
