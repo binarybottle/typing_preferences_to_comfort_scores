@@ -321,26 +321,24 @@ def main():
                 logger.info("Calling model.select_features()...")
                 selected_features = model.select_features(processed_train, all_features)
                 logger.info(f"Feature selection completed. Selected features: {selected_features}")
-
+                
                 # Validate on held-out validation set
                 model.fit(feature_select_train, selected_features)
                 val_metrics = model.evaluate(feature_select_val)
                 logger.info(f"Validation metrics - Accuracy: {val_metrics['accuracy']:.4f}, AUC: {val_metrics['auc']:.4f}")
-
+                
                 # Get final weights and metrics
                 feature_weights = model.get_feature_weights(include_control=True)
-
+                
                 # Evaluate features using feature selection training data
                 results = []
                 selectable_features = [f for f in all_features if f not in config.features.control_features]
                 
                 for feature_name in selectable_features:
-                    metrics = model.importance_calculator.evaluate_feature(
+                    importance = model._calculate_feature_importance(
                         feature=feature_name,
-                        dataset=feature_select_train,  # Changed from train_data
-                        model=model,
-                        all_features=all_features,
-                        current_selected_features=selected_features
+                        dataset=processed_train,
+                        current_features=selected_features
                     )
                     
                     weight, std = feature_weights.get(feature_name, (0.0, 0.0))
@@ -350,15 +348,13 @@ def main():
                         'feature_name': feature_name,
                         'n_components': len(components),
                         'selected': 1 if feature_name in selected_features else 0,
-                        'model_effect': metrics.get('model_effect', 0.0),
-                        'effect_consistency': metrics.get('effect_consistency', 0.0),
-                        'predictive_power': metrics.get('predictive_power', 0.0),
+                        'importance': importance,  # Single importance metric
                         'weight': weight,
                         'weight_std': std,
                         'validation_accuracy': val_metrics['accuracy'],
                         'validation_auc': val_metrics['auc']
                     })
-
+                
                 # Save results and metrics
                 metrics_file = Path(config.feature_selection.metrics_file)
                 pd.DataFrame(results).to_csv(metrics_file, index=False)
@@ -367,7 +363,7 @@ def main():
                 model.fit(train_data, selected_features, fit_purpose="Final model fit with selected features")
                 model_save_path = Path(config.feature_selection.model_file)
                 model.save(model_save_path)
-
+                
                 # Log final results and summary
                 logger.info("\nFeature selection summary:")
                 logger.info(f"Features selected: {len(selected_features)}/{len(selectable_features)}")
@@ -375,18 +371,14 @@ def main():
                 
                 for feature in selected_features:
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
-                    metrics = model.importance_calculator.evaluate_feature(
+                    importance = model._calculate_feature_importance(
                         feature=feature,
-                        dataset=feature_select_train,  # Changed from train_data
-                        model=model,
-                        all_features=all_features,
-                        current_selected_features=selected_features
+                        dataset=processed_train,
+                        current_features=selected_features
                     )
                     logger.info(f"\n{feature}:")
                     logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                    logger.info(f"  Effect magnitude: {metrics.get('model_effect', 0.0):.3f}")
-                    logger.info(f"  Effect consistency: {metrics.get('effect_consistency', 0.0):.3f}")
-                    logger.info(f"  Predictive power: {metrics.get('predictive_power', 0.0):.3f}")
+                    logger.info(f"  Importance: {importance:.3f}")
             
             finally:
                 model.cleanup()

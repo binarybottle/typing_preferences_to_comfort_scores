@@ -264,8 +264,6 @@ class PreferenceDataset:
             logger.info(f"Error loading CSV: {str(e)}")
             raise
 
-# In data.py
-
     def _create_subset_dataset(self, indices: Union[List[int], np.ndarray]) -> 'PreferenceDataset':
         """Create a new dataset containing only the specified preferences."""
         try:
@@ -303,31 +301,25 @@ class PreferenceDataset:
             # Verify subset creation
             if len(subset.preferences) != len(indices):
                 raise ValueError(f"Subset creation failed: size mismatch. Expected {len(indices)}, got {len(subset.preferences)}")
-            
+
             # Copy needed attributes
             subset.file_path = self.file_path
             subset.config = self.config
-            if subset.config:
-                subset.control_features = subset.config.features.control_features
-            else:
-                subset.control_features = []
-                
-            # Copy maps and values
-            for attr in ['column_map', 'row_map', 'finger_map', 
-                        'engram_position_values', 'row_position_values']:
+            subset.feature_extractor = self.feature_extractor
+            subset.control_features = self.control_features
+
+            # Copy all feature-related attributes
+            for attr in ['feature_names', 'all_bigrams', 'all_bigram_features']:
                 if hasattr(self, attr):
                     setattr(subset, attr, getattr(self, attr))
-                else:
-                    logger.warning(f"Source dataset missing attribute: {attr}")
-            
-            # Copy feature extraction related attributes
-            subset.feature_extractor = self.feature_extractor
-            
-            # Copy feature-related attributes if they exist
-            if hasattr(self, 'all_bigrams'):
-                for attr in ['all_bigrams', 'all_bigram_features', 'feature_names']:
+
+            # Copy all map attributes
+            for attr in ['column_map', 'row_map', 'finger_map', 
+                        'engram_position_values', 'row_position_values',
+                        'angles', 'bigrams', 'bigram_frequencies_array']:
+                if hasattr(self, attr):
                     setattr(subset, attr, getattr(self, attr))
-            
+
             # Validate final subset
             if not subset.preferences:
                 raise ValueError("Created subset has no preferences")
@@ -342,7 +334,7 @@ class PreferenceDataset:
             logger.error(f"Indices length: {len(indices)}")
             logger.error(f"Sample of indices: {indices[:10]}")
             raise
-                            
+                                    
     def _create_preference(self, row: pd.Series) -> Preference:
         """Create single Preference instance from data row."""
         bigram1 = (row['bigram1'][0], row['bigram1'][1])

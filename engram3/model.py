@@ -197,9 +197,17 @@ class PreferenceModel:
     def _create_temp_model(self):
         """Create a temporary model copy for evaluation."""
         temp_model = type(self)(config=self.config)
+        # Copy necessary attributes
         temp_model.feature_extractor = self.feature_extractor
-        if hasattr(self, 'processed_dataset'):
-            temp_model.processed_dataset = self.processed_dataset
+        temp_model.dataset = self.dataset
+        temp_model.prediction_cache = CacheManager()
+        
+        # Copy dataset attributes
+        for attr in ['column_map', 'row_map', 'finger_map', 
+                    'engram_position_values', 'row_position_values',
+                    'angles', 'bigrams', 'bigram_frequencies_array']:
+            if hasattr(self.dataset, attr):
+                setattr(temp_model.dataset, attr, getattr(self.dataset, attr))
         
         # Create context manager for cleanup
         class ModelContext:
@@ -209,7 +217,9 @@ class PreferenceModel:
                 return self.model
             def __exit__(self, exc_type, exc_val, exc_tb):
                 self.model.cleanup()
-                
+                if hasattr(self.model, 'prediction_cache'):
+                    self.model.prediction_cache.clear()
+                    
         return ModelContext(temp_model)
 
     # Remaining class methods
@@ -247,7 +257,7 @@ class PreferenceModel:
                     delattr(self, attr)
 
             if fit_purpose:
-                logger.info(f"\nFitting model: {fit_purpose}")
+                logger.info(f"Fitting model: {fit_purpose}")
 
             # Store dataset and feature extractor
             self.dataset = dataset
@@ -280,7 +290,7 @@ class PreferenceModel:
             # Log data dimensions
             logger.info("Data dimensions:")
             logger.info(f"  Preferences: {processed_data['N']}")
-            logger.info(f"  Participants: {processed_data['J']}")
+            logger.info(f"  Participants: {processed_data['P']}")  # Changed to use 'P'
             if not main_features:
                 logger.info("  Using dummy main feature for control-only model")
             logger.info(f"  Main features: {processed_data['F']}")
@@ -367,47 +377,46 @@ class PreferenceModel:
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance."""
         try:
-            logger.info("=== Starting model evaluation ===")
             if not hasattr(self, 'fit_result'):
                 raise ValueError("Model not fitted")
             
-            logger.info(f"Selected features: {self.selected_features}")
-            weights = self.get_feature_weights()
-            logger.info(f"Feature weights: {weights}")
-            
-            y_pred = []
-            y_true = []
+            # Get predictions
+            predictions = []
+            true_labels = []
             
             for pref in dataset.preferences:
-                prediction = self.predict_preference(pref.bigram1, pref.bigram2)
-                y_pred.append(prediction.probability)
-                y_true.append(float(pref.preferred))
-                    
-            y_pred = np.array(y_pred)
-            y_true = np.array(y_true)
-            
-            logger.info(f"Made predictions for {len(y_pred)} preferences")
-            
-            accuracy = np.mean((y_pred > 0.5) == y_true)
-            try:
-                auc = roc_auc_score(y_true, y_pred)
-            except Exception as e:
-                logger.warning(f"Error calculating AUC: {str(e)}")
-                auc = 0.5
+                # Get prediction
+                pred = self.predict_preference(pref.bigram1, pref.bigram2)
                 
-            metrics = {
+                # Store logit for AUC calculation
+                logit = -np.log(1/pred.probability - 1)
+                predictions.append(logit)
+                true_labels.append(float(pref.preferred))
+                
+            predictions = np.array(predictions)
+            true_labels = np.array(true_labels)
+            
+            # Compute metrics
+            accuracy = np.mean((predictions > 0) == true_labels)  # Use 0 as threshold for logits
+            auc = roc_auc_score(true_labels, predictions)
+            
+            logger.info(f"Prediction distribution:")
+            logger.info(f"  Mean: {np.mean(predictions):.4f}")
+            logger.info(f"  Std: {np.std(predictions):.4f}")
+            logger.info(f"  Min: {np.min(predictions):.4f}")
+            logger.info(f"  Max: {np.max(predictions):.4f}")
+            
+            return {
                 'accuracy': float(accuracy),
-                'auc': float(auc)
+                'auc': float(auc),
+                'mean_pred': float(np.mean(predictions)),
+                'std_pred': float(np.std(predictions))
             }
-            
-            logger.info(f"Evaluation results - Accuracy: {accuracy:.4f}, AUC: {auc:.4f}")
-            return metrics
-            
+        
         except Exception as e:
             logger.error(f"Error in evaluate: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            return {'accuracy': 0.5, 'auc': 0.5}
-                                        
+            return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
+                                                        
     def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Dict[str, Any]:
         """Perform cross-validation with multiple validation strategies."""
         feature_names = dataset.get_feature_names()
@@ -481,64 +490,58 @@ class PreferenceModel:
                 # Clear caches after cross-validation
                 self.clear_caches()
                     
-        # Process feature effects and calculate metrics
+        # Process feature effects and calculate importance
         processed_effects = {}
         importance_metrics = {}
         
         for feature in feature_names:
+            # Calculate importance using aligned effects method
+            importance = self._calculate_feature_importance(
+                feature=feature,
+                dataset=dataset,
+                current_features=self.selected_features
+            )
+            
+            # Store results
             effects = feature_effects.get(feature, [])
             if effects:
-                # Calculate effect statistics considering uncertainty
                 effect_means = [e['mean'] for e in effects]
                 effect_stds = [e['std'] for e in effects]
                 
-                mean_effect = float(np.mean(effect_means))
-                mean_uncertainty = float(np.mean(effect_stds))
-                
                 processed_effects[feature] = {
-                    'mean': mean_effect,
-                    'std': mean_uncertainty,
+                    'mean': float(np.mean(effect_means)),
+                    'std': float(np.mean(effect_stds)),
                     'values': effect_means
                 }
-                
-                # Calculate feature importance incorporating uncertainty
-                importance_metrics[feature] = self.importance_calculator.evaluate_feature(
-                    feature=feature,
-                    dataset=dataset,
-                    model=self,
-                    all_features=feature_names,  # We have this from earlier in the method
-                    current_selected_features=self.selected_features
-                )
-
-        # Determine selected features using Bayesian criteria
-        selected_features = self.selected_features
+            
+            importance_metrics[feature] = {'importance': importance}
         
         # Log results
         self._log_feature_selection_results(
-            selected_features, importance_metrics)
+            self.selected_features, importance_metrics)
         
         # Save metrics to CSV
         self.save_metrics_report(
             metrics_dict={feature: {
                 **processed_effects.get(feature, {}),
-                **importance_metrics.get(feature, {}),
+                'importance': importance_metrics[feature]['importance']
             } for feature in feature_names},
             output_file=self.config.feature_selection.metrics_file
         )
         
         return {
             'metrics': metrics,
-            'selected_features': selected_features,
+            'selected_features': self.selected_features,
             'feature_effects': processed_effects,
             'importance_metrics': importance_metrics,
             'fold_uncertainties': dict(metrics['mean_uncertainty'])
         }
-
+    
     def _log_feature_selection_results(self, 
                                     selected_features: List[str],
                                     importance_metrics: Dict[str, Dict]) -> None:
         """Log feature selection results."""
-        logger.info("\nSelected Features:")
+        logger.info("Selected Features:")
         for feature in selected_features:
             metrics = importance_metrics.get(feature, {})
             logger.info(f"  {feature}:")
@@ -926,7 +929,7 @@ class PreferenceModel:
                 logger.info("Feature statistics:")
                 if not is_control_only:
                     for i, feature in enumerate(main_features):
-                        logger.info(f"\n{feature} (main):")
+                        logger.info(f"{feature} (main):")
                         if feature in feature_stats:
                             logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
                                     f"std: {feature_stats[feature]['std']:.3f}")
@@ -934,7 +937,7 @@ class PreferenceModel:
                                 f"std: {np.std(X1[:, i]):.3f}")
 
                 for i, feature in enumerate(control_features):
-                    logger.info(f"\n{feature} (control):")
+                    logger.info(f"{feature} (control):")
                     logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
                             f"std: {feature_stats[feature]['std']:.3f}")
                     logger.info(f"  Standardized - mean: {np.mean(C1[:, i]):.3f}, "
@@ -1206,159 +1209,142 @@ class PreferenceModel:
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------  
+    def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
+        """Predict preference between two bigrams."""
+        try:
+            if not hasattr(self, 'fit_result'):
+                raise NotFittedError("Model must be fit before making predictions")
+
+            # Get features for both bigrams
+            features1 = self.feature_extractor.extract_features(bigram1)
+            features2 = self.feature_extractor.extract_features(bigram2)
+
+            # Standardize features using stored statistics
+            X1 = []
+            X2 = []
+            for feature in self.feature_names:
+                feat1 = features1.get(feature, 0.0)
+                feat2 = features2.get(feature, 0.0)
+                if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                    feat1 = 0.0
+                    feat2 = 0.0
+                
+                # Get standardization parameters
+                if not hasattr(self, 'feature_stats'):
+                    raise ValueError("Feature statistics not available")
+                mean = self.feature_stats[feature]['mean']
+                std = self.feature_stats[feature]['std']
+                
+                # Standardize
+                X1.append((feat1 - mean) / std)
+                X2.append((feat2 - mean) / std)
+
+            X1 = np.array(X1).reshape(1, -1)
+            X2 = np.array(X2).reshape(1, -1)
+
+            # Get model predictions
+            logits = self.fit_result.predict({'X1': X1, 'X2': X2})
+            
+            # Convert logits to probabilities
+            probability = 1 / (1 + np.exp(-logits))
+            
+            # Get prediction uncertainty (can be computed from multiple samples if available)
+            uncertainty = np.std(logits) if isinstance(logits, np.ndarray) else 0.0
+
+            return ModelPrediction(
+                probability=float(np.mean(probability)),
+                uncertainty=float(uncertainty),
+                features_used=list(self.feature_names),
+                computation_time=0.0  # Could add timing if needed
+            )
+
+        except Exception as e:
+            logger.error(f"Error in predict_preference: {str(e)}")
+            raise
+    
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """Select features using forward selection with threshold elimination."""
-        self.dataset = dataset
-        
-        # Preprocess dataset
-        logger.info("Preprocessing dataset for feature selection...")
-        valid_prefs = []
-        for pref in dataset.preferences:
-            valid = True
-            for feature in all_features:
-                if (pref.features1.get(feature) is None or 
-                    pref.features2.get(feature) is None):
-                    valid = False
-                    break
-            if valid:
-                valid_prefs.append(pref)
-        
-        # Create preprocessed dataset
-        self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
-        self.processed_dataset.preferences = valid_prefs
-        self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
-        self.processed_dataset.file_path = dataset.file_path
-        self.processed_dataset.config = dataset.config
-        self.processed_dataset.control_features = dataset.control_features
-        self.processed_dataset.feature_extractor = dataset.feature_extractor
-        self.processed_dataset.feature_names = dataset.feature_names
-        self.processed_dataset.all_bigrams = dataset.all_bigrams
-        self.processed_dataset.all_bigram_features = dataset.all_bigram_features
-        
-        # Copy the maps
-        for attr in ['column_map', 'row_map', 'finger_map', 
-                    'engram_position_values', 'row_position_values']:
-            setattr(self.processed_dataset, attr, getattr(dataset, attr, None))
-        
-        logger.info(f"Preprocessed dataset:")
-        logger.info(f"  Original size: {len(dataset.preferences)} preferences")
-        logger.info(f"  After filtering: {len(self.processed_dataset.preferences)} preferences")
-        logger.info(f"  Participants: {len(self.processed_dataset.participants)}")
-
-        # Initialize feature sets
-        control_features = self.config.features.control_features
-        candidate_features = [f for f in all_features if f not in control_features]
-        selected_features = list(control_features)  # Start with control features
-
-        logger.info("\nStarting feature selection:")
-        logger.info(f"Control features: {selected_features}")
-        logger.info(f"Candidate features: {len(candidate_features)}")
-
-        # Keep selecting features until no more pass thresholds
-        round_num = 1
-        while candidate_features:
-            logger.info(f"\nSelection Round {round_num}")
-            logger.info(f"Currently selected features: {selected_features}")
-            logger.info(f"Remaining candidates: {len(candidate_features)}")
+        """Select features by evaluating their importance for prediction."""
+        try:
+            self.dataset = dataset
             
-            # Evaluate all remaining features against current selected set
-            feature_metrics = {}
-            for feature in candidate_features:
-                logger.info(f"\nEvaluating feature {feature} with current selected: {selected_features}")
-                
-                metrics = self.importance_calculator.evaluate_feature(
-                    feature=feature,
-                    dataset=self.processed_dataset,
-                    model=self,
-                    all_features=all_features,
-                    current_selected_features=selected_features  # Pass full set of selected features
-                )
-                
-                passes = [
-                    metrics['model_effect'] >= self.config.feature_selection.thresholds.model_effect,
-                    metrics['effect_consistency'] >= self.config.feature_selection.thresholds.effect_consistency,
-                    metrics['predictive_power'] >= self.config.feature_selection.thresholds.predictive_power
-                ]
-                metrics_passed = sum(passes)
-                
-                logger.info(f"Feature {feature} metrics:")
-                logger.info(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {self.config.feature_selection.thresholds.model_effect})")
-                logger.info(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {self.config.feature_selection.thresholds.effect_consistency})")
-                logger.info(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {self.config.feature_selection.thresholds.predictive_power})")
-                logger.info(f"  Metrics passed: {metrics_passed}/{self.config.feature_selection.min_metrics_passed}")
-                
-                if metrics_passed >= self.config.feature_selection.min_metrics_passed:
-                    feature_metrics[feature] = metrics
+            # Preprocess dataset
+            logger.info("Preprocessing dataset for feature selection...")
+            valid_prefs = []
+            for pref in dataset.preferences:
+                valid = True
+                for feature in all_features:
+                    if (pref.features1.get(feature) is None or 
+                        pref.features2.get(feature) is None):
+                        valid = False
+                        break
+                if valid:
+                    valid_prefs.append(pref)
+            
+            # Create processed dataset
+            self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
+            self.processed_dataset.preferences = valid_prefs
+            self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
+            self.processed_dataset.file_path = dataset.file_path
+            self.processed_dataset.config = dataset.config
+            self.processed_dataset.control_features = dataset.control_features
+            self.processed_dataset.feature_extractor = dataset.feature_extractor
+            self.processed_dataset.feature_names = dataset.feature_names
+            self.processed_dataset.all_bigrams = dataset.all_bigrams
+            self.processed_dataset.all_bigram_features = dataset.all_bigram_features
+            
+            # Initialize feature sets
+            control_features = self.config.features.control_features
+            candidate_features = [f for f in all_features if f not in control_features]
+            selected_features = list(control_features)  # Start with control features
 
-            # Select best remaining feature that passed thresholds
-            if feature_metrics:
-                weights = self.config.feature_selection.metric_weights
-                best_score = float('-inf')
+            # Log initial state
+            logger.info("\nStarting feature selection:")
+            logger.info(f"Control features: {selected_features}")
+            logger.info(f"Candidate features: {len(candidate_features)}")
+            
+            # Keep selecting features until no more useful ones found
+            round_num = 1
+            while candidate_features:
+                logger.info(f"\nSelection Round {round_num}")
+                logger.info(f"Current features: {selected_features}")
+                logger.info(f"Remaining candidates: {len(candidate_features)}")
+                
                 best_feature = None
+                best_importance = -float('inf')
                 
-                for feature, metrics in feature_metrics.items():
-                    score = (
-                        metrics['model_effect'] * weights.model_effect +
-                        metrics['effect_consistency'] * weights.effect_consistency + 
-                        metrics['predictive_power'] * weights.predictive_power
+                # Evaluate each candidate
+                for feature in candidate_features:
+                    importance = self._calculate_feature_importance(
+                        feature=feature,
+                        dataset=self.processed_dataset,
+                        current_features=selected_features
                     )
-                    logger.info(f"Feature {feature} score: {score:.4f}")
                     
-                    if score > best_score:
-                        best_score = score
-                        best_feature = feature
+                    # If feature helps predictions more than our threshold
+                    if importance > self.config.feature_selection.importance_threshold:
+                        if importance > best_importance:
+                            best_importance = importance
+                            best_feature = feature
                 
-                if best_feature is not None:
-                    logger.info(f"\nSelected feature {best_feature} with score {best_score:.4f}")
-                    selected_features.append(best_feature)  # Add to selected set
-                    candidate_features.remove(best_feature)  # Remove from candidates
-                    round_num += 1
-                    continue
-            
-            # If no features passed thresholds, end selection
-            logger.info("\nNo remaining features pass thresholds, stopping selection")
-            break
+                if best_feature is None:
+                    logger.info("No remaining features improve predictions sufficiently.")
+                    break
+                    
+                # Add best feature and continue
+                logger.info(f"\nSelected feature {best_feature} with importance {best_importance:.4f}")
+                selected_features.append(best_feature)
+                candidate_features.remove(best_feature)
+                round_num += 1
 
-        logger.info("\nFeature selection complete:")
-        logger.info(f"Selected features: {selected_features}")
-        self.selected_features = selected_features
-        return selected_features
-
-    def _select_best_feature(self, feature_metrics: Dict[str, Dict[str, float]]) -> Optional[str]:
-        """Select best feature based on metrics."""
-        if not feature_metrics:
-            return None
+            logger.info("\nFeature selection complete:")
+            logger.info(f"Selected features: {selected_features}")
+            self.selected_features = selected_features
+            return selected_features
             
-        thresholds = self.config.feature_selection.thresholds
-        min_metrics = self.config.feature_selection.min_metrics_passed
-        
-        # Count wins for each feature
-        win_counts = {f: 0 for f in feature_metrics}
-        for f1, f2 in combinations(feature_metrics.keys(), 2):
-            if self._is_feature_better(feature_metrics[f1], feature_metrics[f2]):
-                win_counts[f1] += 1
-            else:
-                win_counts[f2] += 1
-        
-        # Select feature with most wins that meets thresholds
-        best_feature = max(win_counts.items(), key=lambda x: x[1])[0]
-        metrics = feature_metrics[best_feature]
-        
-        # Print metrics for best feature
-        print(f"\nBest feature metrics ({best_feature}):")
-        print(f"  Model effect: {metrics['model_effect']:.3f} (threshold: {thresholds.model_effect})")
-        print(f"  Effect consistency: {metrics['effect_consistency']:.3f} (threshold: {thresholds.effect_consistency})")
-        print(f"  Predictive power: {metrics['predictive_power']:.3f} (threshold: {thresholds.predictive_power})")
-        
-        metrics_passed = (
-            (metrics['model_effect'] >= thresholds.model_effect) +
-            (metrics['effect_consistency'] >= thresholds.effect_consistency) +
-            (metrics['predictive_power'] >= thresholds.predictive_power)
-        )
-        
-        if metrics_passed >= min_metrics:
-            return best_feature
-        return None
+        except Exception as e:
+            logger.error(f"Error in select_features: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            raise
 
     def _get_evaluation_context(self, feature: str, current_selected: List[str], 
                             control_features: List[str]) -> Optional[List[str]]:
@@ -1376,43 +1362,10 @@ class PreferenceModel:
         ))
         
         return context
-                                                                                                
-    def _is_feature_better(self, metrics_a: Dict[str, float], metrics_b: Dict[str, float]) -> bool:
-        """
-        Compare two features based on their metrics and thresholds.
-        Returns True if feature A is better than feature B.
-        """
-        thresholds = self.config.feature_selection.thresholds
-        min_metrics = self.config.feature_selection.min_metrics_passed
-        
-        # Count passed metrics for each feature
-        metrics_passed_a = (
-            (metrics_a['model_effect'] >= thresholds.model_effect) +
-            (metrics_a['effect_consistency'] >= thresholds.effect_consistency) +
-            (metrics_a['predictive_power'] >= thresholds.predictive_power)
-        )
-        
-        metrics_passed_b = (
-            (metrics_b['model_effect'] >= thresholds.model_effect) +
-            (metrics_b['effect_consistency'] >= thresholds.effect_consistency) +
-            (metrics_b['predictive_power'] >= thresholds.predictive_power)
-        )
-        
-        # If one feature meets minimum metrics and other doesn't, choose the one that does
-        if metrics_passed_a >= min_metrics and metrics_passed_b < min_metrics:
-            return True
-        if metrics_passed_b >= min_metrics and metrics_passed_a < min_metrics:
-            return False
-        
-        # If neither or both meet minimum metrics, compare their scores
-        score_a = metrics_a['model_effect'] + metrics_a['effect_consistency'] + metrics_a['predictive_power']
-        score_b = metrics_b['model_effect'] + metrics_b['effect_consistency'] + metrics_b['predictive_power']
-        
-        return score_a > score_b
-                                                                                                                                                       
+                                                                                                                                                                                                                                                       
     def _prepare_feature_matrices(self, dataset: PreferenceDataset,
-                            main_features: List[str],
-                            control_features: List[str]) -> Dict[str, Any]:
+                                main_features: List[str],
+                                control_features: List[str]) -> Dict[str, Any]:
         """Prepare feature matrices for Stan model."""
         try:
             # First collect all feature values
@@ -1434,7 +1387,7 @@ class PreferenceModel:
                 std = float(np.std(values)) if len(values) > 0 else 1.0
                 feature_stats[feature] = {'mean': mean, 'std': std}
                 
-                logger.info(f"\n{feature} ({'main' if feature in main_features else 'control'}):")
+                logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
                 logger.info(f"  Original - mean: {mean:.3f}, std: {std:.3f}")
 
             # Build standardized matrices
@@ -1510,7 +1463,7 @@ class PreferenceModel:
 
             return {
                 'N': len(y),
-                'J': len(unique_participants),
+                'P': len(unique_participants),  # Changed from 'J' to 'P' to match Stan model
                 'F': X1.shape[1],
                 'C': C1.shape[1],
                 'participant': participant + 1,  # Stan uses 1-based indexing
@@ -1518,14 +1471,16 @@ class PreferenceModel:
                 'X2': X2,
                 'C1': C1,
                 'C2': C2,
-                'y': y
+                'y': y,
+                'feature_scale': self.config.model.feature_scale,    # Add feature scale parameter
+                'participant_scale': self.config.model.participant_scale  # Add participant scale parameter
             }
 
         except Exception as e:
             logger.error(f"Error preparing feature matrices: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                                
+                                                                
     def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
         """Generate and save a detailed metrics report."""
         report_df = pd.DataFrame([
@@ -1544,173 +1499,66 @@ class PreferenceModel:
     #--------------------------------------------
     # Statistical and model diagnostic methods
     #--------------------------------------------
-    def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
-        """Predict preference probability and uncertainty for a bigram pair."""
-        if not self.fit_result:
-            raise NotFittedError("Model must be fit before making predictions")
-            
+    def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
+                                      current_features: List[str]) -> float:
+        """Calculate feature importance based on prediction improvement."""
         try:
-            # Validate inputs
-            if len(bigram1) != 2 or len(bigram2) != 2:
-                raise ValueError(f"Invalid bigram lengths: {bigram1}, {bigram2}")
-                
-            # Check cache
-            cache_key = (bigram1, bigram2)
-            cached_prediction = self.prediction_cache.get(cache_key)
-            if cached_prediction is not None:
-                return cached_prediction
-                
-            start_time = time.perf_counter()
-            
-            # Log model state
-            logger.debug(f"All features available: {self.feature_names if hasattr(self, 'feature_names') else 'No feature_names'}")
-            logger.debug(f"Feature weights: {self.feature_weights if hasattr(self, 'feature_weights') else 'No feature_weights'}")
-            logger.debug(f"Selected features: {self.selected_features}")
-            logger.debug(f"Control features: {self.config.features.control_features}")
-            
-            # Separate main and control feature effects
-            main_features = list(dict.fromkeys([f for f in self.selected_features 
-                                    if f not in self.config.features.control_features]))
-            control_features = list(dict.fromkeys(self.config.features.control_features))
+            # Fit models with and without the feature
+            with self._create_temp_model() as baseline_model:
+                baseline_model.fit(dataset, current_features)
+            with self._create_temp_model() as feature_model:
+                feature_model.fit(dataset, current_features + [feature])
 
-            # Determine if this is a baseline evaluation
-            is_baseline = getattr(self, 'is_baseline_model', False)
-            logger.debug(f"Model type: {'baseline' if is_baseline else 'main'}")
-
-            # For non-baseline models, require main features
-            main_features = [f for f in self.selected_features 
-                            if f not in self.config.features.control_features]
-            control_features = self.config.features.control_features
-
-            # For non-baseline models, require main features  
-            if not main_features and not is_baseline:
-                logger.error("Prediction failed due to missing main features:")
-                logger.error(f"  All features available: {self.feature_names}")
-                logger.error(f"  Selected features: {self.selected_features}")
-                logger.error(f"  Control features: {control_features}")
-                logger.error(f"  Feature weights: {self.feature_weights}")
-                raise ValueError("No main features available for non-baseline prediction")
-                
-            # Extract base features
-            features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
-            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
+            # Calculate aligned effects across cross-validation splits
+            cv_splits = self._get_cv_splits(dataset, n_splits=5)
+            cv_aligned_effects = []
             
-            # Add interaction features
-            for interaction in self.config.features.interactions:
-                # Skip if any component is missing
-                if any(f not in features1 for f in interaction):
-                    logger.warning(f"Missing base features for interaction: {interaction}")
-                    continue
+            for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
+                logger.info(f"\nEvaluating fold {fold}/5")
+                val_data = dataset._create_subset_dataset(val_idx)
+                
+                # Calculate aligned effects for validation set
+                for pref in val_data.preferences:
+                    # Get predictions in logit space
+                    base_pred = baseline_model.predict_preference(pref.bigram1, pref.bigram2)
+                    base_logit = -np.log(1/base_pred.probability - 1)
                     
-                # Create interaction name by joining all components
-                interaction_name = '_x_'.join(sorted(interaction))
-                
-                if interaction_name in self.selected_features:
-                    # Compute product of all component features
-                    features1[interaction_name] = np.prod([features1[f] for f in interaction])
-                    features2[interaction_name] = np.prod([features2[f] for f in interaction])
-                
-            logger.debug(f"Available features in bigram1: {list(features1.keys())}")
-            logger.debug(f"Available features in bigram2: {list(features2.keys())}")
-            
-            # Calculate predictions
-            total_effect = 0.0
-            uncertainty = 0.0
-            
-            if main_features:
-                logger.debug(f"Computing main feature effects for: {main_features}")
-                beta_samples = self.fit_result.stan_variable('beta')
-                main_diffs = np.array([features1[f] - features2[f] for f in main_features])
-                main_effects = np.dot(main_diffs, beta_samples.T)
-                total_effect += np.mean(main_effects)
-                uncertainty += np.std(main_effects)
-                
-            if control_features:
-                logger.debug(f"Computing control feature effects for: {control_features}")
-                gamma_samples = self.fit_result.stan_variable('gamma')
-                control_diffs = np.array([features1[f] - features2[f] for f in control_features])
-                control_effects = np.dot(control_diffs, gamma_samples.T)
-                total_effect += np.mean(control_effects)
-                uncertainty += np.std(control_effects)
-                
-            # Transform to probability
-            probability = 1 / (1 + np.exp(-total_effect))
-            
-            logger.debug(f"Prediction results:")
-            logger.debug(f"  Total effect: {total_effect:.4f}")
-            logger.debug(f"  Uncertainty: {uncertainty:.4f}")
-            logger.debug(f"  Probability: {probability:.4f}")
-            
-            prediction = ModelPrediction(
-                probability=float(probability),
-                uncertainty=float(uncertainty),
-                features_used=self.selected_features,
-                computation_time=time.perf_counter() - start_time
-            )
-            # Assertion to catch invalid returns
-            assert isinstance(prediction, ModelPrediction), f"Invalid prediction type: {type(prediction)}"
+                    feat_pred = feature_model.predict_preference(pref.bigram1, pref.bigram2)
+                    feat_logit = -np.log(1/feat_pred.probability - 1)
+                    
+                    # Calculate effect
+                    effect = feat_logit - base_logit
+                    
+                    # Align effect with preference
+                    aligned_effect = effect if pref.preferred else -effect
+                    cv_aligned_effects.append(aligned_effect)
 
-            self.prediction_cache.set(cache_key, prediction)
-            return prediction
+            cv_aligned_effects = np.array(cv_aligned_effects)
             
+            # Calculate overall importance metrics
+            mean_aligned_effect = np.mean(cv_aligned_effects)
+            effect_consistency = 1 - (np.std(cv_aligned_effects) / (np.abs(mean_aligned_effect) + 1e-6))
+            
+            # Log results
+            logger.info(f"\nFeature importance analysis for {feature}:")
+            logger.info(f"Mean aligned effect: {mean_aligned_effect:.4f}")
+            logger.info(f"Effect consistency: {effect_consistency:.4f}")
+            
+            # Calculate overall importance
+            importance = mean_aligned_effect * effect_consistency
+
+            # Check against threshold
+            threshold = self.config.feature_selection.thresholds.importance
+            logger.info(f"\nFeature {feature}:")
+            logger.info(f"  Importance: {importance:.4f} (threshold: {threshold})")
+            logger.info(f"  {'PASSED' if importance >= threshold else 'FAILED'} threshold")
+                    
+            return float(importance)
+
         except Exception as e:
-            logger.error(f"Error predicting preference: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")  # Add this to see full stack trace
-            return ModelPrediction(
-                probability=0.5,
-                uncertainty=1.0,
-                features_used=[],
-                computation_time=0.0
-            )
-                
-    def _check_diagnostics(self) -> None:
-            """Check MCMC diagnostics with concise reporting."""
-            try:
-                # Get summary statistics
-                summary = self.fit_result.summary()
-                
-                # Check R-hat convergence
-                rhat_col = next((col for col in summary.columns 
-                            if any(x in col.lower() for x in ['r_hat', 'rhat', 'r-hat'])), 
-                            None)
-                
-                if rhat_col:
-                    rhat = summary[rhat_col].astype(float)
-                    high_rhat_mask = rhat > 1.1
-                    if high_rhat_mask.any():
-                        n_high_rhat = high_rhat_mask.sum()
-                        n_total = len(rhat)
-                        logger.warning(f"{n_high_rhat}/{n_total} parameters have high R-hat (>1.1)")
-
-                # Check treedepth and divergences
-                if hasattr(self.fit_result, 'method_variables'):
-                    method_vars = self.fit_result.method_variables()
-                    
-                    # Check maximum treedepth
-                    treedepth = method_vars.get('treedepth__', None)
-                    if treedepth is not None:
-                        max_treedepth = self.config.model.max_treedepth
-                        max_treedepth_hits = (treedepth >= max_treedepth).mean()
-                        if max_treedepth_hits > 0.1:  # More than 10% hitting max
-                            logger.warning(f"{max_treedepth_hits*100:.1f}% of iterations hit max treedepth")
-                    
-                    # Check divergences
-                    divergent = method_vars.get('divergent__', None)
-                    if divergent is not None:
-                        n_divergent = divergent.sum()
-                        if n_divergent > 0:
-                            divergence_rate = n_divergent / len(divergent) * 100
-                            logger.warning(f"{divergence_rate:.1f}% divergent transitions")
-
-                # If there are any issues, run full diagnostics but suppress output
-                if hasattr(self.fit_result, 'diagnose'):
-                    diagnostic_info = self.fit_result.diagnose()
-                    # Store diagnostic info but don't display it
-                    self._diagnostic_info = diagnostic_info
-                            
-            except Exception as e:
-                logger.warning(f"Error in diagnostics: {str(e)}")
-                                                                                        
+            logger.error(f"Error calculating feature importance: {str(e)}")
+            return -float('inf')
+                                                                                       
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------

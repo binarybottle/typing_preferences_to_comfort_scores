@@ -131,28 +131,19 @@ class ModelSettings(BaseModel):
     
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
-    metric_weights: Dict[str, float]
-    thresholds: FeatureSelectionThresholds  # Add this field
-    min_metrics_passed: int = Field(default=2)
-    metrics_file: str
-    model_file: str
-
-    @validator('metric_weights')
-    def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
-        total = sum(v.values())
-        if not np.isclose(total, 1.0, rtol=1e-5):
-            raise ValueError(f"Metric weights must sum to 1.0, got {total}")
-        return v
-
-    @validator('min_metrics_passed')
-    def validate_min_metrics(cls, v: int) -> int:
-        if v not in [2, 3]:
-            raise ValueError('min_metrics_passed must be 2 or 3')
-        return v
-
-    class Config:
-        validate_assignment = True
-
+    importance_threshold: float = Field(
+        default=0.05,  # Threshold for aligned effect importance
+        gt=0.0         # Must be positive
+    )
+    cross_validation: Dict[str, int] = Field(
+        default={
+            'n_splits': 5,        # Number of CV folds for evaluating importance
+            'min_fold_size': 100  # Minimum number of preferences per fold
+        }
+    )
+    metrics_file: str  # File to store feature metrics
+    model_file: str    # File to store feature selection model
+    
 class FeaturesConfig(BaseModel):
     """Configuration for features and their interactions."""
     base_features: List[str]
