@@ -251,6 +251,12 @@ class PreferenceModel:
             fit_purpose: Optional[str] = None) -> None:
         """Fit model with specified features."""
         try:
+            # Store feature names
+            self.feature_names = features
+            
+            # Compute and store feature statistics
+            self.feature_stats = self._compute_feature_statistics(dataset)
+
             # Cleanup before fitting
             for attr in ['fit_result', 'feature_weights']:
                 if hasattr(self, attr):
@@ -1216,8 +1222,8 @@ class PreferenceModel:
                 raise NotFittedError("Model must be fit before making predictions")
 
             # Get features for both bigrams
-            features1 = self.feature_extractor.extract_features(bigram1)
-            features2 = self.feature_extractor.extract_features(bigram2)
+            features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
+            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
 
             # Standardize features using stored statistics
             X1 = []
@@ -1225,43 +1231,43 @@ class PreferenceModel:
             for feature in self.feature_names:
                 feat1 = features1.get(feature, 0.0)
                 feat2 = features2.get(feature, 0.0)
+
+                # 'typing_time' feature
+                # If either timing is None (meaning no timing data available),
+                # sets both timings to 0.0 to handle missing data
                 if feature == 'typing_time' and (feat1 is None or feat2 is None):
                     feat1 = 0.0
                     feat2 = 0.0
                 
-                # Get standardization parameters
-                if not hasattr(self, 'feature_stats'):
-                    raise ValueError("Feature statistics not available")
                 mean = self.feature_stats[feature]['mean']
                 std = self.feature_stats[feature]['std']
                 
-                # Standardize
                 X1.append((feat1 - mean) / std)
                 X2.append((feat2 - mean) / std)
 
             X1 = np.array(X1).reshape(1, -1)
             X2 = np.array(X2).reshape(1, -1)
 
-            # Get model predictions
-            logits = self.fit_result.predict({'X1': X1, 'X2': X2})
+            # Get model predictions using y_pred from Stan results
+            y_pred = self.fit_result.stan_variable('y_pred')  # Use stan_variable instead of get
+        
+            # Convert to probability
+            probability = 1 / (1 + np.exp(-y_pred))
             
-            # Convert logits to probabilities
-            probability = 1 / (1 + np.exp(-logits))
-            
-            # Get prediction uncertainty (can be computed from multiple samples if available)
-            uncertainty = np.std(logits) if isinstance(logits, np.ndarray) else 0.0
+            # Get prediction uncertainty
+            uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
 
             return ModelPrediction(
                 probability=float(np.mean(probability)),
                 uncertainty=float(uncertainty),
                 features_used=list(self.feature_names),
-                computation_time=0.0  # Could add timing if needed
+                computation_time=0.0
             )
 
         except Exception as e:
             logger.error(f"Error in predict_preference: {str(e)}")
             raise
-    
+            
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features by evaluating their importance for prediction."""
         try:
@@ -1548,7 +1554,7 @@ class PreferenceModel:
             importance = mean_aligned_effect * effect_consistency
 
             # Check against threshold
-            threshold = self.config.feature_selection.thresholds.importance
+            threshold = self.config.feature_selection.importance_threshold
             logger.info(f"\nFeature {feature}:")
             logger.info(f"  Importance: {importance:.4f} (threshold: {threshold})")
             logger.info(f"  {'PASSED' if importance >= threshold else 'FAILED'} threshold")
@@ -1558,6 +1564,31 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
             return -float('inf')
+
+    def _compute_feature_statistics(self, dataset: PreferenceDataset) -> Dict[str, Dict[str, float]]:
+        """Compute mean and std for each feature."""
+        feature_stats = defaultdict(lambda: {'values': []})
+        
+        # Collect all feature values
+        for pref in dataset.preferences:
+            for feature in self.feature_names:
+                feat1 = pref.features1.get(feature, 0.0)
+                feat2 = pref.features2.get(feature, 0.0)
+                if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                    feat1 = 0.0
+                    feat2 = 0.0
+                feature_stats[feature]['values'].extend([feat1, feat2])
+        
+        # Compute statistics
+        stats = {}
+        for feature, data in feature_stats.items():
+            values = np.array(data['values'])
+            stats[feature] = {
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values)) if np.std(values) > 0 else 1.0
+            }
+        
+        return stats
                                                                                        
     #--------------------------------------------
     # Cross-validation and splitting methods
