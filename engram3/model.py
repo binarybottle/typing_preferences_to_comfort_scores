@@ -294,20 +294,20 @@ class PreferenceModel:
             self.selected_features = main_features + list(control_features)
 
             # Log data dimensions
-            logger.info("Data dimensions:")
-            logger.info(f"  Preferences: {processed_data['N']}")
-            logger.info(f"  Participants: {processed_data['P']}")  # Changed to use 'P'
-            if not main_features:
-                logger.info("  Using dummy main feature for control-only model")
-            logger.info(f"  Main features: {processed_data['F']}")
-            logger.info(f"  Control features: {processed_data['C']}")
+            #logger.info("Data dimensions:")
+            #logger.info(f"  Preferences: {processed_data['N']}")
+            #logger.info(f"  Participants: {processed_data['P']}")  # Changed to use 'P'
+            #if not main_features:
+            #    logger.info("  Using dummy main feature for control-only model")
+            #logger.info(f"  Main features: {processed_data['F']}")
+            #logger.info(f"  Control features: {processed_data['C']}")
 
             # Log sampling configuration
-            logger.info("Starting sampling with "
-                    f"{self.config.model.chains} chains, "
-                    f"{self.config.model.warmup} warmup iterations, "
-                    f"{self.config.model.n_samples} sampling iterations"
-                    f"{f' ({fit_purpose})' if fit_purpose else ''}")
+            #logger.info("Starting sampling with "
+            #        f"{self.config.model.chains} chains, "
+            #        f"{self.config.model.warmup} warmup iterations, "
+            #        f"{self.config.model.n_samples} sampling iterations"
+            #        f"{f' ({fit_purpose})' if fit_purpose else ''}")
 
             # Stan sampling
             self.fit_result = self._sample_with_retry(
@@ -1465,7 +1465,7 @@ class PreferenceModel:
                     X2[:, main_features.index(feature)] if feature in main_features
                     else C2[:, control_features.index(feature)]
                 ]))
-                logger.info(f"  Standardized - mean: {mean:.3f}, std: {std:.3f}")
+                #logger.info(f"  Standardized - mean: {mean:.3f}, std: {std:.3f}")
 
             return {
                 'N': len(y),
@@ -1540,25 +1540,21 @@ class PreferenceModel:
                     cv_aligned_effects.append(aligned_effect)
 
             cv_aligned_effects = np.array(cv_aligned_effects)
-            
-            # Calculate overall importance metrics
+
+            # Calculate metrics
             mean_aligned_effect = np.mean(cv_aligned_effects)
-            effect_consistency = 1 - (np.std(cv_aligned_effects) / (np.abs(mean_aligned_effect) + 1e-6))
+            effect_std = np.std(cv_aligned_effects)
+            
+            # Calculate importance as magnitude of effect scaled by consistency
+            effect_magnitude = abs(mean_aligned_effect)
+            effect_consistency = 1 - (effect_std / (effect_magnitude + 1e-6))
+            importance = effect_magnitude * max(0, effect_consistency)  # Only use positive consistency
             
             # Log results
             logger.info(f"\nFeature importance analysis for {feature}:")
             logger.info(f"Mean aligned effect: {mean_aligned_effect:.4f}")
             logger.info(f"Effect consistency: {effect_consistency:.4f}")
             
-            # Calculate overall importance
-            importance = mean_aligned_effect * effect_consistency
-
-            # Check against threshold
-            threshold = self.config.feature_selection.importance_threshold
-            logger.info(f"\nFeature {feature}:")
-            logger.info(f"  Importance: {importance:.4f} (threshold: {threshold})")
-            logger.info(f"  {'PASSED' if importance >= threshold else 'FAILED'} threshold")
-                    
             return float(importance)
 
         except Exception as e:

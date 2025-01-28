@@ -308,11 +308,11 @@ def main():
             logger.info(f"  After filtering: {len(processed_train.preferences)} preferences")
             logger.info(f"  Participants: {len(processed_train.participants)}")
 
-            logger.info("\nFeatures prepared:")
-            logger.info(f"Base features: {base_features}")
-            logger.info(f"Interaction features: {interaction_features}")
-            logger.info(f"Control features: {control_features}")
-            logger.info(f"All features: {all_features}")
+            logger.info("Features prepared:")
+            logger.info(f"  Base features: {base_features}")
+            logger.info(f"  Interaction features: {interaction_features}")
+            logger.info(f"  Control features: {control_features}")
+            logger.info(f"  All features: {all_features}")
 
             model = PreferenceModel(config=config)
             
