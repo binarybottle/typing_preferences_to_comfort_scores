@@ -205,9 +205,9 @@ def main():
     try:
         # Load configuration and convert to Pydantic model
         config_dict = load_config(args.config)
-        print(f"Loaded config: {config_dict}")
+        print(f"\nLoaded config: {config_dict}")
         config = Config(**config_dict)
-        print(f"Config features: {config.features}")
+        print(f"\nConfig features: {config.features}")
 
         # Setup logging using LoggingManager
         LoggingManager(config).setup_logging()        

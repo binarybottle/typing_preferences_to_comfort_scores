@@ -1394,7 +1394,7 @@ class PreferenceModel:
                 feature_stats[feature] = {'mean': mean, 'std': std}
                 
                 logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
-                logger.info(f"  Original - mean: {mean:.3f}, std: {std:.3f}")
+                logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
 
             # Build standardized matrices
             X1, X2 = [], []  # Main feature matrices
@@ -1520,7 +1520,7 @@ class PreferenceModel:
             cv_aligned_effects = []
             
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
-                logger.info(f"\nEvaluating fold {fold}/5")
+                logger.info(f"Evaluating fold {fold}/5")
                 val_data = dataset._create_subset_dataset(val_idx)
                 
                 # Calculate aligned effects for validation set
@@ -1551,40 +1551,16 @@ class PreferenceModel:
             importance = effect_magnitude * max(0, effect_consistency)  # Only use positive consistency
             
             # Log results
-            logger.info(f"\nFeature importance analysis for {feature}:")
-            logger.info(f"Mean aligned effect: {mean_aligned_effect:.4f}")
-            logger.info(f"Effect consistency: {effect_consistency:.4f}")
+            logger.info(f"Feature importance analysis for {feature}:")
+            logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
+            logger.info(f"  Effect consistency: {effect_consistency:.4f}")
+            logger.info(f"  Importance: {importance:.4f}")
             
             return float(importance)
-
+        
         except Exception as e:
-            logger.error(f"Error calculating feature importance: {str(e)}")
+            logger.error(f"  Error calculating feature importance: {str(e)}")
             return -float('inf')
-
-    def _compute_feature_statistics(self, dataset: PreferenceDataset) -> Dict[str, Dict[str, float]]:
-        """Compute mean and std for each feature."""
-        feature_stats = defaultdict(lambda: {'values': []})
-        
-        # Collect all feature values
-        for pref in dataset.preferences:
-            for feature in self.feature_names:
-                feat1 = pref.features1.get(feature, 0.0)
-                feat2 = pref.features2.get(feature, 0.0)
-                if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                    feat1 = 0.0
-                    feat2 = 0.0
-                feature_stats[feature]['values'].extend([feat1, feat2])
-        
-        # Compute statistics
-        stats = {}
-        for feature, data in feature_stats.items():
-            values = np.array(data['values'])
-            stats[feature] = {
-                'mean': float(np.mean(values)),
-                'std': float(np.std(values)) if np.std(values) > 0 else 1.0
-            }
-        
-        return stats
                                                                                        
     #--------------------------------------------
     # Cross-validation and splitting methods
