@@ -1,84 +1,57 @@
 # model.py
 """
-Hierarchical Bayesian model for keyboard layout preference learning.
-
+Bayesian preference learning model for keyboard layout evaluation.
 Core functionality:
-  - Bayesian inference using Bradley-Terry preference model structure:
-    - Feature-based comfort score estimation
-    - Participant-level random effects
-    - Uncertainty quantification via MCMC sampling
-    - Stan backend integration
-    - Automated resource management
+  - Feature-based preference modeling using Bradley-Terry framework
+  - Hierarchical model with participant-level random effects
+  - MCMC sampling via Stan backend
+  - Feature selection pipeline
 
 Key components:
-  1. Sequential Feature Selection:
-    - Round-robin comparison of features
-    - Context-aware evaluation with previously selected features
-    - Three independent metrics:
-      * Model effect magnitude
-      * Effect consistency across cross-validation
-      * Predictive power
-    - Feature interaction handling
+  1. Model Structure:
+    - Feature-based comfort scoring
+    - Participant-specific random effects
+    - Hierarchical Bayesian inference
+    - Control vs. main feature handling
+
+  2. Feature Selection:
+    - Cross-validated importance scoring
+    - Effect magnitude and consistency metrics
+    - Participant-aware validation splits
     - Control feature separation
 
-  2. Model Operations:
-    - Efficient data preparation for Stan
-    - MCMC sampling with diagnostics
-    - Cross-validation with participant grouping
-    - Feature weight extraction and caching
-    - Memory usage optimization
-
   3. Prediction Pipeline:
-    - Bigram comfort score estimation
-    - Preference probability prediction
+    - Preference probability estimation
     - Uncertainty quantification
-    - Cached predictions for efficiency
-    - Baseline model handling
+    - Comfort score calculation
+    - Feature interaction handling
 
-  4. Evaluation Mechanisms:
-    - Classification metrics (accuracy, AUC)
-    - Effect size estimation
-    - Cross-validation stability
-    - Model diagnostics
-    - Transitivity checks
-    - Parameter convergence monitoring
+  4. Resource Management:
+    - Stan model compilation and cleanup
+    - Memory usage optimization
+    - Temporary file handling
+    - Feature data caching
 
-  5. Output Handling:
-    - Detailed metric reporting
-    - State serialization
-    - Comprehensive logging
-    - CSV export capabilities
-    - Diagnostic information export
+  5. Model Operations:
+    - Data preprocessing and normalization
+    - MCMC sampling with diagnostics
+    - Cross-validation
+    - Model serialization
 
 Classes:
-    PreferenceModel: Main class implementing the Bayesian preference learning pipeline
+    PreferenceModel: Main class implementing the preference learning pipeline
         Methods:
             fit(): Train model on preference data
             predict_preference(): Generate predictions for bigram pairs
             evaluate(): Compute model performance metrics
-            cross_validate(): Perform cross-validation analysis
+            select_features(): Perform feature selection
             save()/load(): Model serialization
 
-Example:
-    >>> model = PreferenceModel(config)
-    >>> model.fit(dataset)
-    >>> prediction = model.predict_preference("th", "he")
-    >>> print(f"Preference probability: {prediction.probability:.2f} ± {prediction.uncertainty:.2f}")
-
-Notes:
-    - Features are pre-normalized except typing_time
-    - Uses participant-based cross-validation splits
-    - Thread-safe Stan implementation
-    - Comprehensive error handling
-    - Detailed logging system
-    - Memory usage monitoring
-    - Temporary file management
-
 Dependencies:
-    - cmdstanpy: Stan model compilation and sampling
-    - numpy: Numerical computations
-    - pandas: Data management
+    - cmdstanpy: Stan model interface
+    - numpy: Numerical operations
     - sklearn: Evaluation metrics
+    - pandas: Data management
     - psutil: Resource monitoring
 """
 import cmdstanpy
@@ -97,6 +70,7 @@ from itertools import combinations
 import traceback
 from collections import defaultdict
 import tempfile
+import os
 import shutil
 import psutil
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -148,33 +122,52 @@ class PreferenceModel:
             raise
 
     def reset_state(self):
-        """Reset model state variables."""
-        self.fit_result = None
+        """Reset all model state variables to initial values."""
+        # Core model state
+        self.fit_result = None 
+        self.is_fitted = False
         self.feature_names = None
         self.selected_features = []
-        self.interaction_metadata = {}
-        self.dataset = None
+        
+        # Feature related state
         self.feature_weights = None
-        self.feature_extractor = None
-        self.is_baseline_model = False
-        self._importance_calculator = None
-        self.is_fitted = False
         self.feature_stats = {}
-        self._feature_data_cache = {}
-
-    def cleanup(self):
-        """Clean up model resources."""
-        if hasattr(self, 'fit_result'):
-            del self.fit_result
+        self.interaction_metadata = {}
+        
+        # Dataset related state
+        self.dataset = None
+        self.feature_extractor = None
+        
+        # Cache related state
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
-        self.reset_state()
+        if hasattr(self, '_temp_models'):
+            self._temp_models = []
+            
+        # Computation state
+        self.is_baseline_model = False
+        self._importance_calculator = None
+        
+        # Clear any other temporary attributes
+        attrs_to_clear = [
+            '_dataset_size',
+            '_dataset_participants',
+            'processed_dataset',
+            '_feature_importance_cache'
+        ]
+        for attr in attrs_to_clear:
+            if hasattr(self, attr):
+                delattr(self, attr)
+                
+        # Force garbage collection
         gc.collect()
-
+        
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None,
         fit_purpose: Optional[str] = None) -> None:
         """Fit model with specified features."""
         try:
+            self._check_memory_usage()  # Check before fitting
+
             # Reset state and store feature names
             self.reset_state()
             self.feature_names = features
@@ -233,79 +226,111 @@ class PreferenceModel:
             logger.error(f"Error in fit: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-
-    @property
-    def feature_scale(self) -> float:
-        """Prior scale for feature weights."""
-        return self.config.model.feature_scale
         
-    @property
-    def participant_scale(self) -> float:
-        """Prior scale for participant effects."""
-        return self.config.model.participant_scale
-        
-    # NOTE: Using direct attribute instead of property for cache
-    _feature_data_cache_ = {}
+        finally:
+            self.cleanup()  # Clean up after fitting
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-    def _sample_with_retry(self, **kwargs):
-        """Attempt sampling with retries on failure"""
-        return self.model.sample(**kwargs)
-
-    def _update_feature_weights(self) -> None:
-        """Update feature weights from fitted model for both main and control features."""
+    def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
+        """Predict preference between two bigrams."""
+        if not self.is_fitted:
+            raise NotFittedError("Model must be fit before making predictions")
+            
         try:
-            self.feature_weights = {}
-            
-            if not hasattr(self, 'fit_result'):
-                raise ValueError("Model not fitted. Call fit() first.")
-            
-            # Get main feature weights (beta) if any exist
-            main_features = list(dict.fromkeys(
-                [f for f in self.feature_names if f not in self.config.features.control_features]
-            ))
-            
-            if main_features:  # Only process beta if we have main features
-                beta = self.fit_result.stan_variable('beta')
-                logger.debug(f"Beta shape: {beta.shape}")
-                logger.debug(f"Main features: {main_features}")
-                
-                if beta.shape[1] != len(main_features):
-                    raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
-                
-                # Update weights for main features
-                for i, feature in enumerate(main_features):
-                    self.feature_weights[feature] = (
-                        float(np.mean(beta[:, i])),
-                        float(np.std(beta[:, i]))
-                    )
-            
-            # Get control feature weights (gamma) if any exist
-            control_features = list(dict.fromkeys(self.config.features.control_features))
-            if control_features:
-                try:
-                    gamma = self.fit_result.stan_variable('gamma')
-                    if gamma.shape[1] != len(control_features):
-                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
-                        
-                    for i, feature in enumerate(control_features):
-                        self.feature_weights[feature] = (
-                            float(np.mean(gamma[:, i])),
-                            float(np.std(gamma[:, i]))
-                        )
-                except Exception as e:
-                    logger.error(f"Error processing control features: {str(e)}")
-                    raise
+            # Get features for both bigrams
+            features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
+            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
 
-            logger.debug("Updated weights:")
-            for feature, (mean, std) in self.feature_weights.items():
-                feature_type = "control" if feature in control_features else "main"
-                logger.debug(f"  {feature} ({feature_type}): {mean:.4f} ± {std:.4f}")
+            # Initialize feature matrices
+            X1, X2 = [], []  # Main features
+            C1, C2 = [], []  # Control features
+            
+            # Split features into main and control
+            control_features = self.config.features.control_features
+            main_features = [f for f in self.feature_names if f not in control_features]
+            
+            # Process main features
+            if not main_features:
+                X1 = []  # Empty list for no main features
+                X2 = []
+            else:
+                for feature in main_features:
+                    feat1 = features1.get(feature, 0.0)
+                    feat2 = features2.get(feature, 0.0)
+
+                    if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                        feat1 = feat2 = 0.0
+                        
+                    # Use feature stats if available, otherwise use raw values
+                    if hasattr(self, 'feature_stats') and feature in self.feature_stats:
+                        mean = self.feature_stats[feature]['mean']
+                        std = self.feature_stats[feature]['std']
+                        feat1 = (feat1 - mean) / std
+                        feat2 = (feat2 - mean) / std
+                        
+                    X1.append(feat1)
+                    X2.append(feat2)
+                
+            # Process control features
+            for feature in control_features:
+                feat1 = features1.get(feature, 0.0)
+                feat2 = features2.get(feature, 0.0)
+                
+                # Use feature stats if available, otherwise use raw values
+                if hasattr(self, 'feature_stats') and feature in self.feature_stats:
+                    mean = self.feature_stats[feature]['mean']
+                    std = self.feature_stats[feature]['std']
+                    feat1 = (feat1 - mean) / std
+                    feat2 = (feat2 - mean) / std
                     
+                C1.append(feat1)
+                C2.append(feat2)
+
+            # Convert to arrays with error checking
+            try:
+                X1 = np.array(X1, dtype=np.float64).reshape(1, -1)
+                X2 = np.array(X2, dtype=np.float64).reshape(1, -1)
+                C1 = np.array(C1, dtype=np.float64).reshape(1, -1)
+                C2 = np.array(C2, dtype=np.float64).reshape(1, -1)
+            except Exception as e:
+                logger.error(f"Error converting feature arrays: {str(e)}")
+                raise ValueError(f"Feature conversion failed: {str(e)}")
+
+            # Verify array shapes
+            if X1.shape[1] != len(main_features):
+                raise ValueError(f"Main feature shape mismatch: {X1.shape[1]} != {len(main_features)}")
+            if C1.shape[1] != len(control_features):
+                raise ValueError(f"Control feature shape mismatch: {C1.shape[1]} != {len(control_features)}")
+
+            try:
+                # Get model predictions
+                y_pred = self.fit_result.stan_variable('y_pred')
+                probability = 1 / (1 + np.exp(-y_pred))
+                uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
+
+                # Ensure valid probability
+                probability = np.clip(probability, 0.001, 0.999)
+                
+                return ModelPrediction(
+                    probability=float(np.mean(probability)),
+                    uncertainty=float(uncertainty),
+                    features_used=main_features + list(control_features),
+                    computation_time=0.0
+                )
+
+            except Exception as e:
+                logger.error(f"Error in prediction calculation: {str(e)}")
+                raise ValueError(f"Prediction calculation failed: {str(e)}")
+
         except Exception as e:
-            logger.error(f"Error updating feature weights: {str(e)}")
-            raise
-                                                                            
+            logger.error(f"Error in predict_preference: {str(e)}")
+            # Return balanced prediction on error
+            return ModelPrediction(
+                probability=0.5,
+                uncertainty=1.0,
+                features_used=[],
+                computation_time=0.0
+            )
+                            
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance."""
         try:
@@ -349,6 +374,76 @@ class PreferenceModel:
             logger.error(f"Error in evaluate: {str(e)}")
             return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
 
+    #--------------------------------------------
+    # Resource management methods
+    #--------------------------------------------
+    def cleanup(self):
+        """Clean up model resources."""
+        if hasattr(self, 'fit_result'):
+            del self.fit_result
+        if hasattr(self, '_feature_data_cache'):
+            self._feature_data_cache.clear()
+        # Clean up temp directories
+        self.cleanup_temp_dirs()
+        self.reset_state()
+        gc.collect()
+
+    def cleanup_temp_dirs(self):
+        """Aggressively clean up temporary directories and files."""
+        try:
+            temp_dir = tempfile.gettempdir()
+            
+            # Items to clean up (case-insensitive patterns)
+            patterns = [
+                'stan', 'cmdstan', 'preference_model',
+                'tmp', 'temp', '.json', '.csv'
+            ]
+            
+            cleaned_space = 0
+            
+            for root, dirs, files in os.walk(temp_dir, topdown=False):
+                # Remove matching files
+                for file in files:
+                    if any(pat.lower() in file.lower() for pat in patterns):
+                        try:
+                            file_path = os.path.join(root, file)
+                            size = os.path.getsize(file_path)
+                            os.remove(file_path)
+                            cleaned_space += size
+                        except Exception as e:
+                            logger.debug(f"Could not remove file {file}: {e}")
+                            
+                # Remove matching empty directories
+                for dir in dirs:
+                    if any(pat.lower() in dir.lower() for pat in patterns):
+                        try:
+                            dir_path = os.path.join(root, dir)
+                            if not os.listdir(dir_path):  # Only if empty
+                                os.rmdir(dir_path)
+                        except Exception as e:
+                            logger.debug(f"Could not remove directory {dir}: {e}")
+                            
+            logger.info(f"Cleaned up {cleaned_space / (1024*1024):.1f}MB from temp directory")
+            
+        except Exception as e:
+            logger.error(f"Error during temp cleanup: {e}")
+                                    
+    def cleanup_temp_models(self):
+        """Clean up temporary models created during evaluation."""
+        if hasattr(self, '_temp_models'):
+            models_to_remove = []
+            for model in self._temp_models:
+                if hasattr(model, 'cleanup'):
+                    model.cleanup()
+                models_to_remove.append(model)
+                
+            for model in models_to_remove:
+                if model in self._temp_models:
+                    self._temp_models.remove(model)
+            
+            # Clear list after cleanup
+            self._temp_models = []
+
     def _create_temp_model(self):
         """Create a temporary model copy for evaluation."""
         temp_model = type(self)(config=self.config)
@@ -375,25 +470,53 @@ class PreferenceModel:
 
         return ModelContext(temp_model, self._temp_models)
 
-    def cleanup_temp_models(self):
-        """Clean up temporary models created during evaluation."""
-        if hasattr(self, '_temp_models'):
-            models_to_remove = []
-            for model in self._temp_models:
-                if hasattr(model, 'cleanup'):
-                    model.cleanup()
-                models_to_remove.append(model)
+    def _add_to_cache(self, cache: Dict, key: str, value: Any) -> None:
+        """Add item to cache with size management."""
+        # Set maximum cache size (adjust as needed)
+        MAX_CACHE_SIZE = 1000  
+        
+        if len(cache) >= MAX_CACHE_SIZE:
+            # Remove oldest 20% of entries when cache is full
+            remove_count = MAX_CACHE_SIZE // 5
+            for k in list(cache.keys())[:remove_count]:
+                del cache[k]
                 
-            for model in models_to_remove:
-                if model in self._temp_models:
-                    self._temp_models.remove(model)
+        cache[key] = value
+
+    def _check_memory_usage(self):
+        """Monitor memory usage and clean up if needed."""
+        import psutil
+        process = psutil.Process()
+        memory_percent = process.memory_percent()
+        
+        # If using more than 80% memory, force cleanup
+        if memory_percent > 80:
+            logger.warning(f"High memory usage ({memory_percent:.1f}%). Cleaning up...")
+            self.cleanup()
+
+    def check_disk_space(self, required_mb: int = 2000) -> bool:
+        """
+        Check if there's enough disk space available.
+        
+        Args:
+            required_mb: Required space in megabytes
+        Returns:
+            bool: True if enough space available
+        """
+        try:
+            # Check temp directory space
+            temp_dir = tempfile.gettempdir()
+            stats = shutil.disk_usage(temp_dir)
+            available_mb = stats.free / (1024 * 1024)  # Convert to MB
             
-            # Clear list after cleanup
-            self._temp_models = []
-            
+            return available_mb >= required_mb
+        except Exception as e:
+            logger.error(f"Error checking disk space: {e}")
+            return False
+        
     #--------------------------------------------
-    # Data preparation and feature methods
-    #--------------------------------------------
+    # Feature handling methods
+    #--------------------------------------------  
     def _get_feature_data(self, feature: str, dataset: Optional[PreferenceDataset] = None) -> Dict[str, np.ndarray]:
         """
         Centralized method for getting feature data with caching.
@@ -559,6 +682,51 @@ class PreferenceModel:
             logger.error(f"Unexpected error extracting features for bigram '{bigram}': {str(e)}")
             raise FeatureError(f"Feature extraction failed: {str(e)}")
         
+    def get_feature_weights(self, include_control: bool = True) -> Dict[str, Tuple[float, float]]:
+        """Get feature weights and their uncertainties."""
+        if not hasattr(self, 'fit_result'):
+            raise ValueError("Model not fitted. Call fit() first.")
+            
+        try:
+            weights = {}
+            
+            # Get main feature weights (beta)
+            main_features = [f for f in self.feature_names 
+                            if f not in self.config.features.control_features]
+            
+            if main_features:  # Only process beta if we have main features
+                beta = self.fit_result.stan_variable('beta')
+                
+                if beta.shape[1] != len(main_features):
+                    raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
+                
+                for i, feature in enumerate(main_features):
+                    weights[feature] = (
+                        float(np.mean(beta[:, i])),
+                        float(np.std(beta[:, i]))
+                    )
+            
+            # Get control feature weights (gamma) if requested
+            if include_control:
+                control_features = self.config.features.control_features
+                if control_features:
+                    gamma = self.fit_result.stan_variable('gamma')
+                    
+                    if gamma.shape[1] != len(control_features):
+                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
+                    
+                    for i, feature in enumerate(control_features):
+                        weights[feature] = (
+                            float(np.mean(gamma[:, i])),
+                            float(np.std(gamma[:, i]))
+                        )
+            
+            return weights
+            
+        except Exception as e:
+            logger.error(f"Error getting feature weights: {str(e)}")
+            return {}
+                                                        
     def get_bigram_comfort_scores(self, bigram: str) -> Tuple[float, float]:
         """
         Get comfort score and uncertainty for a single bigram.
@@ -609,239 +777,9 @@ class PreferenceModel:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
         
-    def get_feature_weights(self, include_control: bool = True) -> Dict[str, Tuple[float, float]]:
-        """Get feature weights and their uncertainties."""
-        if not hasattr(self, 'fit_result'):
-            raise ValueError("Model not fitted. Call fit() first.")
-            
-        try:
-            weights = {}
-            
-            # Get main feature weights (beta)
-            main_features = [f for f in self.feature_names 
-                            if f not in self.config.features.control_features]
-            
-            if main_features:  # Only process beta if we have main features
-                beta = self.fit_result.stan_variable('beta')
-                
-                if beta.shape[1] != len(main_features):
-                    raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
-                
-                for i, feature in enumerate(main_features):
-                    weights[feature] = (
-                        float(np.mean(beta[:, i])),
-                        float(np.std(beta[:, i]))
-                    )
-            
-            # Get control feature weights (gamma) if requested
-            if include_control:
-                control_features = self.config.features.control_features
-                if control_features:
-                    gamma = self.fit_result.stan_variable('gamma')
-                    
-                    if gamma.shape[1] != len(control_features):
-                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
-                    
-                    for i, feature in enumerate(control_features):
-                        weights[feature] = (
-                            float(np.mean(gamma[:, i])),
-                            float(np.std(gamma[:, i]))
-                        )
-            
-            return weights
-            
-        except Exception as e:
-            logger.error(f"Error getting feature weights: {str(e)}")
-            return {}
-                                                        
     #--------------------------------------------
-    # Feature selection and evaluation methods
-    #--------------------------------------------  
-    def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
-        """Predict preference between two bigrams."""
-        if not self.is_fitted:
-            raise NotFittedError("Model must be fit before making predictions")
-            
-        try:
-            # Get features for both bigrams
-            features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
-            features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
-
-            # Initialize feature matrices
-            X1, X2 = [], []  # Main features
-            C1, C2 = [], []  # Control features
-            
-            # Split features into main and control
-            control_features = self.config.features.control_features
-            main_features = [f for f in self.feature_names if f not in control_features]
-            
-            # Process main features
-            if not main_features:
-                X1 = []  # Empty list for no main features
-                X2 = []
-            else:
-                for feature in main_features:
-                    feat1 = features1.get(feature, 0.0)
-                    feat2 = features2.get(feature, 0.0)
-
-                    if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                        feat1 = feat2 = 0.0
-                        
-                    # Use feature stats if available, otherwise use raw values
-                    if hasattr(self, 'feature_stats') and feature in self.feature_stats:
-                        mean = self.feature_stats[feature]['mean']
-                        std = self.feature_stats[feature]['std']
-                        feat1 = (feat1 - mean) / std
-                        feat2 = (feat2 - mean) / std
-                        
-                    X1.append(feat1)
-                    X2.append(feat2)
-                
-            # Process control features
-            for feature in control_features:
-                feat1 = features1.get(feature, 0.0)
-                feat2 = features2.get(feature, 0.0)
-                
-                # Use feature stats if available, otherwise use raw values
-                if hasattr(self, 'feature_stats') and feature in self.feature_stats:
-                    mean = self.feature_stats[feature]['mean']
-                    std = self.feature_stats[feature]['std']
-                    feat1 = (feat1 - mean) / std
-                    feat2 = (feat2 - mean) / std
-                    
-                C1.append(feat1)
-                C2.append(feat2)
-
-            # Convert to arrays with error checking
-            try:
-                X1 = np.array(X1, dtype=np.float64).reshape(1, -1)
-                X2 = np.array(X2, dtype=np.float64).reshape(1, -1)
-                C1 = np.array(C1, dtype=np.float64).reshape(1, -1)
-                C2 = np.array(C2, dtype=np.float64).reshape(1, -1)
-            except Exception as e:
-                logger.error(f"Error converting feature arrays: {str(e)}")
-                raise ValueError(f"Feature conversion failed: {str(e)}")
-
-            # Verify array shapes
-            if X1.shape[1] != len(main_features):
-                raise ValueError(f"Main feature shape mismatch: {X1.shape[1]} != {len(main_features)}")
-            if C1.shape[1] != len(control_features):
-                raise ValueError(f"Control feature shape mismatch: {C1.shape[1]} != {len(control_features)}")
-
-            try:
-                # Get model predictions
-                y_pred = self.fit_result.stan_variable('y_pred')
-                probability = 1 / (1 + np.exp(-y_pred))
-                uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
-
-                # Ensure valid probability
-                probability = np.clip(probability, 0.001, 0.999)
-                
-                return ModelPrediction(
-                    probability=float(np.mean(probability)),
-                    uncertainty=float(uncertainty),
-                    features_used=main_features + list(control_features),
-                    computation_time=0.0
-                )
-
-            except Exception as e:
-                logger.error(f"Error in prediction calculation: {str(e)}")
-                raise ValueError(f"Prediction calculation failed: {str(e)}")
-
-        except Exception as e:
-            logger.error(f"Error in predict_preference: {str(e)}")
-            # Return balanced prediction on error
-            return ModelPrediction(
-                probability=0.5,
-                uncertainty=1.0,
-                features_used=[],
-                computation_time=0.0
-            )
-                            
-    def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
-        """Select features by evaluating their importance for prediction."""
-        try:
-            self.dataset = dataset
-            
-            # Preprocess dataset
-            logger.info("Preprocessing dataset for feature selection...")
-            valid_prefs = []
-            for pref in dataset.preferences:
-                valid = True
-                for feature in all_features:
-                    if (pref.features1.get(feature) is None or 
-                        pref.features2.get(feature) is None):
-                        valid = False
-                        break
-                if valid:
-                    valid_prefs.append(pref)
-            
-            # Create processed dataset
-            self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
-            self.processed_dataset.preferences = valid_prefs
-            self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
-            self.processed_dataset.file_path = dataset.file_path
-            self.processed_dataset.config = dataset.config
-            self.processed_dataset.control_features = dataset.control_features
-            self.processed_dataset.feature_extractor = dataset.feature_extractor
-            self.processed_dataset.feature_names = dataset.feature_names
-            self.processed_dataset.all_bigrams = dataset.all_bigrams
-            self.processed_dataset.all_bigram_features = dataset.all_bigram_features
-            
-            # Initialize feature sets
-            control_features = self.config.features.control_features
-            candidate_features = [f for f in all_features if f not in control_features]
-            selected_features = list(control_features)  # Start with control features
-
-            # Log initial state
-            logger.info("Starting feature selection:")
-            logger.info(f"  Control features: {selected_features}")
-            logger.info(f"  Candidate features: {len(candidate_features)}")
-            
-            # Keep selecting features until no more useful ones found
-            round_num = 1
-            while candidate_features:
-                logger.info(f"Selection round {round_num}")
-                logger.info(f"  Current features: {selected_features}")
-                logger.info(f"  Remaining candidates: {len(candidate_features)}")
-                
-                best_feature = None
-                best_importance = -float('inf')
-                
-                # Evaluate each candidate
-                for feature in candidate_features:
-                    importance = self._calculate_feature_importance(
-                        feature=feature,
-                        dataset=self.processed_dataset,
-                        current_features=selected_features
-                    )
-
-                    # If feature helps predictions more than our threshold
-                    if importance > self.config.feature_selection.importance_threshold:
-                        if importance > best_importance:
-                            best_importance = importance
-                            best_feature = feature
-                
-                if best_feature is None:
-                    logger.info("No remaining features improve predictions sufficiently.")
-                    break
-                    
-                # Add best feature and continue
-                logger.info(f"\nSelected feature {best_feature} with importance {best_importance:.4f}")
-                selected_features.append(best_feature)
-                candidate_features.remove(best_feature)
-                round_num += 1
-
-            logger.info("Feature selection complete:")
-            logger.info(f"Selected features: {selected_features}")
-            self.selected_features = selected_features
-            return selected_features
-            
-        except Exception as e:
-            logger.error(f"Error in select_features: {str(e)}")
-            logger.error("Traceback:", exc_info=True)
-            raise
-
+    # Data preparation methods
+    #--------------------------------------------
     def _prepare_feature_matrices(self, dataset: PreferenceDataset,
                                     main_features: List[str],
                                     control_features: List[str]) -> Dict[str, Any]:
@@ -986,9 +924,189 @@ class PreferenceModel:
             logger.error("Traceback:", exc_info=True)
             raise
                                                                                         
+    def _update_feature_weights(self) -> None:
+        """Update feature weights from fitted model for both main and control features."""
+        try:
+            self.feature_weights = {}
+            
+            if not hasattr(self, 'fit_result'):
+                raise ValueError("Model not fitted. Call fit() first.")
+            
+            # Get main feature weights (beta) if any exist
+            main_features = list(dict.fromkeys(
+                [f for f in self.feature_names if f not in self.config.features.control_features]
+            ))
+            
+            if main_features:  # Only process beta if we have main features
+                beta = self.fit_result.stan_variable('beta')
+                logger.debug(f"Beta shape: {beta.shape}")
+                logger.debug(f"Main features: {main_features}")
+                
+                if beta.shape[1] != len(main_features):
+                    raise ValueError(f"Beta shape mismatch: {beta.shape[1]} != {len(main_features)}")
+                
+                # Update weights for main features
+                for i, feature in enumerate(main_features):
+                    self.feature_weights[feature] = (
+                        float(np.mean(beta[:, i])),
+                        float(np.std(beta[:, i]))
+                    )
+            
+            # Get control feature weights (gamma) if any exist
+            control_features = list(dict.fromkeys(self.config.features.control_features))
+            if control_features:
+                try:
+                    gamma = self.fit_result.stan_variable('gamma')
+                    if gamma.shape[1] != len(control_features):
+                        raise ValueError(f"Gamma shape mismatch: {gamma.shape[1]} != {len(control_features)}")
+                        
+                    for i, feature in enumerate(control_features):
+                        self.feature_weights[feature] = (
+                            float(np.mean(gamma[:, i])),
+                            float(np.std(gamma[:, i]))
+                        )
+                except Exception as e:
+                    logger.error(f"Error processing control features: {str(e)}")
+                    raise
+
+            logger.debug("Updated weights:")
+            for feature, (mean, std) in self.feature_weights.items():
+                feature_type = "control" if feature in control_features else "main"
+                logger.debug(f"  {feature} ({feature_type}): {mean:.4f} ± {std:.4f}")
+                    
+        except Exception as e:
+            logger.error(f"Error updating feature weights: {str(e)}")
+            raise
+                                                                            
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    def _sample_with_retry(self, **kwargs):
+        """Attempt sampling with retries and disk space checks."""
+        try:
+            # Clean up before checking space
+            self.cleanup_temp_dirs()
+            
+            # Check available space
+            required_mb = self.config.model.required_temp_mb
+            if not self.check_disk_space(required_mb):  # Use self.check_disk_space
+                raise OSError(
+                    f"Insufficient disk space. Need {required_mb}MB in temp directory."
+                )
+            
+            # Attempt sampling
+            logger.info("Starting Stan sampling...")
+            result = self.model.sample(**kwargs)
+            
+            # Verify the sampling worked
+            if not hasattr(result, 'stan_variable'):
+                raise RuntimeError("Sampling failed to produce valid results")
+                
+            return result
+            
+        except OSError as e:
+            logger.error(f"Disk space error during sampling: {e}")
+            self.cleanup_temp_dirs()
+            raise
+            
+        except Exception as e:
+            logger.error(f"Error during sampling: {e}")
+            self.cleanup_temp_dirs()
+            raise
+            
+        finally:
+            # Final cleanup
+            self.cleanup_temp_dirs()
+            
     #--------------------------------------------
-    # Statistical and model diagnostic methods
-    #--------------------------------------------
+    # Feature selection methods
+    #--------------------------------------------  
+    def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
+        """Select features by evaluating their importance for prediction."""
+        try:
+            self._check_memory_usage()
+            self.dataset = dataset
+            
+            # Preprocess dataset
+            logger.info("Preprocessing dataset for feature selection...")
+            valid_prefs = []
+            for pref in dataset.preferences:
+                valid = True
+                for feature in all_features:
+                    if (pref.features1.get(feature) is None or 
+                        pref.features2.get(feature) is None):
+                        valid = False
+                        break
+                if valid:
+                    valid_prefs.append(pref)
+            
+            # Create processed dataset
+            self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
+            self.processed_dataset.preferences = valid_prefs
+            self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
+            self.processed_dataset.file_path = dataset.file_path
+            self.processed_dataset.config = dataset.config
+            self.processed_dataset.control_features = dataset.control_features
+            self.processed_dataset.feature_extractor = dataset.feature_extractor
+            self.processed_dataset.feature_names = dataset.feature_names
+            self.processed_dataset.all_bigrams = dataset.all_bigrams
+            self.processed_dataset.all_bigram_features = dataset.all_bigram_features
+            
+            # Initialize feature sets
+            control_features = self.config.features.control_features
+            candidate_features = [f for f in all_features if f not in control_features]
+            selected_features = list(control_features)  # Start with control features
+
+            # Log initial state
+            logger.info("Starting feature selection:")
+            logger.info(f"  Control features: {selected_features}")
+            logger.info(f"  Candidate features: {len(candidate_features)}")
+            
+            # Keep selecting features until no more useful ones found
+            round_num = 1
+            while candidate_features:
+                logger.info(f"Selection round {round_num}")
+                logger.info(f"  Current features: {selected_features}")
+                logger.info(f"  Remaining candidates: {len(candidate_features)}")
+                
+                best_feature = None
+                best_importance = -float('inf')
+                
+                # Evaluate each candidate
+                for feature in candidate_features:
+                    importance = self._calculate_feature_importance(
+                        feature=feature,
+                        dataset=self.processed_dataset,
+                        current_features=selected_features
+                    )
+
+                    # If feature helps predictions more than our threshold
+                    if importance > self.config.feature_selection.importance_threshold:
+                        if importance > best_importance:
+                            best_importance = importance
+                            best_feature = feature
+                
+                if best_feature is None:
+                    logger.info("No remaining features improve predictions sufficiently.")
+                    break
+                    
+                # Add best feature and continue
+                logger.info(f"\nSelected feature {best_feature} with importance {best_importance:.4f}")
+                selected_features.append(best_feature)
+                candidate_features.remove(best_feature)
+                round_num += 1
+
+            logger.info("Feature selection complete:")
+            logger.info(f"Selected features: {selected_features}")
+            self.selected_features = selected_features
+            return selected_features
+            
+        except Exception as e:
+            logger.error(f"Error in select_features: {str(e)}")
+            logger.error("Traceback:", exc_info=True)
+            raise
+
+        finally:
+            self.cleanup()
+
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
                                     current_features: List[str]) -> float:
         """Calculate feature importance based on prediction improvement."""
@@ -1098,9 +1216,9 @@ class PreferenceModel:
         finally:
             # Ensure cleanup even if error occurs
             self.cleanup_temp_models()
-                        
+
     #--------------------------------------------
-    # Cross-validation and splitting methods
+    # Cross-validation methods
     #--------------------------------------------
     def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Get cross-validation splits preserving participant structure with validation."""
@@ -1170,7 +1288,7 @@ class PreferenceModel:
         return splits
                             
     #--------------------------------------------
-    # Output and visualization methods
+    # Serialization methods
     #--------------------------------------------
     def save(self, path: Path) -> None:
         """Save model state to file."""
@@ -1213,4 +1331,17 @@ class PreferenceModel:
             logger.error(f"Error loading model from {path}")
             raise
 
+    #--------------------------------------------
+    # Properties
+    #--------------------------------------------
+    @property
+    def feature_scale(self) -> float:
+        """Prior scale for feature weights."""
+        return self.config.model.feature_scale
+        
+    @property
+    def participant_scale(self) -> float:
+        """Prior scale for participant effects."""
+        return self.config.model.participant_scale
+        
 

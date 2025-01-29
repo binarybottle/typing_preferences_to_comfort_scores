@@ -1,23 +1,40 @@
 # engram3/config.py
 """
-Configuration management and data structures for the keyboard preference system.
+Configuration and data structure definitions for keyboard layout optimization.
 
-Provides:
-  - Type-safe configuration validation using Pydantic
-  - Data structures for preferences and features
-  - Configuration classes for:
-    - Feature selection and weighting
-    - Model parameters and validation
-    - Data loading and processing
-    - Path management
-    - Logging settings
+Core Components:
+  1. Data Structures:
+    - Preference: Typing preference data container
+    - FeatureConfig: Feature extraction settings
+    - ModelPrediction: Prediction output structure
+    - StabilityMetrics: Feature stability measurements
+    
+  2. Feature Configuration:
+    - FeatureSelectionSettings: Feature selection parameters
+    - FeatureSelectionThresholds: Selection cutoff values
+    - FeaturesConfig: Feature definitions and interactions
+    
+  3. Model Configuration:
+    - ModelSettings: MCMC sampling parameters
+    - DataConfig: Dataset parameters
+    - RecommendationsConfig: Bigram recommendation settings
+    
+  4. System Configuration:
+    - LoggingConfig: Log settings
+    - PathsConfig: Directory management
+    - VisualizationConfig: Plot settings
+    
+  5. Validation Rules:
+    - Numeric range verification
+    - Path existence checking
+    - Feature interaction validation
+    - Weight normalization
+    - Type safety enforcement
 
-All configuration classes include validation rules to ensure:
-  - Required fields are present
-  - Numeric ranges are valid
-  - Weights sum to 1.0
-  - Paths exist and are writable
-  - Proper data types and formats
+Exceptions:
+    ModelError: Base model exception
+    FeatureError: Feature processing error
+    NotFittedError: Unfit model usage error
 """
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, TypedDict, NamedTuple
@@ -25,9 +42,24 @@ from pathlib import Path
 import numpy as np
 from pydantic import BaseModel, validator, Field, field_validator
 
-#------------------------------------------------
-# data.py
-#------------------------------------------------
+#--------------------------------------------
+# Base exceptions
+#--------------------------------------------   
+class ModelError(Exception):
+    """Base exception for model-related errors."""
+    pass
+
+class FeatureError(ModelError):
+    """Raised for feature-related errors."""
+    pass
+
+class NotFittedError(ModelError):
+    """Raised when trying to use model that hasn't been fit."""
+    pass
+
+#--------------------------------------------
+# Core data structures
+#--------------------------------------------   
 @dataclass
 class Preference:
     """Single preference instance with all needed data."""
@@ -51,9 +83,6 @@ class Preference:
         """Return detailed string representation."""
         return f"Preference('{self.bigram1}' vs '{self.bigram2}', preferred: {self.bigram1 if self.preferred else self.bigram2})"
 
-#------------------------------------------------
-# feature_extraction.py
-#------------------------------------------------
 @dataclass
 class FeatureConfig:
     """Configuration for feature extraction"""
@@ -65,36 +94,6 @@ class FeatureConfig:
     angles: Dict[Tuple[str, str], float]
     bigrams: List[str]  # List of English bigrams ordered by frequency
     bigram_frequencies_array: np.ndarray  # Array of corresponding frequency values
-
-#------------------------------------------------
-# feature_importance.py
-#------------------------------------------------
-class FeatureSelectionThresholds(BaseModel):
-    model_effect: float = 0.2
-    effect_consistency: float = 0.5
-    predictive_power: float = 0.1
-
-#------------------------------------------------
-# feature_visualization.py
-#------------------------------------------------
-class VisualizationConfig(BaseModel):
-    """Visualization settings."""
-    dpi: int = 300
-
-#------------------------------------------------
-# model.py
-#------------------------------------------------
-class ModelError(Exception):
-    """Base exception for model-related errors."""
-    pass
-
-class FeatureError(ModelError):
-    """Raised for feature-related errors."""
-    pass
-
-class NotFittedError(ModelError):
-    """Raised when trying to use model that hasn't been fit."""
-    pass
 
 @dataclass
 class ModelPrediction:
@@ -110,25 +109,9 @@ class StabilityMetrics(TypedDict):
     sign_consistency: float
     relative_range: float
 
-#------------------------------------------------
-# remaining Config
-#------------------------------------------------
-class ModelSettings(BaseModel):
-    """Model configuration with validation."""
-    chains: int = Field(gt=0)
-    warmup: int = Field(gt=0)
-    n_samples: int = Field(gt=0)
-    adapt_delta: float = Field(gt=0, lt=1)
-    max_treedepth: int = Field(gt=0)
-    feature_scale: float = Field(gt=0)
-    participant_scale: float = Field(gt=0)
-    required_temp_mb: int = 2000 # Default value
-    predictions_file: str
-    model_file: str
-
-    class Config:
-        validate_assignment = True
-    
+#--------------------------------------------
+# Feature-related configuration
+#--------------------------------------------   
 class FeatureSelectionSettings(BaseModel):
     """Feature selection configuration."""
     importance_threshold: float = Field(
@@ -144,6 +127,11 @@ class FeatureSelectionSettings(BaseModel):
     metrics_file: str  # File to store feature metrics
     model_file: str    # File to store feature selection model
     
+class FeatureSelectionThresholds(BaseModel):
+    model_effect: float = 0.2
+    effect_consistency: float = 0.5
+    predictive_power: float = 0.1
+
 class FeaturesConfig(BaseModel):
     """Configuration for features and their interactions."""
     base_features: List[str]
@@ -194,6 +182,22 @@ class FeaturesConfig(BaseModel):
     class Config:
         validate_assignment = True
         
+#--------------------------------------------
+# Model settings
+#--------------------------------------------   
+class ModelSettings(BaseModel):
+    """Model configuration with validation."""
+    chains: int = Field(gt=0)
+    warmup: int = Field(gt=0)
+    n_samples: int = Field(gt=0)
+    adapt_delta: float = Field(gt=0, lt=1)
+    max_treedepth: int = Field(gt=0)
+    feature_scale: float = Field(gt=0)
+    participant_scale: float = Field(gt=0)
+    required_temp_mb: int = 2000  # Default value for required temp space
+    predictions_file: str
+    model_file: str
+    
 class DataConfig(BaseModel):
     """Data configuration."""
     input_file: str
@@ -225,7 +229,10 @@ class RecommendationsConfig(BaseModel):
         if v <= 0:
             raise ValueError("n_recommendations must be positive")
         return v
-    
+
+#--------------------------------------------
+# System configuration
+#--------------------------------------------   
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     format: str
@@ -244,6 +251,13 @@ class PathsConfig(BaseModel):
         v.mkdir(parents=True, exist_ok=True)
         return v
 
+class VisualizationConfig(BaseModel):
+    """Visualization settings."""
+    dpi: int = 300
+
+#--------------------------------------------
+# Main configuration
+#--------------------------------------------   
 class Config(BaseModel):
     """Complete configuration with nested validation."""
     paths: PathsConfig

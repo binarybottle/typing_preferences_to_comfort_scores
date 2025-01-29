@@ -1,55 +1,58 @@
 # main.py
 """
-Command-line interface and pipeline orchestration for the Engram3 keyboard layout optimization system.
+Command-line pipeline for keyboard layout optimization through preference learning.
 
-Provides four main operational modes:
-1. Feature Selection ('select_features'):
-   - Loads and splits typing preference dataset
-   - Evaluates base features and their interactions
-   - Performs feature selection with stability analysis
-   - Saves comprehensive feature metrics and selection results
-   - Generates feature importance visualizations
+Pipeline Modes:
+  1. Feature Selection:
+    - Processes preference dataset with train/validation split
+    - Evaluates features through cross-validation
+    - Selects optimal feature combination
+    - Exports selection metrics and visualizations
+    - Saves feature selection model
 
-2. Feature Space Visualization ('visualize_feature_space'):
-   - Projects bigrams into reduced feature space
-   - Visualizes feature relationships and impacts
-   - Generates multiple analysis plots:
-     * PCA feature space projection
-     * Feature weight impact analysis
-     * Selected vs. non-selected feature comparisons
-     * Control vs. main feature comparisons
+  2. Model Training:
+    - Uses participant-aware train/test splitting
+    - Trains model using selected features
+    - Evaluates on holdout data
+    - Saves trained model state
+    - Reports performance metrics
 
-3. Model Training ('train_model'):
-   - Creates participant-aware train/test splits
-   - Trains Bayesian preference model on selected features
-   - Evaluates model performance on holdout data
-   - Saves trained model and performance metrics
-   - Generates cross-validation statistics
+  3. Visualization:
+    - Generates feature space projections
+    - Plots feature importance metrics
+    - Shows feature weight distributions
+    - Compares main vs control features
+    - Creates model analysis plots
 
-4. Bigram Recommendations ('recommend_bigram_pairs'):
-   - Generates candidate bigram pairs
-   - Scores pairs using multiple criteria
-   - Visualizes recommendations in feature space
-   - Exports recommended pairs for data collection
-   - Provides uncertainty estimates for recommendations
+  4. Predictions:
+    - Generates all possible bigram pairs
+    - Calculates comfort scores
+    - Estimates prediction uncertainty
+    - Recommends bigram pairs for testing
+    - Exports predictions
 
-Core functionality:
-- Configuration management via YAML
-- Comprehensive logging system
-- Reproducible train/test splitting
-- Feature precomputation and caching
-- Error handling and validation
-- Results visualization and export
-- Cross-validation capabilities
-- Participant-aware data handling
+Core Components:
+  - YAML configuration management
+  - Feature extraction and caching
+  - Participant-aware data splitting
+  - Comprehensive logging
+  - Error handling and validation
 
 Usage:
-    python main.py --config config.yaml --mode [select_features|visualize_feature_space|train_model|recommend_bigram_pairs]
+    python main.py --config config.yaml --mode MODE
 
-Notes:
-    - Requires Python 3.7+
-    - Configuration file must be valid YAML
-    - All modes require initial feature computation
+    Modes:
+        select_features
+        train_model
+        visualize_feature_space
+        predict_bigram_scores
+        recommend_bigram_pairs
+
+Requirements:
+    - Python 3.7+
+    - Valid YAML config file
+    - Preference dataset
+    - Feature definitions
 """
 import argparse
 import yaml
