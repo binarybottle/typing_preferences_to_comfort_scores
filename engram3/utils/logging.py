@@ -10,7 +10,6 @@ Provides standardized logging setup with:
 """
 from pathlib import Path
 from typing import Union, Dict, Optional
-from pydantic import BaseModel
 import traceback
 from datetime import datetime
 import logging

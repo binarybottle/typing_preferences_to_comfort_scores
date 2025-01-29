@@ -71,7 +71,6 @@ Notes:
     - Thread-safe Stan implementation
     - Comprehensive error handling
     - Detailed logging system
-    - Automatic resource cleanup
     - Memory usage monitoring
     - Temporary file management
 
@@ -84,7 +83,7 @@ Dependencies:
 """
 import cmdstanpy
 import numpy as np
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
 from collections import defaultdict
 from pathlib import Path
@@ -102,13 +101,10 @@ import shutil
 import psutil
 from tenacity import retry, stop_after_attempt, wait_fixed
 import gc
-from contextlib import contextmanager
 
 from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from engram3.data import PreferenceDataset
-from engram3.features.feature_importance import FeatureImportanceCalculator
 from engram3.utils.visualization import PlottingUtils
-from engram3.utils.caching import CacheManager
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
@@ -125,21 +121,7 @@ class PreferenceModel:
             raise ValueError("Config is required")
         
         self.config = config if isinstance(config, Config) else Config(**config)
-        
-        # Initialize basic attributes
-        self.fit_result = None
-        self.feature_names = None
-        self.selected_features = []
-        self.interaction_metadata = {}
-        self.dataset = None
-        self.feature_weights = None
-        self.feature_extractor = None
-        self.is_baseline_model = False
-        self._importance_calculator = None  # Use underscore for private attribute
-        
-        # Initialize caches
-        self.feature_cache = CacheManager()
-        self.prediction_cache = CacheManager()
+        self.reset_state()
         
         # Initialize visualization
         self.plotting = PlottingUtils(self.config.paths.plots_dir)
@@ -149,9 +131,6 @@ class PreferenceModel:
             model_path = Path(__file__).parent / "models" / "preference_model.stan"
             if not model_path.exists():
                 raise FileNotFoundError(f"Stan model file not found: {model_path}")
-                
-            output_dir = Path(self.config.paths.root_dir) / "stan_temp"
-            output_dir.mkdir(parents=True, exist_ok=True)
                 
             self.model = cmdstanpy.CmdStanModel(
                 stan_file=str(model_path),
@@ -165,89 +144,41 @@ class PreferenceModel:
                     exe_path.chmod(0o755)
 
         except Exception as e:
-            print(f"Error initializing Stan model: {str(e)}")
+            logger.error(f"Error initializing Stan model: {str(e)}")
             raise
 
-    @property 
-    def importance_calculator(self):
-        if self._importance_calculator is None:
-            self._importance_calculator = FeatureImportanceCalculator(self.config, self)
-        return self._importance_calculator
+    def reset_state(self):
+        """Reset model state variables."""
+        self.fit_result = None
+        self.feature_names = None
+        self.selected_features = []
+        self.interaction_metadata = {}
+        self.dataset = None
+        self.feature_weights = None
+        self.feature_extractor = None
+        self.is_baseline_model = False
+        self._importance_calculator = None
+        self.is_fitted = False
+        self.feature_stats = {}
+        self._feature_data_cache = {}
 
-    @importance_calculator.setter
-    def importance_calculator(self, value):
-        self._importance_calculator = value
-               
-    # Property decorators
-    @property
-    def feature_scale(self) -> float:
-        """Prior scale for feature weights."""
-        return self.config.model.feature_scale
-        
-    @property
-    def participant_scale(self) -> float:
-        """Prior scale for participant effects."""
-        return self.config.model.participant_scale
-        
-    @property
-    def _feature_data_cache(self) -> Dict[str, Dict[str, np.ndarray]]:
-        """Access feature data cache with initialization check."""
-        return self._feature_data_cache_
-
-    def _create_temp_model(self):
-        """Create a temporary model copy for evaluation."""
-        temp_model = type(self)(config=self.config)
-        # Copy necessary attributes
-        temp_model.feature_extractor = self.feature_extractor
-        temp_model.dataset = self.dataset
-        temp_model.prediction_cache = CacheManager()
-        
-        # Copy dataset attributes
-        for attr in ['column_map', 'row_map', 'finger_map', 
-                    'engram_position_values', 'row_position_values',
-                    'angles', 'bigrams', 'bigram_frequencies_array']:
-            if hasattr(self.dataset, attr):
-                setattr(temp_model.dataset, attr, getattr(self.dataset, attr))
-        
-        # Create context manager for cleanup
-        class ModelContext:
-            def __init__(self, model):
-                self.model = model
-            def __enter__(self):
-                return self.model
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                self.model.cleanup()
-                if hasattr(self.model, 'prediction_cache'):
-                    self.model.prediction_cache.clear()
-                    
-        return ModelContext(temp_model)
-
-    # Remaining class methods
-    def clear_caches(self) -> None:
-        """Clear all caches to free memory."""
-        self.feature_cache.clear()
-        self.prediction_cache.clear()
-                    
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-    def _sample_with_retry(self, **kwargs):
-        """Attempt sampling with retries on failure"""
-        return self.model.sample(**kwargs)
+    def cleanup(self):
+        """Clean up model resources."""
+        if hasattr(self, 'fit_result'):
+            del self.fit_result
+        if hasattr(self, '_feature_data_cache'):
+            self._feature_data_cache.clear()
+        self.reset_state()
+        gc.collect()
 
     def fit(self, dataset: PreferenceDataset, features: Optional[List[str]] = None,
-            fit_purpose: Optional[str] = None) -> None:
+        fit_purpose: Optional[str] = None) -> None:
         """Fit model with specified features."""
         try:
-            # Store feature names
+            # Reset state and store feature names
+            self.reset_state()
             self.feature_names = features
             
-            # Compute and store feature statistics
-            self.feature_stats = self._compute_feature_statistics(dataset)
-
-            # Cleanup before fitting
-            for attr in ['fit_result', 'feature_weights']:
-                if hasattr(self, attr):
-                    delattr(self, attr)
-
             if fit_purpose:
                 logger.info(f"Fitting model: {fit_purpose}")
 
@@ -261,12 +192,17 @@ class PreferenceModel:
             if not features:
                 raise ValueError("No features provided and none available from dataset")
             
-            # Ensure proper feature handling
+            # Process features
             control_features = self.config.features.control_features
             main_features = [f for f in features if f not in control_features]
             
-            logger.info(f"Main features ({len(main_features)}): {main_features}")
-            logger.info(f"Control features ({len(control_features)}): {control_features}")
+            if main_features:
+                logger.info("Features:")
+                for feat in main_features:
+                    logger.info(f"  - {feat} (main)")
+            if control_features:
+                for feat in control_features:
+                    logger.info(f"  - {feat} (control)")
 
             # Prepare feature matrices for Stan
             processed_data = self._prepare_feature_matrices(
@@ -279,22 +215,6 @@ class PreferenceModel:
             self.feature_names = main_features + list(control_features)
             self.selected_features = main_features + list(control_features)
 
-            # Log data dimensions
-            #logger.info("Data dimensions:")
-            #logger.info(f"  Preferences: {processed_data['N']}")
-            #logger.info(f"  Participants: {processed_data['P']}")  # Changed to use 'P'
-            #if not main_features:
-            #    logger.info("  Using dummy main feature for control-only model")
-            #logger.info(f"  Main features: {processed_data['F']}")
-            #logger.info(f"  Control features: {processed_data['C']}")
-
-            # Log sampling configuration
-            #logger.info("Starting sampling with "
-            #        f"{self.config.model.chains} chains, "
-            #        f"{self.config.model.warmup} warmup iterations, "
-            #        f"{self.config.model.n_samples} sampling iterations"
-            #        f"{f' ({fit_purpose})' if fit_purpose else ''}")
-
             # Stan sampling
             self.fit_result = self._sample_with_retry(
                 data=processed_data,
@@ -306,12 +226,32 @@ class PreferenceModel:
             )
 
             self._update_feature_weights()
+            self.is_fitted = True
 
         except Exception as e:
+            self.is_fitted = False  # Ensure flag is False if fit fails
             logger.error(f"Error in fit: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                    
+
+    @property
+    def feature_scale(self) -> float:
+        """Prior scale for feature weights."""
+        return self.config.model.feature_scale
+        
+    @property
+    def participant_scale(self) -> float:
+        """Prior scale for participant effects."""
+        return self.config.model.participant_scale
+        
+    # NOTE: Using direct attribute instead of property for cache
+    _feature_data_cache_ = {}
+
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    def _sample_with_retry(self, **kwargs):
+        """Attempt sampling with retries on failure"""
+        return self.model.sample(**kwargs)
+
     def _update_feature_weights(self) -> None:
         """Update feature weights from fitted model for both main and control features."""
         try:
@@ -408,7 +348,26 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error in evaluate: {str(e)}")
             return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
-                                                            
+
+    def _create_temp_model(self):
+        """Create a temporary model copy for evaluation."""
+        temp_model = type(self)(config=self.config)
+        temp_model.feature_extractor = self.feature_extractor
+        temp_model.feature_stats = self.feature_stats
+
+        class ModelContext:
+            def __init__(self, model):
+                self.model = model
+                
+            def __enter__(self):
+                return self.model
+                
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if hasattr(self.model, 'cleanup'):
+                    self.model.cleanup()
+                
+        return ModelContext(temp_model)
+
     #--------------------------------------------
     # Data preparation and feature methods
     #--------------------------------------------
@@ -534,12 +493,6 @@ class PreferenceModel:
             raise NotFittedError("Feature extractor not initialized. Call fit() first.")
 
         try:
-            # Use cache if available
-            cache_key = str(bigram)  # Ensure string key for cache
-            cached_features = self.feature_cache.get(cache_key)
-            if cached_features is not None:
-                return cached_features.copy()  # Return copy to prevent modification
-            
             # Extract base features
             try:
                 features = self.feature_extractor.extract_bigram_features(
@@ -572,9 +525,6 @@ class PreferenceModel:
                     
                 # Add interaction to features
                 features[interaction_name] = interaction_value
-            
-            # Cache result
-            self.feature_cache.set(cache_key, features.copy())
             
             return features.copy()
             
@@ -686,10 +636,10 @@ class PreferenceModel:
     #--------------------------------------------  
     def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
         """Predict preference between two bigrams."""
+        if not self.is_fitted:
+            raise NotFittedError("Model must be fit before making predictions")
+            
         try:
-            if not hasattr(self, 'fit_result'):
-                raise NotFittedError("Model must be fit before making predictions")
-
             # Get features for both bigrams
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
             features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
@@ -697,33 +647,44 @@ class PreferenceModel:
             # Standardize features using stored statistics
             X1 = []
             X2 = []
-            for feature in self.feature_names:
+            
+            # Split features into main and control
+            control_features = self.config.features.control_features
+            main_features = [f for f in self.feature_names if f not in control_features]
+            
+            # Process main features
+            for feature in main_features:
                 feat1 = features1.get(feature, 0.0)
                 feat2 = features2.get(feature, 0.0)
 
-                # 'typing_time' feature
-                # If either timing is None (meaning no timing data available),
-                # sets both timings to 0.0 to handle missing data
                 if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                    feat1 = 0.0
-                    feat2 = 0.0
-                
+                    feat1 = feat2 = 0.0
+                    
                 mean = self.feature_stats[feature]['mean']
                 std = self.feature_stats[feature]['std']
-                
                 X1.append((feat1 - mean) / std)
                 X2.append((feat2 - mean) / std)
+                
+            # Process control features
+            C1 = []
+            C2 = []
+            for feature in control_features:
+                feat1 = features1.get(feature, 0.0)
+                feat2 = features2.get(feature, 0.0)
+                mean = self.feature_stats[feature]['mean']
+                std = self.feature_stats[feature]['std']
+                C1.append((feat1 - mean) / std)
+                C2.append((feat2 - mean) / std)
 
+            # Convert to arrays
             X1 = np.array(X1).reshape(1, -1)
             X2 = np.array(X2).reshape(1, -1)
+            C1 = np.array(C1).reshape(1, -1)
+            C2 = np.array(C2).reshape(1, -1)
 
-            # Get model predictions using y_pred from Stan results
-            y_pred = self.fit_result.stan_variable('y_pred')  # Use stan_variable instead of get
-        
-            # Convert to probability
+            # Get model predictions
+            y_pred = self.fit_result.stan_variable('y_pred')
             probability = 1 / (1 + np.exp(-y_pred))
-            
-            # Get prediction uncertainty
             uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
 
             return ModelPrediction(
@@ -736,7 +697,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error in predict_preference: {str(e)}")
             raise
-            
+                    
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features by evaluating their importance for prediction."""
         try:
@@ -917,7 +878,7 @@ class PreferenceModel:
                     X2[:, main_features.index(feature)] if feature in main_features
                     else C2[:, control_features.index(feature)]
                 ]))
-                #logger.info(f"  Standardized - mean: {mean:.3f}, std: {std:.3f}")
+                logger.info(f"Standardized - mean: {mean:.3f}, std: {std:.3f}")
 
             return {
                 'N': len(y),
@@ -943,16 +904,24 @@ class PreferenceModel:
     # Statistical and model diagnostic methods
     #--------------------------------------------
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
-                                      current_features: List[str]) -> float:
+                                current_features: List[str]) -> float:
         """Calculate feature importance based on prediction improvement."""
         try:
-            # Fit models with and without the feature
+            # Create and fit baseline model first
+            logger.info(f"Fitting baseline model with {len(current_features)} features")
             with self._create_temp_model() as baseline_model:
                 baseline_model.fit(dataset, current_features)
+                if not baseline_model.is_fitted:
+                    raise ValueError("Failed to fit baseline model")
+            
+            # Only create and fit feature model after baseline is confirmed fitted    
+            logger.info(f"Fitting model with additional feature: {feature}")
             with self._create_temp_model() as feature_model:
                 feature_model.fit(dataset, current_features + [feature])
+                if not feature_model.is_fitted:
+                    raise ValueError("Failed to fit feature model")
 
-            # Calculate aligned effects across cross-validation splits
+            # Calculate aligned effects only after both models are fitted
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             cv_aligned_effects = []
             
@@ -960,34 +929,32 @@ class PreferenceModel:
                 logger.info(f"Evaluating fold {fold}/5")
                 val_data = dataset._create_subset_dataset(val_idx)
                 
+                # Ensure models are fitted before making predictions
+                if not baseline_model.is_fitted or not feature_model.is_fitted:
+                    raise ValueError("Models must be fitted before evaluation")
+                    
                 # Calculate aligned effects for validation set
                 for pref in val_data.preferences:
-                    # Get predictions in logit space
                     base_pred = baseline_model.predict_preference(pref.bigram1, pref.bigram2)
                     base_logit = -np.log(1/base_pred.probability - 1)
                     
                     feat_pred = feature_model.predict_preference(pref.bigram1, pref.bigram2)
                     feat_logit = -np.log(1/feat_pred.probability - 1)
                     
-                    # Calculate effect
                     effect = feat_logit - base_logit
-                    
-                    # Align effect with preference
                     aligned_effect = effect if pref.preferred else -effect
                     cv_aligned_effects.append(aligned_effect)
 
             cv_aligned_effects = np.array(cv_aligned_effects)
-
+            
             # Calculate metrics
             mean_aligned_effect = np.mean(cv_aligned_effects)
             effect_std = np.std(cv_aligned_effects)
             
-            # Calculate importance as magnitude of effect scaled by consistency
             effect_magnitude = abs(mean_aligned_effect)
             effect_consistency = 1 - (effect_std / (effect_magnitude + 1e-6))
-            importance = effect_magnitude * max(0, effect_consistency)  # Only use positive consistency
+            importance = effect_magnitude * max(0, effect_consistency)
             
-            # Log results
             logger.info(f"Feature importance analysis for {feature}:")
             logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
             logger.info(f"  Effect consistency: {effect_consistency:.4f}")
@@ -998,7 +965,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"  Error calculating feature importance: {str(e)}")
             return -float('inf')
-                                                                                       
+        
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------
@@ -1108,33 +1075,9 @@ class PreferenceModel:
                 model.interaction_metadata = save_dict['interaction_metadata']
                 return model
             except Exception:
-                model.cleanup()
                 raise
         except Exception:
             logger.error(f"Error loading model from {path}")
             raise
 
-    def cleanup(self) -> None:
-        """Clean up temporary files and resources."""
-        try:
-            # Clean Stan temp directory if it exists in config
-            if hasattr(self.config.paths, 'stan_temp'):
-                output_dir = Path(self.config.paths.stan_temp)
-                if output_dir.exists():
-                    for file in output_dir.glob("preference_model-*"):
-                        try:
-                            file.unlink()
-                        except Exception as e:
-                            logger.warning(f"Could not remove temp file {file}: {str(e)}")
-            # Clear caches
-            self.clear_caches()
-        except Exception as e:
-            logger.error(f"Error during cleanup: {str(e)}")
-
-    def __del__(self):
-        """Destructor to ensure cleanup."""
-        try:
-            self.cleanup()
-        except:
-            pass  # Suppress errors during garbage collection
 

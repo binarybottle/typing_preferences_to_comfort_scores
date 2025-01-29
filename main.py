@@ -378,9 +378,10 @@ def main():
                     logger.info(f"{feature}:")
                     logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
                     logger.info(f"  Importance: {importance:.3f}")
-            
-            finally:
-                model.cleanup()
+
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                raise
                 
         #---------------------------------
         # Visualize feature space
@@ -392,8 +393,7 @@ def main():
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
             
-            try:
-                    
+            try:     
                 # Initialize feature extraction
                 logger.info("Initializing feature extraction...")
                 # Debug to check the values are imported
@@ -560,10 +560,11 @@ def main():
                 except Exception as e:
                     logger.error(f"Error generating visualizations: {str(e)}")
                     raise
+                
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                raise
 
-            finally:
-                feature_selection_model.cleanup()
-                            
         #---------------------------------
         # Recommend bigram pairs
         #---------------------------------
@@ -634,9 +635,10 @@ def main():
                 logger.info("\nTest data metrics:")
                 for metric, value in test_metrics.items():
                     logger.info(f"{metric}: {value:.3f}")
-            
-            finally:
-                model.cleanup()
+
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                raise
 
         #---------------------------------
         # Predict bigram scores
