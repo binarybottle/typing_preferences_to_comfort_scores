@@ -370,9 +370,16 @@ def main():
                 
                 for feature in selected_features:
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
+
+                    # Ensure model is fitted before calculating feature importance
+                    if not model.is_fitted:
+                        logger.error("Model must be fitted before evaluating feature importance. Fitting now...")
+                        model.fit(dataset)  # Ensure model is trained first
+
+                    # Now safely compute feature importance
                     importance = model._calculate_feature_importance(
                         feature=feature,
-                        dataset=processed_train,
+                        dataset=model.processed_dataset,
                         current_features=selected_features
                     )
                     logger.info(f"{feature}:")

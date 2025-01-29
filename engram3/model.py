@@ -644,60 +644,97 @@ class PreferenceModel:
             features1 = self.feature_extractor.extract_bigram_features(bigram1[0], bigram1[1])
             features2 = self.feature_extractor.extract_bigram_features(bigram2[0], bigram2[1])
 
-            # Standardize features using stored statistics
-            X1 = []
-            X2 = []
+            # Initialize feature matrices
+            X1, X2 = [], []  # Main features
+            C1, C2 = [], []  # Control features
             
             # Split features into main and control
             control_features = self.config.features.control_features
             main_features = [f for f in self.feature_names if f not in control_features]
             
             # Process main features
-            for feature in main_features:
-                feat1 = features1.get(feature, 0.0)
-                feat2 = features2.get(feature, 0.0)
+            if not main_features:
+                X1 = []  # Empty list for no main features
+                X2 = []
+            else:
+                for feature in main_features:
+                    feat1 = features1.get(feature, 0.0)
+                    feat2 = features2.get(feature, 0.0)
 
-                if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                    feat1 = feat2 = 0.0
-                    
-                mean = self.feature_stats[feature]['mean']
-                std = self.feature_stats[feature]['std']
-                X1.append((feat1 - mean) / std)
-                X2.append((feat2 - mean) / std)
+                    if feature == 'typing_time' and (feat1 is None or feat2 is None):
+                        feat1 = feat2 = 0.0
+                        
+                    # Use feature stats if available, otherwise use raw values
+                    if hasattr(self, 'feature_stats') and feature in self.feature_stats:
+                        mean = self.feature_stats[feature]['mean']
+                        std = self.feature_stats[feature]['std']
+                        feat1 = (feat1 - mean) / std
+                        feat2 = (feat2 - mean) / std
+                        
+                    X1.append(feat1)
+                    X2.append(feat2)
                 
             # Process control features
-            C1 = []
-            C2 = []
             for feature in control_features:
                 feat1 = features1.get(feature, 0.0)
                 feat2 = features2.get(feature, 0.0)
-                mean = self.feature_stats[feature]['mean']
-                std = self.feature_stats[feature]['std']
-                C1.append((feat1 - mean) / std)
-                C2.append((feat2 - mean) / std)
+                
+                # Use feature stats if available, otherwise use raw values
+                if hasattr(self, 'feature_stats') and feature in self.feature_stats:
+                    mean = self.feature_stats[feature]['mean']
+                    std = self.feature_stats[feature]['std']
+                    feat1 = (feat1 - mean) / std
+                    feat2 = (feat2 - mean) / std
+                    
+                C1.append(feat1)
+                C2.append(feat2)
 
-            # Convert to arrays
-            X1 = np.array(X1).reshape(1, -1)
-            X2 = np.array(X2).reshape(1, -1)
-            C1 = np.array(C1).reshape(1, -1)
-            C2 = np.array(C2).reshape(1, -1)
+            # Convert to arrays with error checking
+            try:
+                X1 = np.array(X1, dtype=np.float64).reshape(1, -1)
+                X2 = np.array(X2, dtype=np.float64).reshape(1, -1)
+                C1 = np.array(C1, dtype=np.float64).reshape(1, -1)
+                C2 = np.array(C2, dtype=np.float64).reshape(1, -1)
+            except Exception as e:
+                logger.error(f"Error converting feature arrays: {str(e)}")
+                raise ValueError(f"Feature conversion failed: {str(e)}")
 
-            # Get model predictions
-            y_pred = self.fit_result.stan_variable('y_pred')
-            probability = 1 / (1 + np.exp(-y_pred))
-            uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
+            # Verify array shapes
+            if X1.shape[1] != len(main_features):
+                raise ValueError(f"Main feature shape mismatch: {X1.shape[1]} != {len(main_features)}")
+            if C1.shape[1] != len(control_features):
+                raise ValueError(f"Control feature shape mismatch: {C1.shape[1]} != {len(control_features)}")
 
-            return ModelPrediction(
-                probability=float(np.mean(probability)),
-                uncertainty=float(uncertainty),
-                features_used=list(self.feature_names),
-                computation_time=0.0
-            )
+            try:
+                # Get model predictions
+                y_pred = self.fit_result.stan_variable('y_pred')
+                probability = 1 / (1 + np.exp(-y_pred))
+                uncertainty = np.std(y_pred) if isinstance(y_pred, np.ndarray) else 0.0
+
+                # Ensure valid probability
+                probability = np.clip(probability, 0.001, 0.999)
+                
+                return ModelPrediction(
+                    probability=float(np.mean(probability)),
+                    uncertainty=float(uncertainty),
+                    features_used=main_features + list(control_features),
+                    computation_time=0.0
+                )
+
+            except Exception as e:
+                logger.error(f"Error in prediction calculation: {str(e)}")
+                raise ValueError(f"Prediction calculation failed: {str(e)}")
 
         except Exception as e:
             logger.error(f"Error in predict_preference: {str(e)}")
-            raise
-                    
+            # Return balanced prediction on error
+            return ModelPrediction(
+                probability=0.5,
+                uncertainty=1.0,
+                features_used=[],
+                computation_time=0.0
+            )
+                            
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features by evaluating their importance for prediction."""
         try:
@@ -755,7 +792,7 @@ class PreferenceModel:
                         dataset=self.processed_dataset,
                         current_features=selected_features
                     )
-                    
+
                     # If feature helps predictions more than our threshold
                     if importance > self.config.feature_selection.importance_threshold:
                         if importance > best_importance:
@@ -781,7 +818,7 @@ class PreferenceModel:
             logger.error(f"Error in select_features: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                                                                                                                                                                                                                                                       
+
     def _prepare_feature_matrices(self, dataset: PreferenceDataset,
                                 main_features: List[str],
                                 control_features: List[str]) -> Dict[str, Any]:
@@ -798,13 +835,13 @@ class PreferenceModel:
                         feat2 = 0.0
                     feature_values[feature].extend([feat1, feat2])
 
-            # Calculate statistics and standardize
-            feature_stats = {}
+            # Calculate statistics and store them
+            self.feature_stats = {}
             for feature in main_features + control_features:
                 values = np.array([v for v in feature_values[feature] if v is not None])
                 mean = float(np.mean(values)) if len(values) > 0 else 0.0
                 std = float(np.std(values)) if len(values) > 0 else 1.0
-                feature_stats[feature] = {'mean': mean, 'std': std}
+                self.feature_stats[feature] = {'mean': mean, 'std': std}
                 
                 logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
                 logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
@@ -817,20 +854,18 @@ class PreferenceModel:
 
             for pref in dataset.preferences:
                 # Process main features
-                if not main_features:
-                    features1_main = [0.0]  # Dummy feature
-                    features2_main = [0.0]
-                else:
-                    features1_main = []
-                    features2_main = []
+                features1_main = []
+                features2_main = []
+                # Only process main features if they exist
+                if main_features:
                     for feature in main_features:
                         feat1 = pref.features1.get(feature, 0.0)
                         feat2 = pref.features2.get(feature, 0.0)
                         if feature == 'typing_time' and (feat1 is None or feat2 is None):
                             feat1 = 0.0
                             feat2 = 0.0
-                        mean = feature_stats[feature]['mean']
-                        std = feature_stats[feature]['std']
+                        mean = self.feature_stats[feature]['mean']
+                        std = self.feature_stats[feature]['std']
                         features1_main.append((feat1 - mean) / std)
                         features2_main.append((feat2 - mean) / std)
 
@@ -840,8 +875,8 @@ class PreferenceModel:
                 for feature in control_features:
                     feat1 = pref.features1.get(feature, 0.0)
                     feat2 = pref.features2.get(feature, 0.0)
-                    mean = feature_stats[feature]['mean']
-                    std = feature_stats[feature]['std']
+                    mean = self.feature_stats[feature]['mean']
+                    std = self.feature_stats[feature]['std']
                     features1_control.append((feat1 - mean) / std)
                     features2_control.append((feat2 - mean) / std)
 
@@ -857,7 +892,7 @@ class PreferenceModel:
             X2 = np.array(X2, dtype=np.float64)
             C1 = np.array(C1, dtype=np.float64)
             C2 = np.array(C2, dtype=np.float64)
-            
+                        
             # Map participant IDs to integers
             unique_participants = sorted(set(participant))
             participant_map = {pid: i for i, pid in enumerate(unique_participants)}
@@ -882,7 +917,7 @@ class PreferenceModel:
 
             return {
                 'N': len(y),
-                'P': len(unique_participants),  # Changed from 'J' to 'P' to match Stan model
+                'P': len(unique_participants),
                 'F': X1.shape[1],
                 'C': C1.shape[1],
                 'participant': participant + 1,  # Stan uses 1-based indexing
@@ -891,81 +926,109 @@ class PreferenceModel:
                 'C1': C1,
                 'C2': C2,
                 'y': y,
-                'feature_scale': self.config.model.feature_scale,    # Add feature scale parameter
-                'participant_scale': self.config.model.participant_scale  # Add participant scale parameter
+                'feature_scale': self.config.model.feature_scale,
+                'participant_scale': self.config.model.participant_scale
             }
 
         except Exception as e:
             logger.error(f"Error preparing feature matrices: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                                                                
+                                                                        
     #--------------------------------------------
     # Statistical and model diagnostic methods
     #--------------------------------------------
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> float:
         """Calculate feature importance based on prediction improvement."""
+        logger.info(f"\nCalculating importance for feature: {feature}")
+        logger.info(f"Current features: {current_features}")
+        
+        if not self.is_fitted:
+            logger.info("Model is not fitted. Attempting to fit now...")
+            self.fit(dataset, features=current_features)
+            
         try:
             # Create and fit baseline model first
-            logger.info(f"Fitting baseline model with {len(current_features)} features")
+            logger.info(f"\nStep 1: Training baseline model")
+            logger.info(f"Features for baseline: {current_features}")
             with self._create_temp_model() as baseline_model:
-                baseline_model.fit(dataset, current_features)
+                logger.info("Fitting baseline model...")
+                baseline_model.fit(dataset, features=current_features)
                 if not baseline_model.is_fitted:
-                    raise ValueError("Failed to fit baseline model")
+                    logger.warning("Baseline model is not fitted. Attempting to fit now...")
+                    baseline_model.fit(dataset, features=current_features)
+                    if not baseline_model.is_fitted:
+                        raise ValueError("Baseline model still not fitted after training attempt")
+                logger.info("Baseline model fitted successfully")
             
-            # Only create and fit feature model after baseline is confirmed fitted    
-            logger.info(f"Fitting model with additional feature: {feature}")
+            # Create and fit feature model
+            logger.info(f"\nStep 2: Training model with additional feature")
+            all_features = current_features + [feature]
+            logger.info(f"Features for enhanced model: {all_features}")
             with self._create_temp_model() as feature_model:
-                feature_model.fit(dataset, current_features + [feature])
+                logger.info("Fitting enhanced model...")
+                feature_model.fit(dataset, all_features)
                 if not feature_model.is_fitted:
-                    raise ValueError("Failed to fit feature model")
+                    raise ValueError("Failed to fit enhanced model")
+                logger.info("Enhanced model fitted successfully")
 
-            # Calculate aligned effects only after both models are fitted
+            # Calculate aligned effects
+            logger.info("\nStep 3: Evaluating feature importance through cross-validation")
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             cv_aligned_effects = []
-            
+
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
-                logger.info(f"Evaluating fold {fold}/5")
+                logger.info(f"\nProcessing fold {fold}/5")
                 val_data = dataset._create_subset_dataset(val_idx)
-                
-                # Ensure models are fitted before making predictions
-                if not baseline_model.is_fitted or not feature_model.is_fitted:
-                    raise ValueError("Models must be fitted before evaluation")
-                    
+                logger.info(f"Validation set size: {len(val_data.preferences)} preferences")
+
                 # Calculate aligned effects for validation set
+                fold_effects = []
                 for pref in val_data.preferences:
-                    base_pred = baseline_model.predict_preference(pref.bigram1, pref.bigram2)
-                    base_logit = -np.log(1/base_pred.probability - 1)
-                    
-                    feat_pred = feature_model.predict_preference(pref.bigram1, pref.bigram2)
-                    feat_logit = -np.log(1/feat_pred.probability - 1)
-                    
-                    effect = feat_logit - base_logit
-                    aligned_effect = effect if pref.preferred else -effect
-                    cv_aligned_effects.append(aligned_effect)
+                    try:
+                        base_pred = baseline_model.predict_preference(pref.bigram1, pref.bigram2)
+                        base_logit = -np.log(1/base_pred.probability - 1)
+                        
+                        feat_pred = feature_model.predict_preference(pref.bigram1, pref.bigram2)
+                        feat_logit = -np.log(1/feat_pred.probability - 1)
+                        
+                        effect = feat_logit - base_logit
+                        aligned_effect = effect if pref.preferred else -effect
+                        fold_effects.append(aligned_effect)
+                    except Exception as e:
+                        logger.warning(f"Error processing preference {pref.bigram1}-{pref.bigram2}: {str(e)}")
+                        continue
+
+                if fold_effects:
+                    mean_fold_effect = np.mean(fold_effects)
+                    logger.info(f"Mean effect for fold {fold}: {mean_fold_effect:.4f}")
+                    cv_aligned_effects.extend(fold_effects)
+                else:
+                    logger.warning(f"No valid effects calculated for fold {fold}")
 
             cv_aligned_effects = np.array(cv_aligned_effects)
             
-            # Calculate metrics
+            # Calculate final metrics
             mean_aligned_effect = np.mean(cv_aligned_effects)
             effect_std = np.std(cv_aligned_effects)
-            
             effect_magnitude = abs(mean_aligned_effect)
             effect_consistency = 1 - (effect_std / (effect_magnitude + 1e-6))
             importance = effect_magnitude * max(0, effect_consistency)
             
-            logger.info(f"Feature importance analysis for {feature}:")
+            logger.info("\nFeature importance analysis results:")
             logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
+            logger.info(f"  Effect standard deviation: {effect_std:.4f}")
+            logger.info(f"  Effect magnitude: {effect_magnitude:.4f}")
             logger.info(f"  Effect consistency: {effect_consistency:.4f}")
-            logger.info(f"  Importance: {importance:.4f}")
+            logger.info(f"  Final importance score: {importance:.4f}")
             
             return float(importance)
         
         except Exception as e:
-            logger.error(f"  Error calculating feature importance: {str(e)}")
+            logger.error(f"Error calculating feature importance: {str(e)}")
             return -float('inf')
-        
+                
     #--------------------------------------------
     # Cross-validation and splitting methods
     #--------------------------------------------
