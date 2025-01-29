@@ -837,14 +837,23 @@ class PreferenceModel:
 
             # Calculate statistics and store them
             self.feature_stats = {}
+            
+            # Handle case of no main features
+            if len(main_features) == 0:
+                logger.info("No main features - using dummy feature")
+                self.feature_stats['dummy'] = {'mean': 0.0, 'std': 1.0}
+                main_features = ['dummy']  # Use dummy feature name
+
+            # Process feature statistics
             for feature in main_features + control_features:
-                values = np.array([v for v in feature_values[feature] if v is not None])
-                mean = float(np.mean(values)) if len(values) > 0 else 0.0
-                std = float(np.std(values)) if len(values) > 0 else 1.0
-                self.feature_stats[feature] = {'mean': mean, 'std': std}
-                
-                logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
-                logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
+                if feature != 'dummy':  # Skip dummy feature
+                    values = np.array([v for v in feature_values[feature] if v is not None])
+                    mean = float(np.mean(values)) if len(values) > 0 else 0.0
+                    std = float(np.std(values)) if len(values) > 0 else 1.0
+                    self.feature_stats[feature] = {'mean': mean, 'std': std}
+                    
+                    logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
+                    logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
 
             # Build standardized matrices
             X1, X2 = [], []  # Main feature matrices
@@ -892,7 +901,13 @@ class PreferenceModel:
             X2 = np.array(X2, dtype=np.float64)
             C1 = np.array(C1, dtype=np.float64)
             C2 = np.array(C2, dtype=np.float64)
-                        
+
+            # If no main features, create dummy feature with zero weight
+            if len(main_features) == 0:
+                X1 = np.zeros((len(dataset.preferences), 1))
+                X2 = np.zeros((len(dataset.preferences), 1))
+                logger.info("No main features - using dummy feature")
+
             # Map participant IDs to integers
             unique_participants = sorted(set(participant))
             participant_map = {pid: i for i, pid in enumerate(unique_participants)}
@@ -918,7 +933,7 @@ class PreferenceModel:
             return {
                 'N': len(y),
                 'P': len(unique_participants),
-                'F': X1.shape[1],
+                'F': max(1, X1.shape[1]),  # Ensure F is at least 1
                 'C': C1.shape[1],
                 'participant': participant + 1,  # Stan uses 1-based indexing
                 'X1': X1,
