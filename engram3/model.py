@@ -227,20 +227,6 @@ class PreferenceModel:
         """Clear all caches to free memory."""
         self.feature_cache.clear()
         self.prediction_cache.clear()
-
-    def _check_memory(self, required_gb=8):
-        """Check available system memory"""
-        mem = psutil.virtual_memory()
-        if mem.available < required_gb * 1024**3:
-            raise RuntimeError(f"Insufficient memory: {mem.available/(1024**3):.1f}GB free, need {required_gb}GB")
-
-    def _check_temp_space(self):
-        required_mb = self.config.model.required_temp_mb  # Default value is already 2000
-        temp_dir = Path(tempfile.gettempdir())
-        total, used, free = shutil.disk_usage(temp_dir)
-        free_mb = free // (1024 * 1024)
-        if free_mb < required_mb:
-            raise RuntimeError(f"Insufficient temporary space: {free_mb}MB free, need {required_mb}MB")
                     
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def _sample_with_retry(self, **kwargs):
@@ -422,136 +408,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error in evaluate: {str(e)}")
             return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
-                                                        
-    def cross_validate(self, dataset: PreferenceDataset, n_splits: Optional[int] = None) -> Dict[str, Any]:
-        """Perform cross-validation with multiple validation strategies."""
-        feature_names = dataset.get_feature_names()
-        logger.debug(f"Features for cross-validation (including interactions): {feature_names}")
-        
-        metrics = defaultdict(list)
-        feature_effects = defaultdict(list)
-        
-        # Get CV splits using shared method
-        for fold, (train_idx, val_idx) in enumerate(self._get_cv_splits(dataset, n_splits)):
-            try:
-                # Clear caches before each fold to prevent memory buildup
-                self.clear_caches()
-                logger.info(f"Processing fold {fold + 1}/{n_splits}")
-                
-                # Create train/val datasets
-                train_data = dataset._create_subset_dataset(train_idx)
-                val_data = dataset._create_subset_dataset(val_idx)
-                
-                if len(train_data.preferences) == 0 or len(val_data.preferences) == 0:
-                    logger.warning(f"Empty split in fold {fold + 1}, skipping")
-                    continue
-                
-                # Fit Bayesian model on training data
-                self.fit_result(train_data)
-                
-                # Get predictions with uncertainty on validation set
-                val_predictions = []
-                val_uncertainties = []
-                val_true = []
-                
-                for pref in val_data.preferences:
-                    try:
-                        prediction = self.predict_preference(pref.bigram1, pref.bigram2)
-                        pred_prob = prediction.probability
-                        pred_std = prediction.uncertainty
-                        if not np.isnan(pred_prob):
-                            val_predictions.append(pred_prob)
-                            val_uncertainties.append(pred_std)
-                            val_true.append(1.0 if pref.preferred else 0.0)
-                    except Exception as e:
-                        logger.warning(f"Prediction failed for {pref.bigram1}-{pref.bigram2}: {str(e)}")
-                        continue
-                
-                if not val_predictions:
-                    logger.warning(f"No valid predictions in fold {fold + 1}, skipping")
-                    continue
-                
-                val_predictions = np.array(val_predictions)
-                val_true = np.array(val_true)
-                
-                # Calculate metrics
-                metrics['accuracy'].append(accuracy_score(val_true, val_predictions > 0.5))
-                metrics['auc'].append(roc_auc_score(val_true, val_predictions))
-                metrics['mean_uncertainty'].append(np.mean(val_uncertainties))
-                
-                # Store feature weights with uncertainty
-                weights = self.get_feature_weights()
-                if weights:
-                    logger.debug(f"Fold {fold + 1} weights: {weights}")
-                    for feature, (weight_mean, weight_std) in weights.items():
-                        if not np.isnan(weight_mean):
-                            feature_effects[feature].append({
-                                'mean': weight_mean,
-                                'std': weight_std
-                            })
-                else:
-                    logger.warning(f"No weights obtained in fold {fold + 1}")
-                        
-            finally:
-                # Clear caches after cross-validation
-                self.clear_caches()
-                    
-        # Process feature effects and calculate importance
-        processed_effects = {}
-        importance_metrics = {}
-        
-        for feature in feature_names:
-            # Calculate importance using aligned effects method
-            importance = self._calculate_feature_importance(
-                feature=feature,
-                dataset=dataset,
-                current_features=self.selected_features
-            )
-            
-            # Store results
-            effects = feature_effects.get(feature, [])
-            if effects:
-                effect_means = [e['mean'] for e in effects]
-                effect_stds = [e['std'] for e in effects]
-                
-                processed_effects[feature] = {
-                    'mean': float(np.mean(effect_means)),
-                    'std': float(np.mean(effect_stds)),
-                    'values': effect_means
-                }
-            
-            importance_metrics[feature] = {'importance': importance}
-        
-        # Log results
-        self._log_feature_selection_results(
-            self.selected_features, importance_metrics)
-        
-        # Save metrics to CSV
-        self.save_metrics_report(
-            metrics_dict={feature: {
-                **processed_effects.get(feature, {}),
-                'importance': importance_metrics[feature]['importance']
-            } for feature in feature_names},
-            output_file=self.config.feature_selection.metrics_file
-        )
-        
-        return {
-            'metrics': metrics,
-            'selected_features': self.selected_features,
-            'feature_effects': processed_effects,
-            'importance_metrics': importance_metrics,
-            'fold_uncertainties': dict(metrics['mean_uncertainty'])
-        }
-    
-    def _log_feature_selection_results(self, 
-                                    selected_features: List[str],
-                                    importance_metrics: Dict[str, Dict]) -> None:
-        """Log feature selection results."""
-        logger.info("Selected Features:")
-        for feature in selected_features:
-            metrics = importance_metrics.get(feature, {})
-            logger.info(f"  {feature}:")
-
+                                                            
     #--------------------------------------------
     # Data preparation and feature methods
     #--------------------------------------------
@@ -650,323 +507,6 @@ class PreferenceModel:
             for k in list(cache.keys())[:remove_count]:
                 del cache[k]
         cache[key] = value
-    
-    def prepare_data(self, dataset: PreferenceDataset, features: Optional[List[str]] = None) -> Dict:
-            """
-            Prepare data for Stan model with standardization, validation and cleaning.
-            Handles both main features and control features separately.
-            """
-            try:
-                processed_features = set()
-
-                # Get feature names and separate control features
-                self.feature_names = list(dict.fromkeys(
-                    features if features is not None else dataset.get_feature_names()
-                ))
-                control_features = self.config.features.control_features
-                
-                # Main features are those not in control_features - deduplicate
-                main_features = list(dict.fromkeys(
-                    [f for f in self.feature_names if f not in control_features]
-                ))
-                
-                # Check if this is a control-only model
-                is_control_only = not main_features and all(f in control_features for f in self.feature_names)
-                
-                if not is_control_only and not main_features:
-                    raise ValueError("No main features provided for model fitting")
-                    
-                logger.info(f"Main features ({len(main_features)}): {main_features}")
-                logger.info(f"Control features ({len(control_features)}): {control_features}")
-                
-                # Create participant ID mapping
-                participant_ids = sorted(list(dataset.participants))
-                participant_map = {pid: i+1 for i, pid in enumerate(participant_ids)}
-                
-                # Track feature statistics for standardization
-                feature_stats = defaultdict(lambda: {'values': [], 'mean': None, 'std': None})
-                
-                # First pass: collect values and standardize
-                logger.info("First pass: collect values and standardize")
-                for pref in dataset.preferences:
-                    # Collect main feature values
-                    if not is_control_only:
-                        for feature in main_features:
-
-                            if feature not in processed_features:
-                                logger.debug(f"Processing base feature: {feature}")
-                                processed_features.add(feature)
-
-                            if '_x_' in feature:
-                                # Split interaction name into component features
-                                # e.g., 'same_finger_x_sum_finger_values_x_rows_apart' -> 
-                                # ['same_finger', 'sum_finger_values', 'rows_apart']
-                                components = feature.split('_x_')
-                                
-                                # For each component feature, collect its values for both bigrams in the preference
-                                # This maintains statistics for the base features themselves
-                                for component in components:
-                                    # Get values for this component from both bigrams in the preference
-                                    feat1 = pref.features1.get(component, 0.0)  # Value for first bigram
-                                    feat2 = pref.features2.get(component, 0.0)  # Value for second bigram
-                                    # Store both values for computing statistics on the base feature
-                                    feature_stats[component]['values'].extend([feat1, feat2])
-                                
-                                # Now compute the interaction value for each bigram
-                                # For each bigram, multiply together all its component feature values
-                                feat1_interaction = 1.0  # Will hold product of all components for first bigram
-                                feat2_interaction = 1.0  # Will hold product of all components for second bigram
-                                for component in components:
-                                    # Multiply each component's value into the running product for each bigram
-                                    feat1_interaction *= pref.features1.get(component, 0.0)  # First bigram's product
-                                    feat2_interaction *= pref.features2.get(component, 0.0)  # Second bigram's product
-                                
-                                # Store both interaction values (one per bigram) for computing interaction statistics
-                                feature_stats[feature]['values'].extend([feat1_interaction, feat2_interaction])
-                            else:
-                                # For base features, simply get and store the value from each bigram
-                                feat1 = pref.features1.get(feature, 0.0)  # Value from first bigram
-                                feat2 = pref.features2.get(feature, 0.0)  # Value from second bigram
-                                if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                                    feat1 = 0.0
-                                    feat2 = 0.0
-                                feature_stats[feature]['values'].extend([feat1, feat2])
-
-                    # Collect control feature values
-                    for feature in control_features:
-
-                        if feature not in processed_features:
-                            logger.debug(f"Processing base feature: {feature}")
-                            processed_features.add(feature)
-
-                        feat1 = pref.features1.get(feature, 0.0)
-                        feat2 = pref.features2.get(feature, 0.0)
-                        feature_stats[feature]['values'].extend([feat1, feat2])
-                # Calculate standardization parameters
-                for feature, stats in feature_stats.items():
-                    values = np.array(stats['values'])
-
-                    # Filter out None values before calculating statistics
-                    values = np.array([v for v in values if v is not None])
-
-                    if len(values) > 0:
-                        stats['mean'] = float(np.mean(values))
-                        stats['std'] = float(np.std(values))
-                    else:
-                        # Handle case where all values are None
-                        stats['mean'] = 0.0
-                        stats['std'] = 1.0
-
-                    logger.debug(f"Feature {feature} stats - mean: {stats['mean']}, std: {stats['std']}")
-
-                # Second pass: build standardized matrices
-                processed_features.clear()  # Reset before second pass
-                logger.info("Second pass: build standardized matrices")
-                X1, X2 = [], []  # Main feature matrices
-                C1, C2 = [], []  # Control feature matrices
-                participant = []
-                y = []
-                
-                skipped_count = 0
-                for pref in dataset.preferences:
-                    try:
-                        # Process main features
-                        if is_control_only:
-                            features1_main = [0.0]  # Dummy feature
-                            features2_main = [0.0]
-                        else:
-                            features1_main = []
-                            features2_main = []
-                            for feature in main_features:
-
-                                if feature not in processed_features:
-                                    logger.debug(f"Processing base feature: {feature}")
-                                    processed_features.add(feature)
-
-                                try:
-
-                                    if '_x_' in feature:
-                                        # Add detailed logging
-                                        logger.debug(f"Processing interaction feature: {feature}")
-                                        components = feature.split('_x_')
-                                        logger.debug(f"Components: {components}")
-                                        
-                                        # Get standardized base features with error checking
-                                        for component in components:
-                                            if component not in feature_stats:
-                                                logger.error(f"Missing statistics for component: {component}")
-                                                raise ValueError(f"Missing statistics for component: {component}")
-                                        
-                                        # Initialize products for interaction
-                                        feat1_interaction = 1.0
-                                        feat2_interaction = 1.0
-                                        
-                                        # Multiply standardized values for each component
-                                        for component in components:
-                                            feat1 = pref.features1.get(component, 0.0)
-                                            feat2 = pref.features2.get(component, 0.0)
-                                            if component == 'typing_time' and (feat1 is None or feat2 is None):
-                                                feat1 = 0.0
-                                                feat2 = 0.0
-                                            
-                                            feat1_base = (feat1 - feature_stats[component]['mean']) / feature_stats[component]['std']
-                                            feat2_base = (feat2 - feature_stats[component]['mean']) / feature_stats[component]['std']
-                                            
-                                            feat1_interaction *= feat1_base
-                                            feat2_interaction *= feat2_base
-                                        
-                                        features1_main.append(feat1_interaction)
-                                        features2_main.append(feat2_interaction)
-                                    else:
-                                        # Add logging for base features
-                                        logger.debug(f"Processing base feature: {feature}")
-                                        if feature not in feature_stats:
-                                            logger.error(f"Missing statistics for feature: {feature}")
-                                            raise ValueError(f"Missing statistics for feature: {feature}")
-                                        
-                                        feat1 = pref.features1.get(feature, 0.0)
-                                        feat2 = pref.features2.get(feature, 0.0)
-                                        if feature == 'typing_time' and (feat1 is None or feat2 is None):
-                                            feat1 = 0.0
-                                            feat2 = 0.0
-
-                                        # Always standardize, even if we've set values to zero
-                                        feat1 = (feat1 - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                                        feat2 = (feat2 - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                                        
-                                        features1_main.append(feat1)
-                                        features2_main.append(feat2)
-
-                                except Exception as e:
-                                    logger.error(f"Error processing feature {feature}: {str(e)}")
-                                    raise  # Re-raise to be caught by outer try-except
-                                    
-                        # Process control features with error checking
-                        features1_control = []
-                        features2_control = []
-                        for feature in control_features:
-
-                            if feature not in processed_features:
-                                logger.debug(f"Processing base feature: {feature}")
-                                processed_features.add(feature)
-
-                            if feature not in feature_stats:
-                                logger.error(f"Missing statistics for control feature: {feature}")
-                                raise ValueError(f"Missing statistics for control feature: {feature}")
-                                
-                            feat1 = (pref.features1.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                            feat2 = (pref.features2.get(feature, 0.0) - feature_stats[feature]['mean']) / feature_stats[feature]['std']
-                            features1_control.append(feat1)
-                            features2_control.append(feat2)
-                            
-                        # Add arrays only if we got here without errors
-                        X1.append(features1_main)
-                        X2.append(features2_main)
-                        C1.append(features1_control)
-                        C2.append(features2_control)
-                        participant.append(participant_map[pref.participant_id])
-                        y.append(1 if pref.preferred else 0)
-                        
-                    except Exception as e:
-                        logger.warning(f"Skipping preference due to error: {str(e)}")
-                        logger.warning(f"Preference details: bigram1={pref.bigram1}, bigram2={pref.bigram2}")
-                        logger.warning(f"Features1: {pref.features1}")
-                        logger.warning(f"Features2: {pref.features2}")
-                        skipped_count += 1
-                        continue
-
-                if skipped_count == len(dataset.preferences):
-                    logger.error("All preferences were skipped due to errors")
-                    raise ValueError("No valid preferences remained after processing")
-                elif skipped_count > 0:
-                    logger.warning(f"Skipped {skipped_count} preferences due to invalid features")
-
-                # Convert to numpy arrays
-                X1 = np.array(X1, dtype=np.float64)
-                X2 = np.array(X2, dtype=np.float64)
-                C1 = np.array(C1, dtype=np.float64)
-                C2 = np.array(C2, dtype=np.float64)
-                participant = np.array(participant, dtype=np.int32)
-                y = np.array(y, dtype=np.int32)
-
-                # Check if we have any valid data
-                if len(X1) == 0:
-                    logger.error("No valid preferences after processing")
-                    raise ValueError("No valid preferences remained after processing")
-
-                # Reshape arrays if needed
-                if is_control_only:
-                    if len(X1) > 0 and X1.ndim == 1:
-                        X1 = X1.reshape(-1, 1)
-                        X2 = X2.reshape(-1, 1)
-                else:
-                    if len(X1) > 0 and X1.ndim == 1 and len(main_features) > 0:
-                        X1 = X1.reshape(-1, len(main_features))
-                        X2 = X2.reshape(-1, len(main_features))
-
-                if len(C1) > 0 and C1.ndim == 1 and len(control_features) > 0:
-                    C1 = C1.reshape(-1, len(control_features))
-                    C2 = C2.reshape(-1, len(control_features))
-
-                # Verify dimensions and check for NaNs
-                if not is_control_only:
-                    if X1.shape[1] != len(main_features):
-                        raise ValueError(f"Main feature dimension mismatch: {X1.shape[1]} != {len(main_features)}")
-                else:
-                    if X1.shape[1] != 1:
-                        raise ValueError("Invalid dummy feature dimension for control-only model")
-                        
-                if C1.shape[1] != len(control_features):
-                    raise ValueError(f"Control feature dimension mismatch: {C1.shape[1]} != {len(control_features)}")
-                    
-                if np.any(np.isnan(X1)) or np.any(np.isnan(X2)) or np.any(np.isnan(C1)) or np.any(np.isnan(C2)):
-                    raise ValueError("NaN values found in feature matrices")
-
-                # Log dimensions and statistics
-                logger.info(f"Data dimensions:")
-                logger.info(f"  Preferences: {len(y)}")
-                logger.info(f"  Participants: {len(participant_ids)}")
-                if is_control_only:
-                    logger.info("  Using dummy main feature for control-only model")
-                logger.info(f"  Main features: {1 if is_control_only else len(main_features)}")
-                logger.info(f"  Control features: {len(control_features)}")
-
-                # Log original and standardized statistics
-                logger.info("Feature statistics:")
-                if not is_control_only:
-                    for i, feature in enumerate(main_features):
-                        logger.info(f"{feature} (main):")
-                        if feature in feature_stats:
-                            logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
-                                    f"std: {feature_stats[feature]['std']:.3f}")
-                        logger.info(f"  Standardized - mean: {np.mean(X1[:, i]):.3f}, "
-                                f"std: {np.std(X1[:, i]):.3f}")
-
-                for i, feature in enumerate(control_features):
-                    logger.info(f"{feature} (control):")
-                    logger.info(f"  Original - mean: {feature_stats[feature]['mean']:.3f}, "
-                            f"std: {feature_stats[feature]['std']:.3f}")
-                    logger.info(f"  Standardized - mean: {np.mean(C1[:, i]):.3f}, "
-                            f"std: {np.std(C1[:, i]):.3f}")
-
-                return {
-                    'N': len(y),
-                    'P': len(participant_ids),
-                    'F': 1 if is_control_only else len(main_features),
-                    'C': len(control_features),
-                    'X1': X1,
-                    'X2': X2,
-                    'C1': C1,
-                    'C2': C2,
-                    'participant': participant,
-                    'y': y,
-                    'feature_scale': self.config.model.feature_scale,
-                    'participant_scale': self.config.model.participant_scale
-                }
-
-            except Exception as e:
-                logger.error(f"Error preparing data: {str(e)}")
-                raise
 
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
@@ -1140,78 +680,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error getting feature weights: {str(e)}")
             return {}
-        
-    def calculate_storage_requirements(self, dataset: PreferenceDataset, all_features: List[str]) -> int:
-        """
-        Calculate approximate storage requirements for the entire feature selection process.
-        
-        Returns:
-            Required storage in MB
-        """
-        bytes_per_param = 8  # Double precision float
-        n_participants = len(dataset.participants)
-        n_preferences = len(dataset.preferences)
-        n_features = len(all_features)
-        n_chains = self.config.model.chains
-        n_samples = self.config.model.warmup + self.config.model.n_samples
-        
-        logger.info(f"Storage calculation details:")
-        logger.info(f"  Participants: {n_participants}")
-        logger.info(f"  Preferences: {n_preferences}")
-        logger.info(f"  Features: {n_features}")
-        logger.info(f"  Chains: {n_chains}")
-        logger.info(f"  Total samples: {n_samples}")
-        
-        # Storage per model fit
-        params_per_chain = (n_participants * n_features) + n_preferences + n_features
-        chain_storage = params_per_chain * bytes_per_param * n_chains * n_samples
-        
-        logger.info(f"  Parameters per chain: {params_per_chain}")
-        logger.info(f"  Storage per full model fit: {chain_storage / (1024 * 1024):.1f} MB")
-        
-        # Number of model fits needed
-        total_fits = 1 + n_features + (5 * n_features)
-        logger.info(f"  Total model fits needed: {total_fits}")
-        logger.info(f"    - Initial baseline: 1")
-        logger.info(f"    - Feature evaluations: {n_features}")
-        logger.info(f"    - Cross-validation fits: {5 * n_features}")
-        
-        # Total storage including overhead for temp files
-        total_bytes = chain_storage * total_fits * 1.5  # 50% overhead
-        total_mb = int(total_bytes / (1024 * 1024))
-        
-        logger.info(f"  Total storage needed (with 50% overhead): {total_mb} MB")
-        
-        return total_mb
-
-    def check_total_storage(self, dataset: PreferenceDataset, all_features: List[str]) -> None:
-        """
-        Check if enough storage is available for the entire feature selection process.
-        Raises RuntimeError if insufficient space.
-        """
-        required_mb = self.calculate_storage_requirements(dataset, all_features)
-        
-        # Check temp directory space
-        temp_dir = Path(tempfile.gettempdir())
-        total, used, free = shutil.disk_usage(temp_dir)
-        free_mb = free // (1024 * 1024)
-        
-        logger.info(f"Storage requirements:")
-        logger.info(f"  Required space: {required_mb} MB")
-        logger.info(f"  Available space: {free_mb} MB")
-        
-        if free_mb < required_mb:
-            raise RuntimeError(
-                f"Insufficient storage space for feature selection.\n"
-                f"Required: {required_mb} MB\n"
-                f"Available: {free_mb} MB\n"
-                f"Consider:\n"
-                f"- Freeing up temporary space\n"
-                f"- Reducing number of chains ({self.config.model.chains})\n"
-                f"- Reducing number of samples ({self.config.model.n_samples})\n"
-                f"- Reducing number of features to evaluate ({len(all_features)})"
-            )
-                                                
+                                                        
     #--------------------------------------------
     # Feature selection and evaluation methods
     #--------------------------------------------  
@@ -1304,16 +773,16 @@ class PreferenceModel:
             selected_features = list(control_features)  # Start with control features
 
             # Log initial state
-            logger.info("\nStarting feature selection:")
-            logger.info(f"Control features: {selected_features}")
-            logger.info(f"Candidate features: {len(candidate_features)}")
+            logger.info("Starting feature selection:")
+            logger.info(f"  Control features: {selected_features}")
+            logger.info(f"  Candidate features: {len(candidate_features)}")
             
             # Keep selecting features until no more useful ones found
             round_num = 1
             while candidate_features:
-                logger.info(f"\nSelection Round {round_num}")
-                logger.info(f"Current features: {selected_features}")
-                logger.info(f"Remaining candidates: {len(candidate_features)}")
+                logger.info(f"Selection round {round_num}")
+                logger.info(f"  Current features: {selected_features}")
+                logger.info(f"  Remaining candidates: {len(candidate_features)}")
                 
                 best_feature = None
                 best_importance = -float('inf')
@@ -1342,7 +811,7 @@ class PreferenceModel:
                 candidate_features.remove(best_feature)
                 round_num += 1
 
-            logger.info("\nFeature selection complete:")
+            logger.info("Feature selection complete:")
             logger.info(f"Selected features: {selected_features}")
             self.selected_features = selected_features
             return selected_features
@@ -1351,23 +820,6 @@ class PreferenceModel:
             logger.error(f"Error in select_features: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-
-    def _get_evaluation_context(self, feature: str, current_selected: List[str], 
-                            control_features: List[str]) -> Optional[List[str]]:
-        """Get evaluation context for a feature."""
-        if '_x_' in feature:
-            components = feature.split('_x_')
-            if not all(c in current_selected for c in components):
-                return None
-        
-        # Build context with no duplicates
-        context = list(dict.fromkeys(
-            control_features +  # Control features first
-            current_selected +  # Currently selected features
-            [feature]          # Feature being evaluated
-        ))
-        
-        return context
                                                                                                                                                                                                                                                        
     def _prepare_feature_matrices(self, dataset: PreferenceDataset,
                                 main_features: List[str],
@@ -1487,21 +939,6 @@ class PreferenceModel:
             logger.error("Traceback:", exc_info=True)
             raise
                                                                 
-    def save_metrics_report(self, metrics_dict: Dict[str, Dict[str, float]], output_file: str):
-        """Generate and save a detailed metrics report."""
-        report_df = pd.DataFrame([
-            {
-                'Feature': feature,
-                'Model Effect': metrics['model_effect'],
-                'Effect Consistency': metrics['effect_consistency'],
-                'Predictive Power': metrics['predictive_power']
-            }
-            for feature, metrics in metrics_dict.items()
-        ])
-        
-        # Save to CSV
-        report_df.to_csv(output_file, index=False)
-
     #--------------------------------------------
     # Statistical and model diagnostic methods
     #--------------------------------------------

@@ -322,7 +322,7 @@ def main():
                 selected_features = model.select_features(processed_train, all_features)
                 logger.info(f"Feature selection completed. Selected features: {selected_features}")
                 
-                # Validate on held-out validation set
+                # Train model on training set and validate on held-out validation set
                 model.fit(feature_select_train, selected_features)
                 val_metrics = model.evaluate(feature_select_val)
                 logger.info(f"Validation metrics - Accuracy: {val_metrics['accuracy']:.4f}, AUC: {val_metrics['auc']:.4f}")
@@ -333,7 +333,6 @@ def main():
                 # Evaluate features using feature selection training data
                 results = []
                 selectable_features = [f for f in all_features if f not in config.features.control_features]
-                
                 for feature_name in selectable_features:
                     importance = model._calculate_feature_importance(
                         feature=feature_name,
@@ -348,7 +347,7 @@ def main():
                         'feature_name': feature_name,
                         'n_components': len(components),
                         'selected': 1 if feature_name in selected_features else 0,
-                        'importance': importance,  # Single importance metric
+                        'importance': importance,
                         'weight': weight,
                         'weight_std': std,
                         'validation_accuracy': val_metrics['accuracy'],
@@ -365,9 +364,9 @@ def main():
                 model.save(model_save_path)
                 
                 # Log final results and summary
-                logger.info("\nFeature selection summary:")
-                logger.info(f"Features selected: {len(selected_features)}/{len(selectable_features)}")
-                logger.info(f"Validation AUC: {val_metrics['auc']:.4f}")
+                logger.info("Feature selection summary:")
+                logger.info(f"  Features selected: {len(selected_features)}/{len(selectable_features)}")
+                logger.info(f"  Validation AUC: {val_metrics['auc']:.4f}")
                 
                 for feature in selected_features:
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
@@ -376,7 +375,7 @@ def main():
                         dataset=processed_train,
                         current_features=selected_features
                     )
-                    logger.info(f"\n{feature}:")
+                    logger.info(f"{feature}:")
                     logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
                     logger.info(f"  Importance: {importance:.3f}")
             

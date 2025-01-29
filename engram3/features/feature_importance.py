@@ -2,17 +2,6 @@
 """
 Feature importance calculation and selection for keyboard layout preference analysis.
 
-Core functionality:
-- Statistical evaluation of individual features using multiple metrics:
-  * model_effect: Direct impact on predictions
-  * effect_consistency: Stability across cross-validation splits
-  * predictive_power: Incremental prediction improvement
-- Interaction feature analysis and evaluation
-- Round-robin tournament selection process
-- Cross-validation based stability assessment
-- Performance optimization via result caching
-- Comprehensive metric reporting
-
 The FeatureImportanceCalculator class:
 - Manages feature evaluation pipeline
 - Handles feature standardization and validation
@@ -27,8 +16,6 @@ for the keyboard layout preference model.
 import numpy as np
 from typing import Dict, List, Union
 from pathlib import Path
-from collections import defaultdict
-import copy
 
 from engram3.utils.config import Config, FeatureSelectionSettings
 from typing import TYPE_CHECKING
@@ -108,17 +95,6 @@ class FeatureImportanceCalculator:
         }
         self._baseline_accuracy = None
 
-    def reset_normalization_factors(self):
-        """Reset global normalization tracking at start of feature selection."""
-        self._max_effect = {'control': 0.0, 'main': 0.0}
-        self._max_consistency = {'control': 0.0, 'main': 0.0}
-        self._baseline_accuracy = None
-
-    def __del__(self):
-        """Ensure cache is cleared on deletion."""
-        if hasattr(self, 'feature_values_cache'):
-            self.feature_values_cache.clear()
-
     def _compute_baseline_accuracy(self, dataset: PreferenceDataset, model: 'PreferenceModel') -> float:
         """Compute baseline model accuracy using only control features."""
         try:
@@ -160,19 +136,9 @@ class FeatureImportanceCalculator:
             logger.error(f"Error computing baseline accuracy: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             return 0.5  # Return random chance on error
-                                                                        
-    def clear_caches(self):
-        """Clear all caches."""
-        if hasattr(self, 'metric_cache'):
-            self.metric_cache.clear()
+
+    def __del__(self):
+        """Ensure cache is cleared on deletion."""
         if hasattr(self, 'feature_values_cache'):
             self.feature_values_cache.clear()
 
-    def _get_default_metrics(self) -> Dict[str, float]:
-        """Get default metrics dictionary with zero values."""
-        return {
-            'model_effect': 0.0,
-            'effect_consistency': 0.0,
-            'predictive_power': 0.0
-        }
- 

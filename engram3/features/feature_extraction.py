@@ -180,36 +180,4 @@ class FeatureExtractor:
         """Calculate sum of row position values"""
         return sum_row_position_values(char1, char2, self.config.column_map, 
                                     self.config.row_position_values)
-
-def load_interactions(filepath: str) -> List[List[str]]:
-    """Load feature interactions from YAML file"""
-    logger.debug(f"Loading interactions from {filepath}")
-    
-    try:
-        with open(filepath, 'r') as f:
-            data = yaml.safe_load(f)
-            
-        if not data or 'interactions' not in data:
-            logger.warning(f"No interactions found in {filepath}")
-            return []
-            
-        interactions = data['interactions']
-        
-        if not isinstance(interactions, list):
-            logger.error("Interactions must be a list")
-            return []
-            
-        valid_interactions = []
-        for interaction in interactions:
-            if isinstance(interaction, list) and all(isinstance(f, str) for f in interaction):
-                valid_interactions.append(interaction)
-            else:
-                logger.warning(f"Skipping invalid interaction format: {interaction}")
-                
-        logger.info(f"Loaded {len(valid_interactions)} valid interactions")
-        return valid_interactions
-        
-    except Exception as e:
-        logger.error(f"Error loading interactions file: {str(e)}")
-        return []
     
