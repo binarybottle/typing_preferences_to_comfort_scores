@@ -94,6 +94,7 @@ class PreferenceModel:
         if config is None:
             raise ValueError("Config is required")
         
+        self._is_fitted = False  # Private attribute to store the fitted state
         self.config = config if isinstance(config, Config) else Config(**config)
         self.reset_state()
         
@@ -244,7 +245,7 @@ class PreferenceModel:
             raise
         
         finally:
-            self.cleanup()  # Clean up after fitting
+            #self.cleanup()  # Clean up after fitting
             self._check_memory_usage()
                     
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
@@ -396,18 +397,20 @@ class PreferenceModel:
     #--------------------------------------------
     def cleanup(self):
         """Clean up model resources."""
-        # Clear model state
-        if hasattr(self, 'fit_result'):
-            # Clean only completed run directories
-            self._cleanup_run_directory(active_only=True)
-            del self.fit_result
+        # Don't clear fit_result if model is fitted
+        if not self.is_fitted:
+            if hasattr(self, 'fit_result'):
+                self._cleanup_run_directory(active_only=True)
+                del self.fit_result
         
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
             
         # Clean up temp models
         self.cleanup_temp_models()
-        self.reset_state()
+        # Don't reset state if model is fitted
+        if not self.is_fitted:
+            self.reset_state()
         gc.collect()
         
     def cleanup_temp_models(self):
@@ -1416,4 +1419,12 @@ class PreferenceModel:
         """Prior scale for participant effects."""
         return self.config.model.participant_scale
         
+    @property
+    def is_fitted(self) -> bool:
+        """Whether the model has been fitted."""
+        return self._is_fitted
 
+    @is_fitted.setter
+    def is_fitted(self, value: bool):
+        """Set the fitted state of the model."""
+        self._is_fitted = value
