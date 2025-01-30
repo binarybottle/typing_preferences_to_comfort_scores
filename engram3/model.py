@@ -818,11 +818,6 @@ class PreferenceModel:
                                 control_features: List[str]) -> Dict[str, Any]:
         """Prepare feature matrices for Stan model."""
         try:
-            # Validate Stan results before attempting to use them
-            if hasattr(self, 'fit_result'):
-                if not hasattr(self.fit_result, 'stan_variable'):
-                    logger.warning("Existing fit_result missing stan_variable method")
-
             # Collect all feature values
             feature_values = defaultdict(list)
             for feature in main_features + control_features:
@@ -844,8 +839,7 @@ class PreferenceModel:
                 std = float(np.std(values)) if len(values) > 0 else 1.0
                 self.feature_stats[feature] = {'mean': mean, 'std': std}
                 
-                logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
-                logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
+                logger.info(f"{feature} ({'main' if feature in main_features else 'control'}): original - mean: {mean:.3f}, std: {std:.3f}")
 
             # Initialize matrices
             X1 = np.zeros((len(dataset.preferences), 0), dtype=np.float64)  # Empty if no main features
@@ -1193,7 +1187,7 @@ class PreferenceModel:
             
             # Process each fold
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
-                logger.info(f"\nProcessing fold {fold}/5")
+                logger.info(f"\nProcessing fold {fold}/5 for {feature}")
                 train_data = dataset._create_subset_dataset(train_idx)
                 val_data = dataset._create_subset_dataset(val_idx)
                 logger.info(f"Train set size: {len(train_data.preferences)} preferences")
@@ -1273,8 +1267,8 @@ class PreferenceModel:
                 effect_magnitude = abs(mean_aligned_effect)
                 
                 # Calculate different consistency metrics
-                # 1. Original (unbounded negative)
-                consistency_original = 1 - (effect_std / (effect_magnitude + 1e-6))
+                # 1. Unbounded negative
+                consistency_unbounded = 1 - (effect_std / (effect_magnitude + 1e-6))
                 
                 # 2. Bounded [0,1] using inverse ratio
                 consistency_bounded = 1 / (1 + (effect_std / effect_magnitude))
@@ -1286,34 +1280,35 @@ class PreferenceModel:
                 consistency_sigmoid = 1 / (1 + np.exp(effect_std / effect_magnitude - 1))
                 
                 # Calculate importance scores using different methods
-                importance_original = effect_magnitude * max(0, consistency_original)
+                importance_original = effect_magnitude * max(0, consistency_unbounded)
                 importance_bounded = effect_magnitude * consistency_bounded  
                 importance_capped = effect_magnitude * consistency_capped
                 importance_sigmoid = effect_magnitude * consistency_sigmoid
                 
                 # Log detailed metrics
-                logger.info("\nFeature importance analysis:")
+                logger.info(f"\nFeature importance analysis for '{feature}':")
                 logger.info(f"Raw metrics:")
                 logger.info(f"  Total effects analyzed: {len(cv_aligned_effects)}")
                 logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
-                logger.info(f"  Effect std dev: {effect_std:.4f}")
                 logger.info(f"  Effect magnitude: {effect_magnitude:.4f}")
+                logger.info(f"  Effect std dev: {effect_std:.4f}")
                 logger.info(f"  Std/Magnitude ratio: {(effect_std/effect_magnitude):.4f}")
                 
                 logger.info(f"\nConsistency metrics:")
-                logger.info(f"  Original (unbounded): {consistency_original:.4f}")
-                logger.info(f"  Bounded (inverse): {consistency_bounded:.4f}")
-                logger.info(f"  Bounded (capped): {consistency_capped:.4f}")
-                logger.info(f"  Bounded (sigmoid): {consistency_sigmoid:.4f}")
+                logger.info(f"  unbounded ratio: 1 - (std/magnitude) = {consistency_unbounded:.5f}")
+                logger.info(f"  min-capped ratio: 1 - min(1, std/magnitude) = {consistency_capped:.5f}")
+                logger.info(f"  inverse-bounded: 1/(1 + std/magnitude) = {consistency_bounded:.5f}")
+                logger.info(f"  sygmoid-bounded: 1/(1 + exp(std/magnitude - 1)) = {consistency_sigmoid:.5f}")
                 
-                logger.info(f"\nImportance scores:")
-                logger.info(f"  Original: {importance_original:.4f}")
-                logger.info(f"  Using bounded: {importance_bounded:.4f}")
-                logger.info(f"  Using capped: {importance_capped:.4f}")
-                logger.info(f"  Using sigmoid: {importance_sigmoid:.4f}")
+                logger.info(f"\nImportance scores = effect magnitude times:")
+                logger.info(f"  max(0, unbounded consistency): {importance_original:.5f}")
+                logger.info(f"  min-capped consistency: {importance_capped:.5f}")
+                logger.info(f"  inverse-bounded consistency: {importance_bounded:.5f}")
+                logger.info(f"  sigmoid-bounded consistency: {importance_sigmoid:.5f}")
                 
-                # Return all metrics for analysis
-                return importance_original
+                # Return selected importance measure
+                selected_importance = importance_bounded
+                return selected_importance
                 
             else:
                 logger.warning("No valid effects calculated")
