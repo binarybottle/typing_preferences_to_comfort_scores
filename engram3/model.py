@@ -820,9 +820,7 @@ class PreferenceModel:
         try:
             # Validate Stan results before attempting to use them
             if hasattr(self, 'fit_result'):
-                if self.fit_result is None:
-                    logger.warning("Existing fit_result is None")
-                elif not hasattr(self.fit_result, 'stan_variable'):
+                if not hasattr(self.fit_result, 'stan_variable'):
                     logger.warning("Existing fit_result missing stan_variable method")
 
             # Collect all feature values
@@ -1167,8 +1165,12 @@ class PreferenceModel:
             self.cleanup()
 
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
-                            current_features: List[str]) -> float:
-        """Calculate feature importance based on prediction improvement."""
+                                current_features: List[str]) -> float:
+        """Calculate feature importance based on prediction improvement.
+        
+        Returns:
+            float: Importance score using bounded consistency metric (0 to effect_magnitude)
+        """
         logger.info(f"\nCalculating importance for feature: {feature}")
         logger.info(f"Current features: {current_features}")
         
@@ -1263,31 +1265,64 @@ class PreferenceModel:
                     logger.warning(f"Error processing fold {fold}: {str(e)}")
                     continue
                     
-            # Calculate final metrics
+            # Calculate metrics if we have effects
             if cv_aligned_effects:
                 cv_aligned_effects = np.array(cv_aligned_effects)
                 mean_aligned_effect = float(np.mean(cv_aligned_effects))
                 effect_std = float(np.std(cv_aligned_effects))
                 effect_magnitude = abs(mean_aligned_effect)
-                effect_consistency = 1 - (effect_std / (effect_magnitude + 1e-6))
-                importance = effect_magnitude * max(0, effect_consistency)
                 
-                logger.info("Feature importance analysis results:")
-                logger.info(f"  Total valid effects: {len(cv_aligned_effects)}")
+                # Calculate different consistency metrics
+                # 1. Original (unbounded negative)
+                consistency_original = 1 - (effect_std / (effect_magnitude + 1e-6))
+                
+                # 2. Bounded [0,1] using inverse ratio
+                consistency_bounded = 1 / (1 + (effect_std / effect_magnitude))
+                
+                # 3. Bounded [0,1] using capped ratio
+                consistency_capped = 1 - min(1, effect_std / effect_magnitude)
+                
+                # 4. Bounded [0,1] using sigmoid of ratio
+                consistency_sigmoid = 1 / (1 + np.exp(effect_std / effect_magnitude - 1))
+                
+                # Calculate importance scores using different methods
+                importance_original = effect_magnitude * max(0, consistency_original)
+                importance_bounded = effect_magnitude * consistency_bounded  
+                importance_capped = effect_magnitude * consistency_capped
+                importance_sigmoid = effect_magnitude * consistency_sigmoid
+                
+                # Log detailed metrics
+                logger.info("\nFeature importance analysis:")
+                logger.info(f"Raw metrics:")
+                logger.info(f"  Total effects analyzed: {len(cv_aligned_effects)}")
                 logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
-                logger.info(f"  Effect standard deviation: {effect_std:.4f}")
+                logger.info(f"  Effect std dev: {effect_std:.4f}")
                 logger.info(f"  Effect magnitude: {effect_magnitude:.4f}")
-                logger.info(f"  Effect consistency: {effect_consistency:.4f}")
-                logger.info(f"  Final importance score: {importance:.4f}")
+                logger.info(f"  Std/Magnitude ratio: {(effect_std/effect_magnitude):.4f}")
                 
-                return float(importance)
+                logger.info(f"\nConsistency metrics:")
+                logger.info(f"  Original (unbounded): {consistency_original:.4f}")
+                logger.info(f"  Bounded (inverse): {consistency_bounded:.4f}")
+                logger.info(f"  Bounded (capped): {consistency_capped:.4f}")
+                logger.info(f"  Bounded (sigmoid): {consistency_sigmoid:.4f}")
+                
+                logger.info(f"\nImportance scores:")
+                logger.info(f"  Original: {importance_original:.4f}")
+                logger.info(f"  Using bounded: {importance_bounded:.4f}")
+                logger.info(f"  Using capped: {importance_capped:.4f}")
+                logger.info(f"  Using sigmoid: {importance_sigmoid:.4f}")
+                
+                # Return all metrics for analysis
+                return importance_original
+                
             else:
-                logger.warning("No valid effects calculated across any folds")
+                logger.warning("No valid effects calculated")
                 return 0.0
-            
+                
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
-            return -float('inf')
+            return 0.0
+        
         finally:
             # Ensure cleanup even if error occurs
             self.cleanup_temp_models()
