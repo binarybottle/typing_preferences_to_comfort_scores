@@ -301,10 +301,14 @@ def main():
             processed_train.file_path = feature_select_train.file_path
             processed_train.config = feature_select_train.config
             processed_train.control_features = feature_select_train.control_features
-            processed_train.feature_extractor = feature_select_train.feature_extractor
+            processed_train.feature_extractor = feature_select_train.feature_extractor  # Make sure this is set
             processed_train.feature_names = feature_select_train.feature_names
             processed_train.all_bigrams = feature_select_train.all_bigrams
-            processed_train.all_bigram_features = feature_select_train.all_bigram_features
+            processed_train.all_bigram_features = feature_select_train.all_bigram_features  
+
+            # Verify feature_extractor is set
+            if processed_train.feature_extractor is None:
+                raise ValueError("Feature extractor not set in processed dataset")
 
             logger.info(f"Preprocessed feature selection training data:")
             logger.info(f"  Original size: {len(feature_select_train.preferences)} preferences")

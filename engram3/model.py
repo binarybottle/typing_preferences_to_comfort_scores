@@ -170,6 +170,7 @@ class PreferenceModel:
 
             # Reset state and store feature names
             self.reset_state()
+            self.dataset = dataset  # Store dataset
             self.feature_names = features
             
             if fit_purpose:
@@ -229,6 +230,49 @@ class PreferenceModel:
         
         finally:
             self.cleanup()  # Clean up after fitting
+
+    def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
+        """Evaluate model performance."""
+        try:
+            if not hasattr(self, 'fit_result'):
+                raise ValueError("Model not fitted")
+            
+            # Get predictions
+            predictions = []
+            true_labels = []
+            
+            for pref in dataset.preferences:
+                # Get prediction
+                pred = self.predict_preference(pref.bigram1, pref.bigram2)
+                
+                # Store logit for AUC calculation
+                logit = -np.log(1/pred.probability - 1)
+                predictions.append(logit)
+                true_labels.append(float(pref.preferred))
+                
+            predictions = np.array(predictions)
+            true_labels = np.array(true_labels)
+            
+            # Compute metrics
+            accuracy = np.mean((predictions > 0) == true_labels)  # Use 0 as threshold for logits
+            auc = roc_auc_score(true_labels, predictions)
+            
+            logger.info(f"Prediction distribution:")
+            logger.info(f"  Mean: {np.mean(predictions):.4f}")
+            logger.info(f"  Std: {np.std(predictions):.4f}")
+            logger.info(f"  Min: {np.min(predictions):.4f}")
+            logger.info(f"  Max: {np.max(predictions):.4f}")
+            
+            return {
+                'accuracy': float(accuracy),
+                'auc': float(auc),
+                'mean_pred': float(np.mean(predictions)),
+                'std_pred': float(np.std(predictions))
+            }
+        
+        except Exception as e:
+            logger.error(f"Error in evaluate: {str(e)}")
+            return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
 
     def predict_preference(self, bigram1: str, bigram2: str) -> ModelPrediction:
         """Predict preference between two bigrams."""
@@ -331,49 +375,6 @@ class PreferenceModel:
                 computation_time=0.0
             )
                             
-    def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
-        """Evaluate model performance."""
-        try:
-            if not hasattr(self, 'fit_result'):
-                raise ValueError("Model not fitted")
-            
-            # Get predictions
-            predictions = []
-            true_labels = []
-            
-            for pref in dataset.preferences:
-                # Get prediction
-                pred = self.predict_preference(pref.bigram1, pref.bigram2)
-                
-                # Store logit for AUC calculation
-                logit = -np.log(1/pred.probability - 1)
-                predictions.append(logit)
-                true_labels.append(float(pref.preferred))
-                
-            predictions = np.array(predictions)
-            true_labels = np.array(true_labels)
-            
-            # Compute metrics
-            accuracy = np.mean((predictions > 0) == true_labels)  # Use 0 as threshold for logits
-            auc = roc_auc_score(true_labels, predictions)
-            
-            logger.info(f"Prediction distribution:")
-            logger.info(f"  Mean: {np.mean(predictions):.4f}")
-            logger.info(f"  Std: {np.std(predictions):.4f}")
-            logger.info(f"  Min: {np.min(predictions):.4f}")
-            logger.info(f"  Max: {np.max(predictions):.4f}")
-            
-            return {
-                'accuracy': float(accuracy),
-                'auc': float(auc),
-                'mean_pred': float(np.mean(predictions)),
-                'std_pred': float(np.std(predictions))
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in evaluate: {str(e)}")
-            return {'accuracy': 0.5, 'auc': 0.5, 'mean_pred': 0.0, 'std_pred': 1.0}
-
     #--------------------------------------------
     # Resource management methods
     #--------------------------------------------
@@ -391,6 +392,35 @@ class PreferenceModel:
     def cleanup_temp_dirs(self):
         """Aggressively clean up temporary directories and files."""
         try:
+            cleaned_space = 0
+            
+            # Don't clean up directories of active runs
+            active_run_dir = None
+            if hasattr(self, 'fit_result') and hasattr(self.fit_result, '_run_dir'):
+                active_run_dir = Path(self.fit_result._run_dir)
+
+            # Clean up home directory temp folder
+            home_temp = Path.home() / '.engram_temp'
+            if home_temp.exists():
+                for item in home_temp.iterdir():
+                    try:
+                        # Skip active run directory
+                        if active_run_dir and item == active_run_dir:
+                            continue
+                            
+                        if item.is_file():
+                            size = item.stat().st_size
+                            item.unlink()
+                            cleaned_space += size
+                        elif item.is_dir():
+                            size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                            import shutil
+                            shutil.rmtree(item)
+                            cleaned_space += size
+                    except Exception as e:
+                        logger.debug(f"Could not remove {item}: {e}")
+
+            # Clean up system temp directory
             temp_dir = tempfile.gettempdir()
             
             # Items to clean up (case-insensitive patterns)
@@ -399,16 +429,17 @@ class PreferenceModel:
                 'tmp', 'temp', '.json', '.csv'
             ]
             
-            cleaned_space = 0
-            
             for root, dirs, files in os.walk(temp_dir, topdown=False):
                 # Remove matching files
                 for file in files:
                     if any(pat.lower() in file.lower() for pat in patterns):
                         try:
-                            file_path = os.path.join(root, file)
-                            size = os.path.getsize(file_path)
-                            os.remove(file_path)
+                            file_path = Path(root) / file
+                            # Skip files in active run directory
+                            if active_run_dir and active_run_dir in file_path.parents:
+                                continue
+                            size = file_path.stat().st_size
+                            file_path.unlink()
                             cleaned_space += size
                         except Exception as e:
                             logger.debug(f"Could not remove file {file}: {e}")
@@ -417,17 +448,21 @@ class PreferenceModel:
                 for dir in dirs:
                     if any(pat.lower() in dir.lower() for pat in patterns):
                         try:
-                            dir_path = os.path.join(root, dir)
-                            if not os.listdir(dir_path):  # Only if empty
-                                os.rmdir(dir_path)
+                            dir_path = Path(root) / dir
+                            # Skip active run directory
+                            if active_run_dir and (dir_path == active_run_dir or 
+                                                active_run_dir in dir_path.parents):
+                                continue
+                            if not any(dir_path.iterdir()):  # Only if empty
+                                dir_path.rmdir()
                         except Exception as e:
                             logger.debug(f"Could not remove directory {dir}: {e}")
                             
-            logger.info(f"Cleaned up {cleaned_space / (1024*1024):.1f}MB from temp directory")
+            logger.info(f"Cleaned up {cleaned_space / (1024*1024):.1f}MB from temp directories")
             
         except Exception as e:
             logger.error(f"Error during temp cleanup: {e}")
-                                    
+
     def cleanup_temp_models(self):
         """Clean up temporary models created during evaluation."""
         if hasattr(self, '_temp_models'):
@@ -968,7 +1003,6 @@ class PreferenceModel:
                 except Exception as e:
                     logger.error(f"Error processing control features: {str(e)}")
                     raise
-
             logger.debug("Updated weights:")
             for feature, (mean, std) in self.feature_weights.items():
                 feature_type = "control" if feature in control_features else "main"
@@ -977,45 +1011,72 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error updating feature weights: {str(e)}")
             raise
-                                                                            
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+            
+        finally:
+            # Clean up the run directory after we're done with the results
+            if hasattr(self.fit_result, '_run_dir'):
+                try:
+                    run_dir = Path(self.fit_result._run_dir)
+                    if run_dir.exists():
+                        import shutil
+                        shutil.rmtree(run_dir)
+                except Exception as e:
+                    logger.warning(f"Could not clean up run directory: {e}")
+                                                                                                
     def _sample_with_retry(self, **kwargs):
         """Attempt sampling with retries and disk space checks."""
+        run_dir = None
         try:
-            # Clean up before checking space
-            self.cleanup_temp_dirs()
+            # Create temp directory in user's home directory
+            temp_dir = Path.home() / '.engram_temp'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir.chmod(0o755)
+
+            # Create a unique subfolder for this run
+            import uuid
+            run_dir = temp_dir / f"run_{uuid.uuid4().hex[:8]}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Override CmdStanPy's temp directory setting
+            import cmdstanpy.utils.filesystem as csfs
+            original_tmpdir = csfs._TMPDIR
+            csfs._TMPDIR = str(run_dir)
+            
+            # Add output directory to kwargs
+            kwargs['output_dir'] = str(run_dir)
             
             # Check available space
             required_mb = self.config.model.required_temp_mb
-            if not self.check_disk_space(required_mb):  # Use self.check_disk_space
-                raise OSError(
-                    f"Insufficient disk space. Need {required_mb}MB in temp directory."
-                )
+            if not self.check_disk_space(required_mb):
+                raise OSError(f"Insufficient disk space. Need {required_mb}MB.")
             
             # Attempt sampling
-            logger.info("Starting Stan sampling...")
+            logger.info(f"Starting Stan sampling in {run_dir}...")
             result = self.model.sample(**kwargs)
             
-            # Verify the sampling worked
             if not hasattr(result, 'stan_variable'):
                 raise RuntimeError("Sampling failed to produce valid results")
+
+            # Store run_dir in result to prevent premature cleanup
+            result._run_dir = run_dir
                 
             return result
             
-        except OSError as e:
-            logger.error(f"Disk space error during sampling: {e}")
-            self.cleanup_temp_dirs()
-            raise
-            
         except Exception as e:
             logger.error(f"Error during sampling: {e}")
-            self.cleanup_temp_dirs()
+            if run_dir and run_dir.exists():
+                try:
+                    import shutil
+                    shutil.rmtree(run_dir)
+                except Exception as cleanup_error:
+                    logger.warning(f"Could not remove run directory: {cleanup_error}")
             raise
             
         finally:
-            # Final cleanup
-            self.cleanup_temp_dirs()
-            
+            # Restore original temp directory
+            if 'original_tmpdir' in locals():
+                csfs._TMPDIR = original_tmpdir
+                                                            
     #--------------------------------------------
     # Feature selection methods
     #--------------------------------------------  
@@ -1024,7 +1085,8 @@ class PreferenceModel:
         try:
             self._check_memory_usage()
             self.dataset = dataset
-            
+            self.feature_extractor = dataset.feature_extractor  # Ensure feature_extractor is set
+
             # Preprocess dataset
             logger.info("Preprocessing dataset for feature selection...")
             valid_prefs = []
@@ -1039,16 +1101,16 @@ class PreferenceModel:
                     valid_prefs.append(pref)
             
             # Create processed dataset
-            self.processed_dataset = PreferenceDataset.__new__(PreferenceDataset)
-            self.processed_dataset.preferences = valid_prefs
-            self.processed_dataset.participants = {p.participant_id for p in valid_prefs}
-            self.processed_dataset.file_path = dataset.file_path
-            self.processed_dataset.config = dataset.config
-            self.processed_dataset.control_features = dataset.control_features
-            self.processed_dataset.feature_extractor = dataset.feature_extractor
-            self.processed_dataset.feature_names = dataset.feature_names
-            self.processed_dataset.all_bigrams = dataset.all_bigrams
-            self.processed_dataset.all_bigram_features = dataset.all_bigram_features
+            self.dataset = PreferenceDataset.__new__(PreferenceDataset)
+            self.dataset.preferences = valid_prefs
+            self.dataset.participants = {p.participant_id for p in valid_prefs}
+            self.dataset.file_path = dataset.file_path
+            self.dataset.config = dataset.config
+            self.dataset.control_features = dataset.control_features
+            self.dataset.feature_extractor = dataset.feature_extractor
+            self.dataset.feature_names = dataset.feature_names
+            self.dataset.all_bigrams = dataset.all_bigrams
+            self.dataset.all_bigram_features = dataset.all_bigram_features
             
             # Initialize feature sets
             control_features = self.config.features.control_features
@@ -1074,7 +1136,7 @@ class PreferenceModel:
                 for feature in candidate_features:
                     importance = self._calculate_feature_importance(
                         feature=feature,
-                        dataset=self.processed_dataset,
+                        dataset=self.dataset,
                         current_features=selected_features
                     )
 
@@ -1118,10 +1180,18 @@ class PreferenceModel:
             self.fit(dataset, features=current_features)
             
         try:
+            # Verify dataset and feature extractor
+            if dataset is None or dataset.feature_extractor is None:
+                logger.error("Invalid dataset or missing feature extractor")
+                return -float('inf')
+                
+            self.dataset = dataset
+            self.feature_extractor = dataset.feature_extractor
+            
             # Get cross-validation splits
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             cv_aligned_effects = []
-
+            
             # Process each fold
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
                 logger.info(f"\nProcessing fold {fold}/5")
@@ -1129,11 +1199,15 @@ class PreferenceModel:
                 val_data = dataset._create_subset_dataset(val_idx)
                 logger.info(f"Train set size: {len(train_data.preferences)} preferences")
                 logger.info(f"Validation set size: {len(val_data.preferences)} preferences")
-
+                
                 try:
                     # Create and train both models for this fold
                     with self._create_temp_model() as fold_baseline_model, \
                         self._create_temp_model() as fold_feature_model:
+                        
+                        # Ensure feature extractors are set
+                        fold_baseline_model.feature_extractor = dataset.feature_extractor
+                        fold_feature_model.feature_extractor = dataset.feature_extractor
                         
                         # Train baseline model
                         logger.info(f"Training baseline model for fold {fold}")
@@ -1141,14 +1215,14 @@ class PreferenceModel:
                         if not fold_baseline_model.is_fitted:
                             logger.warning(f"Failed to fit baseline model for fold {fold}")
                             continue
-
+                            
                         # Train feature model
                         logger.info(f"Training feature model for fold {fold}")
                         fold_feature_model.fit(train_data, features=current_features + [feature])
                         if not fold_feature_model.is_fitted:
                             logger.warning(f"Failed to fit feature model for fold {fold}")
                             continue
-
+                            
                         # Calculate effects for validation set
                         fold_effects = []
                         for pref in val_data.preferences:
@@ -1175,7 +1249,7 @@ class PreferenceModel:
                             except Exception as e:
                                 logger.warning(f"Error processing preference {pref.bigram1}-{pref.bigram2}: {str(e)}")
                                 continue
-
+                                
                         # Process fold results
                         if fold_effects:
                             mean_fold_effect = np.mean(fold_effects)
@@ -1183,11 +1257,11 @@ class PreferenceModel:
                             cv_aligned_effects.extend(fold_effects)
                         else:
                             logger.warning(f"No valid effects calculated for fold {fold}")
-
+                            
                 except Exception as e:
                     logger.warning(f"Error processing fold {fold}: {str(e)}")
                     continue
-
+                    
             # Calculate final metrics
             if cv_aligned_effects:
                 cv_aligned_effects = np.array(cv_aligned_effects)
@@ -1216,7 +1290,7 @@ class PreferenceModel:
         finally:
             # Ensure cleanup even if error occurs
             self.cleanup_temp_models()
-
+            
     #--------------------------------------------
     # Cross-validation methods
     #--------------------------------------------
