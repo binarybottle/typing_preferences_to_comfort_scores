@@ -139,6 +139,8 @@ class PreferenceModel:
         self.feature_extractor = None
         
         # Cache related state
+        if hasattr(self, 'processed_dataset'):
+            delattr(self, 'processed_dataset')
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
         if hasattr(self, '_temp_models'):
@@ -171,6 +173,7 @@ class PreferenceModel:
             # Reset state and store feature names
             self.reset_state()
             self.dataset = dataset  # Store dataset
+            self.processed_dataset = dataset  
             self.feature_names = features
             
             if fit_purpose:
@@ -205,6 +208,10 @@ class PreferenceModel:
                 control_features=control_features
             )
 
+            # Log key dimensions without overwhelming output
+            logger.debug(f"Data dims: N={processed_data['N']}, P={processed_data['P']}, " 
+                        f"F={processed_data['F']}, C={processed_data['C']}")
+
             # Store feature information
             self.feature_names = main_features + list(control_features)
             self.selected_features = main_features + list(control_features)
@@ -216,9 +223,17 @@ class PreferenceModel:
                 iter_warmup=self.config.model.warmup,
                 iter_sampling=self.config.model.n_samples,
                 adapt_delta=self.config.model.adapt_delta,
-                max_treedepth=self.config.model.max_treedepth
+                max_treedepth=self.config.model.max_treedepth,
+                refresh=None
             )
 
+            # Check diagnostics but only log if issues found
+            if hasattr(self.fit_result, 'diagnostic_summary'):
+                diagnostics = self.fit_result.diagnostic_summary()
+                if any(d > 0 for d in diagnostics.values()):
+                    logger.warning(f"Sampling diagnostics: {diagnostics}")
+
+            # Update weights and set fitted flag only after successful sampling
             self._update_feature_weights()
             self.is_fitted = True
 
@@ -230,7 +245,8 @@ class PreferenceModel:
         
         finally:
             self.cleanup()  # Clean up after fitting
-
+            self._check_memory_usage()
+                    
     def evaluate(self, dataset: PreferenceDataset) -> Dict[str, float]:
         """Evaluate model performance."""
         try:
@@ -380,89 +396,20 @@ class PreferenceModel:
     #--------------------------------------------
     def cleanup(self):
         """Clean up model resources."""
+        # Clear model state
         if hasattr(self, 'fit_result'):
+            # Clean only completed run directories
+            self._cleanup_run_directory(active_only=True)
             del self.fit_result
+        
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
-        # Clean up temp directories
-        self.cleanup_temp_dirs()
+            
+        # Clean up temp models
+        self.cleanup_temp_models()
         self.reset_state()
         gc.collect()
-
-    def cleanup_temp_dirs(self):
-        """Aggressively clean up temporary directories and files."""
-        try:
-            cleaned_space = 0
-            
-            # Don't clean up directories of active runs
-            active_run_dir = None
-            if hasattr(self, 'fit_result') and hasattr(self.fit_result, '_run_dir'):
-                active_run_dir = Path(self.fit_result._run_dir)
-
-            # Clean up home directory temp folder
-            home_temp = Path.home() / '.engram_temp'
-            if home_temp.exists():
-                for item in home_temp.iterdir():
-                    try:
-                        # Skip active run directory
-                        if active_run_dir and item == active_run_dir:
-                            continue
-                            
-                        if item.is_file():
-                            size = item.stat().st_size
-                            item.unlink()
-                            cleaned_space += size
-                        elif item.is_dir():
-                            size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
-                            import shutil
-                            shutil.rmtree(item)
-                            cleaned_space += size
-                    except Exception as e:
-                        logger.debug(f"Could not remove {item}: {e}")
-
-            # Clean up system temp directory
-            temp_dir = tempfile.gettempdir()
-            
-            # Items to clean up (case-insensitive patterns)
-            patterns = [
-                'stan', 'cmdstan', 'preference_model',
-                'tmp', 'temp', '.json', '.csv'
-            ]
-            
-            for root, dirs, files in os.walk(temp_dir, topdown=False):
-                # Remove matching files
-                for file in files:
-                    if any(pat.lower() in file.lower() for pat in patterns):
-                        try:
-                            file_path = Path(root) / file
-                            # Skip files in active run directory
-                            if active_run_dir and active_run_dir in file_path.parents:
-                                continue
-                            size = file_path.stat().st_size
-                            file_path.unlink()
-                            cleaned_space += size
-                        except Exception as e:
-                            logger.debug(f"Could not remove file {file}: {e}")
-                            
-                # Remove matching empty directories
-                for dir in dirs:
-                    if any(pat.lower() in dir.lower() for pat in patterns):
-                        try:
-                            dir_path = Path(root) / dir
-                            # Skip active run directory
-                            if active_run_dir and (dir_path == active_run_dir or 
-                                                active_run_dir in dir_path.parents):
-                                continue
-                            if not any(dir_path.iterdir()):  # Only if empty
-                                dir_path.rmdir()
-                        except Exception as e:
-                            logger.debug(f"Could not remove directory {dir}: {e}")
-                            
-            logger.info(f"Cleaned up {cleaned_space / (1024*1024):.1f}MB from temp directories")
-            
-        except Exception as e:
-            logger.error(f"Error during temp cleanup: {e}")
-
+        
     def cleanup_temp_models(self):
         """Clean up temporary models created during evaluation."""
         if hasattr(self, '_temp_models'):
@@ -478,6 +425,51 @@ class PreferenceModel:
             
             # Clear list after cleanup
             self._temp_models = []
+
+    def _cleanup_run_directory(self, run_dir: Optional[Path] = None, active_only: bool = False) -> None:
+        """Cleanup only Stan run directories that we own.
+        
+        Args:
+            run_dir: Optional specific run directory to clean
+            active_only: If True, only clean active run directory
+        """
+        try:
+            # Get active run directory if it exists
+            active_run_dir = None
+            if hasattr(self, 'fit_result') and hasattr(self.fit_result, '_run_dir'):
+                active_run_dir = Path(self.fit_result._run_dir)
+                
+            # If cleaning specific directory
+            if run_dir is not None:
+                if active_only and run_dir == active_run_dir:
+                    return
+                if run_dir.exists():
+                    shutil.rmtree(run_dir)
+                return
+                
+            # Clean up engram temp folder
+            engram_temp = Path.home() / '.engram_temp'
+            if engram_temp.exists():
+                cleaned_space = 0
+                for item in engram_temp.iterdir():
+                    try:
+                        # Skip active run directory
+                        if active_only and active_run_dir and item == active_run_dir:
+                            continue
+                            
+                        # Only clean run_* directories
+                        if item.is_dir() and item.name.startswith('run_'):
+                            size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                            shutil.rmtree(item)
+                            cleaned_space += size
+                    except Exception as e:
+                        logger.debug(f"Could not remove {item}: {e}")
+                        
+                if cleaned_space > 0:
+                    logger.info(f"Cleaned up {cleaned_space / (1024*1024):.1f}MB from temp directories")
+                        
+        except Exception as e:
+            logger.error(f"Error during temp cleanup: {e}")
 
     def _create_temp_model(self):
         """Create a temporary model copy for evaluation."""
@@ -719,9 +711,12 @@ class PreferenceModel:
         
     def get_feature_weights(self, include_control: bool = True) -> Dict[str, Tuple[float, float]]:
         """Get feature weights and their uncertainties."""
-        if not hasattr(self, 'fit_result'):
+
+        if not hasattr(self, 'fit_result') or self.fit_result is None:
             raise ValueError("Model not fitted. Call fit() first.")
-            
+        if not hasattr(self.fit_result, 'stan_variable'):
+            raise ValueError("Invalid Stan result - missing stan_variable method")
+                
         try:
             weights = {}
             
@@ -816,11 +811,18 @@ class PreferenceModel:
     # Data preparation methods
     #--------------------------------------------
     def _prepare_feature_matrices(self, dataset: PreferenceDataset,
-                                    main_features: List[str],
-                                    control_features: List[str]) -> Dict[str, Any]:
+                                main_features: List[str],
+                                control_features: List[str]) -> Dict[str, Any]:
         """Prepare feature matrices for Stan model."""
         try:
-            # First collect all feature values
+            # Validate Stan results before attempting to use them
+            if hasattr(self, 'fit_result'):
+                if self.fit_result is None:
+                    logger.warning("Existing fit_result is None")
+                elif not hasattr(self.fit_result, 'stan_variable'):
+                    logger.warning("Existing fit_result missing stan_variable method")
+
+            # Collect all feature values
             feature_values = defaultdict(list)
             for feature in main_features + control_features:
                 for pref in dataset.preferences:
@@ -834,37 +836,28 @@ class PreferenceModel:
             # Calculate statistics and store them
             self.feature_stats = {}
             
-            # Handle case of no main features early
-            if len(main_features) == 0:
-                logger.info("No main features detected - using dummy feature")
-                self.feature_stats['dummy'] = {'mean': 0.0, 'std': 1.0}
-                main_features = ['dummy']  # Use dummy feature name
-
             # Process feature statistics
             for feature in main_features + control_features:
-                if feature != 'dummy':  # Skip dummy feature
-                    values = np.array([v for v in feature_values[feature] if v is not None])
-                    mean = float(np.mean(values)) if len(values) > 0 else 0.0
-                    std = float(np.std(values)) if len(values) > 0 else 1.0
-                    self.feature_stats[feature] = {'mean': mean, 'std': std}
-                    
-                    logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
-                    logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
+                values = np.array([v for v in feature_values[feature] if v is not None])
+                mean = float(np.mean(values)) if len(values) > 0 else 0.0
+                std = float(np.std(values)) if len(values) > 0 else 1.0
+                self.feature_stats[feature] = {'mean': mean, 'std': std}
+                
+                logger.info(f"{feature} ({'main' if feature in main_features else 'control'}):")
+                logger.info(f"Original - mean: {mean:.3f}, std: {std:.3f}")
 
-            # Initialize feature matrices
-            X1, X2 = [], []  # Main feature matrices
-            C1, C2 = [], []  # Control feature matrices
+            # Initialize matrices
+            X1 = np.zeros((len(dataset.preferences), 0), dtype=np.float64)  # Empty if no main features
+            X2 = np.zeros((len(dataset.preferences), 0), dtype=np.float64)
+            C1 = []
+            C2 = []
             participant = []
             y = []
 
-            # Handle case of no main features vs normal features
-            if 'dummy' in main_features:
-                # Create zero matrices for dummy feature
-                X1 = np.zeros((len(dataset.preferences), 1))
-                X2 = np.zeros((len(dataset.preferences), 1))
-            else:
-                # Process preferences for main features
-                for pref in dataset.preferences:
+            # Process preferences
+            for pref in dataset.preferences:
+                # Process main features if any exist
+                if main_features:
                     features1_main = []
                     features2_main = []
                     for feature in main_features:
@@ -876,15 +869,10 @@ class PreferenceModel:
                         std = self.feature_stats[feature]['std']
                         features1_main.append((feat1 - mean) / std)
                         features2_main.append((feat2 - mean) / std)
-                    X1.append(features1_main)
-                    X2.append(features2_main)
-                
-                # Convert main features to numpy arrays
-                X1 = np.array(X1, dtype=np.float64)
-                X2 = np.array(X2, dtype=np.float64)
+                    X1 = np.array([features1_main for _ in range(len(dataset.preferences))])
+                    X2 = np.array([features2_main for _ in range(len(dataset.preferences))])
 
-            # Process control features and collect participant IDs
-            for pref in dataset.preferences:
+                # Process control features
                 features1_control = []
                 features2_control = []
                 for feature in control_features:
@@ -896,28 +884,32 @@ class PreferenceModel:
                     features2_control.append((feat2 - mean) / std)
                 C1.append(features1_control)
                 C2.append(features2_control)
+
+                # Add participant and response data
                 participant.append(pref.participant_id)
                 y.append(1 if pref.preferred else 0)
 
-            # Convert control features to numpy arrays
+            # Convert to numpy arrays
             C1 = np.array(C1, dtype=np.float64)
             C2 = np.array(C2, dtype=np.float64)
 
             # Process participant IDs
-            # First create the mapping from string IDs to integers
-            unique_participants = sorted(set(participant))  # Get unique participant IDs
-            participant_map = {pid: i for i, pid in enumerate(unique_participants)}  # Create mapping
-            
-            # Convert participant IDs to sequential integers
+            unique_participants = sorted(set(participant))
+            participant_map = {pid: i for i, pid in enumerate(unique_participants)}
             participant_indices = [participant_map[p] for p in participant]
             participant = np.array(participant_indices, dtype=np.int32)
 
-            # Convert response vector to numpy array
+            # Convert response vector
             y = np.array(y, dtype=np.int32)
-            
-            # Log participant stats for debugging
+
+            # Log dimensions and stats
             logger.info(f"Number of unique participants: {len(unique_participants)}")
             logger.info(f"Participant ID range: 0 to {len(unique_participants) - 1}")
+            logger.info(f"Matrix shapes:")
+            logger.info(f"  Main features: {len(main_features)}")
+            logger.info(f"  Control features: {len(control_features)}")
+            logger.info(f"  X1, X2: {X1.shape}, {X2.shape}")
+            logger.info(f"  C1, C2: {C1.shape}, {C2.shape}")
 
             # Log standardization results
             for feature in main_features + control_features:
@@ -934,7 +926,7 @@ class PreferenceModel:
                         X2[:, main_features.index(feature)] if feature in main_features
                         else C2[:, control_features.index(feature)]
                     ]))
-                    logger.info(f"Standardized - mean: {mean:.3f}, std: {std:.3f}")
+                    logger.info(f"{feature} standardized - mean: {mean:.3f}, std: {std:.3f}")
                 except Exception as e:
                     logger.warning(f"Error calculating standardization stats for {feature}: {str(e)}")
 
@@ -942,8 +934,9 @@ class PreferenceModel:
             return {
                 'N': len(y),
                 'P': len(unique_participants),
-                'F': max(1, X1.shape[1]),  # Ensure F is at least 1
-                'C': C1.shape[1],
+                'F': X1.shape[1],  # Can be 0 when no main features
+                'C': C1.shape[1],  # Number of control features (always > 0)
+                'has_main_features': 1 if main_features else 0,  # Flag for Stan
                 'participant': participant + 1,  # Stan uses 1-based indexing
                 'X1': X1,
                 'X2': X2,
@@ -958,15 +951,19 @@ class PreferenceModel:
             logger.error(f"Error preparing feature matrices: {str(e)}")
             logger.error("Traceback:", exc_info=True)
             raise
-                                                                                        
+                                                                                                        
     def _update_feature_weights(self) -> None:
         """Update feature weights from fitted model for both main and control features."""
         try:
             self.feature_weights = {}
             
-            if not hasattr(self, 'fit_result'):
+            if not hasattr(self, 'fit_result') or self.fit_result is None:
                 raise ValueError("Model not fitted. Call fit() first.")
             
+            # Verify Stan variables exist and have expected shapes
+            if not hasattr(self.fit_result, 'stan_variable'):
+                raise ValueError("Invalid Stan result - missing stan_variable method")
+                        
             # Get main feature weights (beta) if any exist
             main_features = list(dict.fromkeys(
                 [f for f in self.feature_names if f not in self.config.features.control_features]
@@ -1064,19 +1061,16 @@ class PreferenceModel:
             
         except Exception as e:
             logger.error(f"Error during sampling: {e}")
-            if run_dir and run_dir.exists():
-                try:
-                    import shutil
-                    shutil.rmtree(run_dir)
-                except Exception as cleanup_error:
-                    logger.warning(f"Could not remove run directory: {cleanup_error}")
+            # Clean up failed run directory
+            if run_dir:
+                self._cleanup_run_directory(run_dir)
             raise
             
         finally:
             # Restore original temp directory
             if 'original_tmpdir' in locals():
                 csfs._TMPDIR = original_tmpdir
-                                                            
+                                                                            
     #--------------------------------------------
     # Feature selection methods
     #--------------------------------------------  
@@ -1170,7 +1164,7 @@ class PreferenceModel:
             self.cleanup()
 
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
-                                    current_features: List[str]) -> float:
+                            current_features: List[str]) -> float:
         """Calculate feature importance based on prediction improvement."""
         logger.info(f"\nCalculating importance for feature: {feature}")
         logger.info(f"Current features: {current_features}")
@@ -1212,17 +1206,21 @@ class PreferenceModel:
                         # Train baseline model
                         logger.info(f"Training baseline model for fold {fold}")
                         fold_baseline_model.fit(train_data, features=current_features)
-                        if not fold_baseline_model.is_fitted:
-                            logger.warning(f"Failed to fit baseline model for fold {fold}")
+                        
+                        # Check if baseline model fitted - now checking fit_result existence
+                        if not hasattr(fold_baseline_model, 'fit_result'):
+                            logger.warning(f"No fit result for baseline model in fold {fold}")
                             continue
                             
                         # Train feature model
                         logger.info(f"Training feature model for fold {fold}")
                         fold_feature_model.fit(train_data, features=current_features + [feature])
-                        if not fold_feature_model.is_fitted:
-                            logger.warning(f"Failed to fit feature model for fold {fold}")
+                        
+                        # Check if feature model fitted - now checking fit_result existence
+                        if not hasattr(fold_feature_model, 'fit_result'):
+                            logger.warning(f"No fit result for feature model in fold {fold}")
                             continue
-                            
+                        
                         # Calculate effects for validation set
                         fold_effects = []
                         for pref in val_data.preferences:
@@ -1232,14 +1230,14 @@ class PreferenceModel:
                                 if base_pred.probability <= 0 or base_pred.probability >= 1:
                                     logger.warning(f"Invalid baseline probability for {pref.bigram1}-{pref.bigram2}")
                                     continue
-                                base_logit = -np.log(1/base_pred.probability - 1)
+                                base_logit = np.log(base_pred.probability / (1 - base_pred.probability))
                                 
                                 # Get feature model prediction
                                 feat_pred = fold_feature_model.predict_preference(pref.bigram1, pref.bigram2)
                                 if feat_pred.probability <= 0 or feat_pred.probability >= 1:
                                     logger.warning(f"Invalid feature probability for {pref.bigram1}-{pref.bigram2}")
                                     continue
-                                feat_logit = -np.log(1/feat_pred.probability - 1)
+                                feat_logit = np.log(feat_pred.probability / (1 - feat_pred.probability))
                                 
                                 # Calculate aligned effect
                                 effect = feat_logit - base_logit
@@ -1257,7 +1255,7 @@ class PreferenceModel:
                             cv_aligned_effects.extend(fold_effects)
                         else:
                             logger.warning(f"No valid effects calculated for fold {fold}")
-                            
+                        
                 except Exception as e:
                     logger.warning(f"Error processing fold {fold}: {str(e)}")
                     continue
@@ -1271,7 +1269,7 @@ class PreferenceModel:
                 effect_consistency = 1 - (effect_std / (effect_magnitude + 1e-6))
                 importance = effect_magnitude * max(0, effect_consistency)
                 
-                logger.info("\nFeature importance analysis results:")
+                logger.info("Feature importance analysis results:")
                 logger.info(f"  Total valid effects: {len(cv_aligned_effects)}")
                 logger.info(f"  Mean aligned effect: {mean_aligned_effect:.4f}")
                 logger.info(f"  Effect standard deviation: {effect_std:.4f}")
@@ -1290,7 +1288,7 @@ class PreferenceModel:
         finally:
             # Ensure cleanup even if error occurs
             self.cleanup_temp_models()
-            
+                        
     #--------------------------------------------
     # Cross-validation methods
     #--------------------------------------------

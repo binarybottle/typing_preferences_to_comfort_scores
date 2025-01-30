@@ -1,10 +1,11 @@
 // Hierarchical Bayesian model for keyboard layout preferences
-// Includes main features and control features (e.g., bigram frequency)
+// Allows for control-features-only case (no main features)
 data {
     int<lower=1> N;                     // Number of preferences
     int<lower=1> P;                     // Number of participants
-    int<lower=1> F;                     // Number of main features
-    int<lower=0> C;                     // Number of control features
+    int<lower=0> F;                     // Number of main features (can be 0)
+    int<lower=1> C;                     // Number of control features (must be >= 1)
+    int<lower=0,upper=1> has_main_features;  // Flag for whether main features exist
     matrix[N, F] X1;                    // Main features for first bigram
     matrix[N, F] X2;                    // Main features for second bigram
     matrix[N, C] C1;                    // Control features for first bigram
@@ -16,57 +17,50 @@ data {
 }
 
 parameters {
-    vector[F] beta;                     // Main feature weights
-    vector[C] gamma;                    // Control feature weights (nuisance parameters)
+    vector[F] beta;                     // Main feature weights (empty if F=0)
+    vector[C] gamma;                    // Control feature weights
     vector[P] z;                        // Participant random effects (standardized)
     real<lower=0> tau;                  // Random effects scale
 }
 
 transformed parameters {
-    vector[P] participant_effects;       // Scaled participant effects
+    vector[P] participant_effects = tau * z;       // Scaled participant effects
     vector[N] mu;                       // Linear predictor
     
-    // Scale participant effects
-    participant_effects = tau * z;
-    
     // Compute linear predictor
+    mu = rep_vector(0, N);  // Initialize
+    
+    // Add main feature contribution if they exist
+    if (F > 0) {
+        mu += X1 * beta - X2 * beta;
+    }
+    
+    // Add control feature contribution (always present)
+    mu += C1 * gamma - C2 * gamma;
+    
+    // Add participant effects
     for (n in 1:N) {
-        // Main features contribution
-        mu[n] = dot_product(X1[n], beta) - dot_product(X2[n], beta);
-        
-        // Add control features contribution (if any)
-        if (C > 0) {
-            mu[n] = mu[n] + dot_product(C1[n], gamma) - dot_product(C2[n], gamma);
-        }
-        
-        // Add participant effect
-        mu[n] = mu[n] + participant_effects[participant[n]];
+        mu[n] += participant_effects[participant[n]];
     }
 }
 
 model {
-    // Priors for main feature weights
-    beta ~ normal(0, feature_scale);
-    
-    // Tighter priors for control features (nuisance parameters)
-    if (C > 0) {
-        gamma ~ normal(0, feature_scale * 0.5);  // Tighter prior for control features
-    }
-    
-    // Priors for participant effects
-    z ~ std_normal();                   // Standardized random effects
-    tau ~ exponential(1/participant_scale);  // Scale of random effects
+    // Always apply priors regardless of dimensions
+    beta ~ normal(0, feature_scale);    // Safe even when F=0
+    gamma ~ normal(0, feature_scale);    // Always has elements since C>0
+    z ~ std_normal();                    // Always has P elements
+    tau ~ exponential(1/participant_scale);
     
     // Likelihood
     y ~ bernoulli_logit(mu);
 }
 
 generated quantities {
-    vector[N] log_lik;                  // Log likelihood for each observation
-    vector[N] y_pred;                   // Predicted probabilities
+    vector[N] log_lik;
+    vector[N] y_pred;
     
     for (n in 1:N) {
         log_lik[n] = bernoulli_logit_lpmf(y[n] | mu[n]);
-        y_pred[n] = inv_logit(mu[n]);
+        y_pred[n] = inv_logit(mu[n]);  // Return probabilities
     }
 }
