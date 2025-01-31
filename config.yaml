@@ -51,7 +51,7 @@ because:
 # - We're interested in "better vs worse" rather than exact effect sizes
 # - Performance (speed) becomes more important since we're doing many comparisons
 feature_selection:
-  importance_threshold: 0.05            # Threshold for aligned effect importance
+  importance_threshold: 0.001           # Threshold for aligned effect importance
   cross_validation:
     n_splits: 5                         # Number of CV folds for evaluating importance
     min_fold_size: 100                  # Minimum number of preferences per fold

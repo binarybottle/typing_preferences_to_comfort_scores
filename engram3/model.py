@@ -1300,7 +1300,7 @@ class PreferenceModel:
                 logger.info(f"  inverse-bounded: 1/(1 + std/magnitude) = {consistency_bounded:.5f}")
                 logger.info(f"  sygmoid-bounded: 1/(1 + exp(std/magnitude - 1)) = {consistency_sigmoid:.5f}")
                 
-                logger.info(f"\nImportance scores = effect magnitude times:")
+                logger.info(f"\nImportance scores = effect magnitude multiplied by:")
                 logger.info(f"  max(0, unbounded consistency): {importance_original:.5f}")
                 logger.info(f"  min-capped consistency: {importance_capped:.5f}")
                 logger.info(f"  inverse-bounded consistency: {importance_bounded:.5f}")
