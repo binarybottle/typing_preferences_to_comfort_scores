@@ -24,12 +24,18 @@ Pipeline Modes:
     - Compares main vs control features
     - Creates model analysis plots
 
-  4. Predictions:
+  4. Bigram Score Prediction:
+    - Loads trained model
     - Generates all possible bigram pairs
-    - Calculates comfort scores
-    - Estimates prediction uncertainty
-    - Recommends bigram pairs for testing
-    - Exports predictions
+    - Calculates comfort scores and uncertainties
+    - Exports predictions to CSV
+    - Provides summary statistics
+
+  5. Recommendations:
+    - Generates optimal bigram pairs for testing
+    - Balances multiple recommendation criteria
+    - Visualizes recommendation distribution
+    - Exports recommendations for data collection
 
 Core Components:
   - YAML configuration management
@@ -37,6 +43,7 @@ Core Components:
   - Participant-aware data splitting
   - Comprehensive logging
   - Error handling and validation
+  - Memory and resource management
 
 Usage:
     python main.py --config config.yaml --mode MODE

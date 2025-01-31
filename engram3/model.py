@@ -1,58 +1,42 @@
 # model.py
 """
-Bayesian preference learning model for keyboard layout evaluation.
-Core functionality:
-  - Feature-based preference modeling using Bradley-Terry framework
-  - Hierarchical model with participant-level random effects
-  - MCMC sampling via Stan backend
-  - Feature selection pipeline
+Bayesian preference learning model for keyboard layout optimization.
 
-Key components:
-  1. Model Structure:
-    - Feature-based comfort scoring
-    - Participant-specific random effects
-    - Hierarchical Bayesian inference
-    - Control vs. main feature handling
-
-  2. Feature Selection:
-    - Cross-validated importance scoring
-    - Effect magnitude and consistency metrics
-    - Participant-aware validation splits
-    - Control feature separation
-
-  3. Prediction Pipeline:
-    - Preference probability estimation
+Core Components:
+  1. Model Architecture:
+    - Bayesian hierarchical model
+    - Participant-specific effects
+    - Feature importance estimation
     - Uncertainty quantification
-    - Comfort score calculation
+    - Control feature handling
+
+  2. Training Pipeline:
+    - Feature preparation
+    - MCMC sampling
+    - Convergence monitoring
+    - Resource management
+    - Model state persistence
+
+  3. Prediction Systems:
+    - Comfort score estimation
+    - Uncertainty calculation
     - Feature interaction handling
+    - Temporary model management
+    - Caching mechanisms
 
   4. Resource Management:
-    - Stan model compilation and cleanup
-    - Memory usage optimization
-    - Temporary file handling
-    - Feature data caching
+    - Memory monitoring
+    - Disk space verification
+    - Temporary file cleanup
+    - Cache size control
+    - Resource allocation
 
-  5. Model Operations:
-    - Data preprocessing and normalization
-    - MCMC sampling with diagnostics
-    - Cross-validation
-    - Model serialization
-
-Classes:
-    PreferenceModel: Main class implementing the preference learning pipeline
-        Methods:
-            fit(): Train model on preference data
-            predict_preference(): Generate predictions for bigram pairs
-            evaluate(): Compute model performance metrics
-            select_features(): Perform feature selection
-            save()/load(): Model serialization
-
-Dependencies:
-    - cmdstanpy: Stan model interface
-    - numpy: Numerical operations
-    - sklearn: Evaluation metrics
-    - pandas: Data management
-    - psutil: Resource monitoring
+Features:
+    - Robust feature importance calculation
+    - Comprehensive uncertainty estimation
+    - Efficient resource utilization
+    - Flexible model deployment
+    - Extensive error handling
 """
 import cmdstanpy
 import numpy as np
@@ -395,8 +379,17 @@ class PreferenceModel:
     #--------------------------------------------
     # Resource management methods
     #--------------------------------------------
-    def cleanup(self):
+    def cleanup(self, preserve_features: bool = False):
         """Clean up model resources."""
+        # Store features if needed
+        saved_state = None
+        if preserve_features:
+            saved_state = {
+                'feature_names': getattr(self, 'feature_names', None),
+                'selected_features': getattr(self, 'selected_features', None),
+                'feature_extractor': getattr(self, 'feature_extractor', None)
+            }
+        
         # Don't clear fit_result if model is fitted
         if not self.is_fitted:
             if hasattr(self, 'fit_result'):
@@ -405,12 +398,19 @@ class PreferenceModel:
         
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
-            
-        # Clean up temp models
+                
         self.cleanup_temp_models()
+        
         # Don't reset state if model is fitted
         if not self.is_fitted:
             self.reset_state()
+            
+            # Restore saved state
+            if preserve_features and saved_state:
+                for key, value in saved_state.items():
+                    if value is not None:
+                        setattr(self, key, value)
+                
         gc.collect()
         
     def cleanup_temp_models(self):
@@ -477,8 +477,20 @@ class PreferenceModel:
     def _create_temp_model(self):
         """Create a temporary model copy for evaluation."""
         temp_model = type(self)(config=self.config)
+        
+        # Copy over key state
         temp_model.feature_extractor = self.feature_extractor
-        temp_model.feature_stats = self.feature_stats.copy()  # Make a copy of stats
+        
+        # Safely copy feature stats
+        temp_model.feature_stats = (self.feature_stats.copy() 
+                                if hasattr(self, 'feature_stats') and self.feature_stats is not None 
+                                else {})
+        
+        # Copy feature-related state
+        if hasattr(self, 'feature_names'):
+            temp_model.feature_names = self.feature_names.copy() if self.feature_names else []
+        if hasattr(self, 'selected_features'):
+            temp_model.selected_features = self.selected_features.copy() if self.selected_features else []
 
         # Store model reference in parent
         if not hasattr(self, '_temp_models'):
@@ -1074,7 +1086,7 @@ class PreferenceModel:
         try:
             self._check_memory_usage()
             self.dataset = dataset
-            self.feature_extractor = dataset.feature_extractor  # Ensure feature_extractor is set
+            self.feature_extractor = dataset.feature_extractor
 
             # Preprocess dataset
             logger.info("Preprocessing dataset for feature selection...")
@@ -1104,19 +1116,21 @@ class PreferenceModel:
             # Initialize feature sets
             control_features = self.config.features.control_features
             candidate_features = [f for f in all_features if f not in control_features]
-            selected_features = list(control_features)  # Start with control features
+            current_features = list(control_features)  # Features to use in current round
+            selected_features = list(control_features)  # All selected features
 
             # Log initial state
-            logger.info("Starting feature selection:")
-            logger.info(f"  Control features: {selected_features}")
-            logger.info(f"  Candidate features: {len(candidate_features)}")
+            logger.info("\n=== Starting Feature Selection ===")
+            logger.info(f"Control features: {control_features}")
+            logger.info(f"Candidates to evaluate: {len(candidate_features)}")
+            logger.info(f"Importance threshold: {self.config.feature_selection.importance_threshold}")
             
             # Keep selecting features until no more useful ones found
             round_num = 1
             while candidate_features:
-                logger.info(f"Selection round {round_num}")
-                logger.info(f"  Current features: {selected_features}")
-                logger.info(f"  Remaining candidates: {len(candidate_features)}")
+                logger.info(f"\n=== Selection Round {round_num} ===")
+                logger.info(f"Currently selected features: {current_features}")
+                logger.info(f"Candidates remaining: {len(candidate_features)}")
                 
                 best_feature = None
                 best_importance = -float('inf')
@@ -1126,27 +1140,39 @@ class PreferenceModel:
                     importance = self._calculate_feature_importance(
                         feature=feature,
                         dataset=self.dataset,
-                        current_features=selected_features
+                        current_features=current_features  # Uses currently selected features
                     )
 
-                    # If feature helps predictions more than our threshold
                     if importance > self.config.feature_selection.importance_threshold:
                         if importance > best_importance:
                             best_importance = importance
                             best_feature = feature
+                            logger.info(f"Feature '{feature}' is new best: importance = {importance:.6f}")
                 
                 if best_feature is None:
-                    logger.info("No remaining features improve predictions sufficiently.")
+                    logger.info("\nNo remaining features improve predictions sufficiently.")
                     break
                     
-                # Add best feature and continue
-                logger.info(f"\nSelected feature {best_feature} with importance {best_importance:.4f}")
+                # Add best feature and update lists for next round
+                logger.info(f"\nSelected feature '{best_feature}' with importance {best_importance:.6f}")
                 selected_features.append(best_feature)
+                current_features = selected_features.copy()  # Update current_features to include new selection
                 candidate_features.remove(best_feature)
+                
+                # Log updated feature set
+                logger.info(f"Updated feature set for next round:")
+                logger.info(f"  Control features: {[f for f in current_features if f in control_features]}")
+                logger.info(f"  Main features: {[f for f in current_features if f not in control_features]}")
+                
                 round_num += 1
-
-            logger.info("Feature selection complete:")
-            logger.info(f"Selected features: {selected_features}")
+                
+            # Log final feature selection results
+            logger.info("\n=== Feature Selection Complete ===")
+            main_features = [f for f in selected_features if f not in control_features]
+            logger.info(f"Selected {len(main_features)} features:")
+            for feat in main_features:
+                logger.info(f"  - {feat}")
+            
             self.selected_features = selected_features
             return selected_features
             
@@ -1157,21 +1183,13 @@ class PreferenceModel:
 
         finally:
             self.cleanup()
-
+            
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> float:
-        """Calculate feature importance based on prediction improvement.
-        
-        Returns:
-            float: Importance score using bounded consistency metric (0 to effect_magnitude)
-        """
+        """Calculate feature importance based on prediction improvement."""
         logger.info(f"\nCalculating importance for feature: {feature}")
         logger.info(f"Current features: {current_features}")
         
-        if not self.is_fitted:
-            logger.info("Model is not fitted. Attempting to fit now...")
-            self.fit(dataset, features=current_features)
-            
         try:
             # Verify dataset and feature extractor
             if dataset is None or dataset.feature_extractor is None:
@@ -1181,7 +1199,10 @@ class PreferenceModel:
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
-            # Get cross-validation splits
+            # Store the current feature state before CV
+            saved_features = current_features.copy()
+            
+            # Get cross-validation splits  
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             cv_aligned_effects = []
             
@@ -1198,24 +1219,29 @@ class PreferenceModel:
                     with self._create_temp_model() as fold_baseline_model, \
                         self._create_temp_model() as fold_feature_model:
                         
-                        # Ensure feature extractors are set
+                        # Set up baseline model
                         fold_baseline_model.feature_extractor = dataset.feature_extractor
-                        fold_feature_model.feature_extractor = dataset.feature_extractor
+                        fold_baseline_model.selected_features = saved_features
+                        fold_baseline_model.feature_names = saved_features
                         
                         # Train baseline model
                         logger.info(f"Training baseline model for fold {fold}")
-                        fold_baseline_model.fit(train_data, features=current_features)
+                        fold_baseline_model.fit(train_data, features=saved_features)
                         
-                        # Check if baseline model fitted - now checking fit_result existence
+                        # Check if baseline model fitted
                         if not hasattr(fold_baseline_model, 'fit_result'):
                             logger.warning(f"No fit result for baseline model in fold {fold}")
                             continue
                             
-                        # Train feature model
-                        logger.info(f"Training feature model for fold {fold}")
-                        fold_feature_model.fit(train_data, features=current_features + [feature])
+                        # Set up and train feature model
+                        fold_feature_model.feature_extractor = dataset.feature_extractor
+                        fold_feature_model.selected_features = saved_features + [feature]
+                        fold_feature_model.feature_names = saved_features + [feature]
                         
-                        # Check if feature model fitted - now checking fit_result existence
+                        logger.info(f"Training feature model for fold {fold}")
+                        fold_feature_model.fit(train_data, features=saved_features + [feature])
+                        
+                        # Check if feature model fitted
                         if not hasattr(fold_feature_model, 'fit_result'):
                             logger.warning(f"No fit result for feature model in fold {fold}")
                             continue
@@ -1319,9 +1345,9 @@ class PreferenceModel:
             return 0.0
         
         finally:
-            # Ensure cleanup even if error occurs
-            self.cleanup_temp_models()
-                        
+            # Ensure cleanup even if error occurs, but preserve feature state
+            self.cleanup(preserve_features=True)
+                                    
     #--------------------------------------------
     # Cross-validation methods
     #--------------------------------------------

@@ -51,7 +51,7 @@ because:
 # - We're interested in "better vs worse" rather than exact effect sizes
 # - Performance (speed) becomes more important since we're doing many comparisons
 feature_selection:
-  importance_threshold: 0.0005          # Threshold for aligned effect importance
+  importance_threshold: 0.00025         # Threshold for aligned effect importance
   cross_validation:
     n_splits: 5                         # Number of CV folds for evaluating importance
     min_fold_size: 100                  # Minimum number of preferences per fold
@@ -140,15 +140,15 @@ features:
 # Bigram pair recommendations
 #-----------------------------------------------------------------------
 recommendations:
-  weights:                              # Weights for recommendation scoring (must sum to 1)
-    prediction_uncertainty: 0.25        # Weight for model prediction uncertainty (prioritize pairs where model is uncertain)
-    comfort_uncertainty: 0.25           # Weight for comfort score uncertainty (focus on uncertain comfort predictions)
-    feature_space: 0.25                 # Weight for coverage of feature space (ensure good coverage of feature space)
-    transitivity: 0.15                  # Weight for transitivity validation (Bradley-Terry models assume transitivity in preferences)
-    stability: 0.10                     # Weight for feature stability
-  n_recommendations: 50                 # Number of bigram pairs to recommend
-  max_candidates: 5000                  # Maximum number of candidate pairs to evaluate
-  recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
+    n_recommendations: 50                # Number of bigram pairs to recommend (limited by the proposed data collection population size)
+    max_candidates: 5000                 # Maximum number of candidate pairs to evaluate
+    weights:                             # Scoring weights (must sum to 1.0)
+        information_gain: 0.618          # Weight for model uncertainty reduction potential (golden ratio (0.618) provides a natural balance between two competing objectives)
+        coverage_value: 0.382            # Weight for feature space coverage improvement
+    min_comfort_score: 0.333             # Minimum predicted comfort score to consider pair (below 1/3, pairs are likely genuinely uncomfortable)
+    min_feature_coverage: 0.168          # Minimum feature space novelty, set to lowered secretary threshold 1/e - 0.2 (1/e (≈ 0.368) is an optimal stopping threshold; subtracting 0.2 allows more exploration)
+    min_diversity: 0.632                 # Minimum diversity between recommended pairs, set to 1 - 1/e (≈ 0.632), the complementary secretary threshold
+    recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 #-----------------------------------------------------------------------
 # Model training

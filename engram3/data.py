@@ -9,21 +9,39 @@ Core functionality:
     - Bigram feature computation
     - Invalid data filtering
     - Participant tracking
+    - NaN and error handling
 
   2. Feature Management:
     - Base feature extraction
     - Interaction feature computation
     - Control feature handling
+    - Feature normalization
     - Feature caching
+    - Memory-efficient processing
 
   3. Dataset Operations:
     - Participant-aware splitting
     - Subset creation
     - Feature name access
-    - NaN handling for typing times
+    - Data validation
+    - Resource cleanup
+    - Error recovery
+
+  4. Performance Optimization:
+    - Caching mechanisms
+    - Memory usage monitoring
+    - Efficient data structures
+    - Resource management
+    - Batch processing
 
 Class:
     PreferenceDataset: Main class for preference data management
+    
+Requirements:
+    - Properly formatted CSV input
+    - Valid feature configurations
+    - Sufficient system resources
+    - Proper feature definitions
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, Any
