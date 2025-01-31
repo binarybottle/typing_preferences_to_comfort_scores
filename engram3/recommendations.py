@@ -1,629 +1,563 @@
-# recommendations.py
 """
-Bigram recommendation system for keyboard layout analysis.
+Bigram pair recommendation system for keyboard layout optimization.
 
-Provides comprehensive recommendation generation through:
-  - Candidate generation:
-    - Creates all possible bigram pairs from layout characters
-    - Filters out existing/evaluated pairs
-    - Handles pair reversals and duplicates
+The system balances two key objectives:
+1. Maximizing information gain: Select pairs that will best improve model predictions
+2. Ensuring comprehensive coverage: Maintain broad exploration of the typing space
 
-  - Multi-criteria scoring:
-    - Prediction uncertainty: Prioritizes pairs with uncertain model predictions
-    - Comfort uncertainty: Considers uncertainty in comfort scores
-    - Feature space coverage: Favors pairs in underexplored regions
-    - Stability assessment: Considers feature stability metrics
-    - Transitivity: Tests for preference consistency
+This approach helps build a robust preference model while avoiding sampling biases.
 
-  - Visualization capabilities:
-    - Projects bigrams into 2D feature space using PCA
-    - Displays existing and recommended pairs
-    - Shows relationships and connections between bigrams
-    - Includes detailed labels and transformation explanations
-
-Core features:
-  - Efficient caching mechanisms
-  - Distance-based feature space exploration
-  - Detailed scoring reports
-  - Configurable recommendation counts
-  - Comprehensive logging
-  - Robust error handling
-
-The BigramRecommender class orchestrates the recommendation process while
-respecting dataset constraints and configuration parameters.
+Core Components:
+  1. Model-Driven Selection:
+    - Identifies high-uncertainty regions
+    - Estimates information gain potential
+    - Prioritizes impactful pairs
+    
+  2. Coverage Management:
+    - Tracks feature space exploration
+    - Identifies undersampled regions
+    - Maintains sampling diversity
+    
+  3. Recommendation Pipeline:
+    - Filters unsuitable candidates
+    - Applies multi-criteria scoring
+    - Ensures recommendation diversity
 """
+
 from pathlib import Path
-from typing import List, Tuple, Dict, Set, Union
+from typing import List, Tuple, Dict, Set, Union, Optional, Any
 import numpy as np
 import pandas as pd
 from itertools import combinations
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from adjustText import adjust_text
+from sklearn.neighbors import KernelDensity
+import logging
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
-from engram3.utils.visualization import PlottingUtils, plot_feature_space
 from engram3.utils.logging import LoggingManager
+
 logger = LoggingManager.getLogger(__name__)
 
 class BigramRecommender:
-
-    def __init__(self, dataset: PreferenceDataset, model: PreferenceModel, config: Union[Dict, Config]):
-        """Initialize BigramRecommender.
-        
-        Args:
-            dataset: Dataset containing preferences
-            model: Trained preference model
-            config: Configuration object or dictionary
+    def __init__(self, 
+                dataset: PreferenceDataset, 
+                model: PreferenceModel, 
+                config: Union[Dict, Config]):
         """
-        # Handle config
-        if isinstance(config, dict):
-            self.config = Config(**config)
-        elif isinstance(config, Config):
-            self.config = config
-        else:
-            raise ValueError(f"Config must be a dictionary or Config object, got {type(config)}")
-
-        # Store basic attributes
+        Initialize recommender with dataset, model and configuration.
+        
+        Validates inputs and sets up state tracking for recommendations.
+        """
+        # Core components
         self.dataset = dataset
         self.model = model
+        self.config = config if isinstance(config, Config) else Config(**config)
         self.feature_extractor = model.feature_extractor
-        self.selected_features = list(model.get_feature_weights().keys())
         
-        # Get configuration values
-        self.n_recommendations = config.recommendations.n_recommendations
-        self.max_candidates = config.recommendations.max_candidates
-        self.weights = config.recommendations.weights
+        # Validate core requirements
+        if not dataset.preferences:
+            raise ValueError("Dataset contains no preferences")
+        if not hasattr(model, 'predict_comfort_score'):
+            raise ValueError("Model missing required prediction method")
+            
+        # Configuration
+        rec_config = self.config.recommendations
+        self.n_recommendations = rec_config.n_recommendations
+        self.max_candidates = rec_config.max_candidates
+        self.weights = self._validate_weights(rec_config.weights)
         
-        # Set up paths and utilities
-        self.output_dir = Path(config.paths.plots_dir)
-        self.layout_chars = config.data.layout["chars"]
+        # Thresholds
+        self.comfort_threshold = rec_config.get('min_comfort_score', 0.3)
+        self.min_feature_coverage = rec_config.get('min_feature_coverage', 0.1)
+        self.diversity_threshold = rec_config.get('min_diversity', 0.2)
         
-        # Initialize components
-        self.importance_calculator = model.importance_calculator
-        self.plotting = PlottingUtils(config.paths.plots_dir)
+        # Initialize state tracking
+        self._comfort_range = None
+        self._feature_coverage = None
+        self._model_entropy = None
+        self._existing_pairs: Set[Tuple[str, str]] = set()
+        
+        # Caching
+        self._score_cache: Dict = {}
+        self._feature_cache: Dict = {}
+        
+        # Layout information
+        self.layout_chars = self.config.data.layout["chars"]
 
-        # Validate adaptive sampling config
-        sampling_config = config.feature_selection.get('adaptive_sampling', {})
-        self.bandwidth = sampling_config.get('bandwidth', 1.0)
-        self.min_density = sampling_config.get('min_density_threshold', 0.1)
-        self.max_density = sampling_config.get('max_density_threshold', 0.9)
-        
-        if not (0 < self.bandwidth and 0 < self.min_density < self.max_density < 1):
-            raise ValueError("Invalid adaptive sampling configuration")
-
-    def _generate_candidate_pairs(self) -> List[Tuple[str, str]]:
-        """Generate all possible bigram pairs from layout characters."""
-        # Get existing pairs
-        existing_pairs = set()
-        for pref in self.dataset.preferences:
-            pair = (pref.bigram1, pref.bigram2)
-            existing_pairs.add(pair)
-            existing_pairs.add((pair[1], pair[0]))  # Add reverse pair too
-            
-        # Generate all possible bigrams first
-        possible_bigrams = []
-        for char1, char2 in combinations(self.layout_chars, 2):
-            bigram = char1 + char2
-            possible_bigrams.append(bigram)
-            # Add reverse bigram
-            reverse_bigram = char2 + char1
-            possible_bigrams.append(reverse_bigram)
-            
-        # Generate all possible pairs of bigrams
-        candidate_pairs = []
-        for b1, b2 in combinations(possible_bigrams, 2):
-            pair = (b1, b2)
-            # Skip if pair (or its reverse) already exists in dataset
-            if pair not in existing_pairs and (b2, b1) not in existing_pairs:
-                candidate_pairs.append(pair)
-                
-        logger.info(f"Generated {len(candidate_pairs)} candidate pairs "
-                    f"from {len(self.layout_chars)} characters")
-        
-        # Optionally limit number of candidates
-        max_candidates = self.config.max_candidates  # Direct attribute access
-        if len(candidate_pairs) > max_candidates:
-            logger.info(f"Randomly sampling {max_candidates} candidates")
-            candidate_pairs = random.sample(candidate_pairs, max_candidates)
-            
-        return candidate_pairs
-                
-    def get_recommended_pairs(self) -> List[Tuple[str, str]]:
+    #--------------------------------------------
+    # Core class structure and basic functions
+    #--------------------------------------------
+    def recommend_pairs(self) -> List[Tuple[str, str]]:
         """
-        Get recommended bigram pairs using comprehensive scoring metrics.
+        Generate recommended bigram pairs.
+        
+        Process:
+        1. Analyze current state (model uncertainty and data coverage)
+        2. Generate and filter candidate pairs
+        3. Score candidates based on information gain and coverage
+        4. Select diverse, high-value subset
         
         Returns:
-            List of tuples containing recommended bigram pairs
-            
-        Raises:
-            FileNotFoundError: If feature metrics file not found
-            ValueError: If configuration is invalid
-            RuntimeError: If scoring or visualization fails
+            List of recommended bigram pairs
         """
         try:
-            # Validate configuration
-            if not getattr(self.config, 'recommendations'):
-                raise ValueError("Missing recommendations configuration")
+            self._initialize_state()
+            
+            candidates = self._generate_candidates()
+            if not candidates:
+                raise ValueError("No valid candidates generated")
                 
-            # Get candidate pairs
-            candidate_pairs = self._generate_candidate_pairs()
-            logger.info(f"Generated {len(candidate_pairs)} candidate pairs")
-            
-            # Get scoring weights with validation
-            weights = self._get_scoring_weights()
-            
-            # Load and validate feature metrics
-            feature_metrics = self._load_feature_metrics()
-            
-            # Score candidate pairs
-            scored_pairs: List[Tuple[Tuple[str, str], float, Dict[str, float]]] = []
-            
-            for pair in candidate_pairs:
-                try:
-                    # Calculate comprehensive scores
-                    scores_detail = self._calculate_pair_scores(
-                        pair=pair,
-                        feature_metrics=feature_metrics,
-                        weights=weights
-                    )
-                    
-                    if scores_detail['total'] > 0:  # Only keep positive scores
-                        scored_pairs.append((pair, scores_detail['total'], scores_detail))
-                        
-                except Exception as e:
-                    logger.warning(
-                        f"Error scoring pair {pair}: {str(e)}\n"
-                        f"Skipping pair"
-                    )
-                    continue
-            
-            if not scored_pairs:
-                raise RuntimeError("No valid scored pairs generated")
+            filtered = self._filter_candidates(candidates)
+            if not filtered:
+                raise ValueError("No candidates passed filtering criteria")
                 
-            # Sort by score and get top recommendations
-            scored_pairs.sort(key=lambda x: x[1], reverse=True)
-            n_recommendations = min(
-                self.config.recommendations.n_recommendations,
-                len(scored_pairs)
-            )
+            scored = self._score_candidates(filtered)
+            recommendations = self._select_diverse_subset(scored)
             
-            recommended_pairs = scored_pairs[:n_recommendations]
-            
-            # Save detailed results
-            try:
-                self._save_recommendation_results(recommended_pairs)
-            except Exception as e:
-                logger.error(f"Failed to save recommendation results: {str(e)}")
-            
-            # Generate visualizations if enabled
-            if self.config['recommendations'].get('save_plots', False):
-                try:
-                    self.visualize_recommendations([pair for pair, _, _ in recommended_pairs])
-                except Exception as e:
-                    logger.error(f"Failed to generate visualizations: {str(e)}")
-            
-            # Log summary
-            logger.info(f"\nGenerated {n_recommendations} recommendations:")
-            for pair, score, _ in recommended_pairs[:5]:  # Show top 5
-                logger.info(f"  {pair[0]}-{pair[1]}: {score:.4f}")
-            
-            return [pair for pair, _, _ in recommended_pairs]
+            self._save_recommendations(recommendations)
+            return recommendations
             
         except Exception as e:
-            logger.error(f"Failed to generate recommendations: {str(e)}")
+            logger.error(f"Error generating recommendations: {str(e)}")
             raise
 
-    def _get_scoring_weights(self) -> Dict[str, float]:
-        """Get and validate scoring weights from config."""
-        weights = getattr(self.config, 'recommendations', {}).get('weights', {
-            'prediction_uncertainty': 0.25,
-            'comfort_uncertainty': 0.15,
-            'feature_space': 0.15,
-            'stability': 0.1,
-            'transitivity': 0.1
-        })
+    def _initialize_state(self) -> None:
+        """
+        Initialize and validate system state.
         
-        # Validate weights sum to 1
-        total = sum(weights.values())
-        if not np.isclose(total, 1.0, rtol=1e-5):
-            raise ValueError(f"Scoring weights must sum to 1.0, got {total}")
+        Sets up:
+        - Existing pair tracking
+        - Comfort score range
+        - Feature space coverage
+        - Model entropy baseline
+        """
+        logger.info("Initializing recommendation state...")
+        
+        # Track existing pairs (both directions)
+        self._existing_pairs = {
+            (p.bigram1, p.bigram2) for p in self.dataset.preferences
+        }
+        self._existing_pairs.update(
+            (p.bigram2, p.bigram1) for p in self.dataset.preferences
+        )
+        
+        # Calculate comfort score range
+        self._comfort_range = self._analyze_comfort_range()
+        
+        # Analyze feature space
+        self._feature_coverage = self._analyze_feature_coverage()
+        
+        # Get model entropy baseline
+        self._model_entropy = self._calculate_model_entropy()
+        
+        logger.info(f"State initialized with {len(self._existing_pairs)} existing pairs")
+
+    def _validate_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """Validate scoring weights sum to 1.0 and contain required components."""
+        required = {'information_gain', 'coverage_value'}
+        
+        if not weights:
+            raise ValueError("No scoring weights provided")
+            
+        missing = required - set(weights.keys())
+        if missing:
+            raise ValueError(f"Missing required weights: {missing}")
+            
+        if not np.isclose(sum(weights.values()), 1.0, rtol=1e-5):
+            raise ValueError(f"Weights must sum to 1.0")
             
         return weights
-
-    def _load_feature_metrics(self) -> pd.DataFrame:
-        """Load and validate feature metrics from file."""
-        metrics_file = Path(self.config.feature_selection.metrics_file)
+    
+    #--------------------------------------------
+    # Filtering and scoring system
+    #--------------------------------------------
+    def _generate_candidates(self) -> List[Tuple[str, str]]:
+        """
+        Generate candidate bigram pairs.
         
-        if not metrics_file.exists():
-            raise FileNotFoundError(
-                f"Feature metrics file not found: {metrics_file}"
-            )
+        Generates all possible pairs excluding:
+        - Same-character bigrams
+        - Already evaluated pairs
+        - Reversed versions of existing pairs
+        
+        Randomly samples if exceeding max_candidates limit.
+        """
+        # Generate possible bigrams
+        bigrams = []
+        for c1, c2 in combinations(self.layout_chars, 2):
+            if c1 != c2:  # Exclude same-character bigrams
+                bigrams.extend([(c1 + c2), (c2 + c1)])
             
-        feature_metrics = pd.read_csv(metrics_file)
+        # Generate candidate pairs
+        candidates = [
+            (b1, b2) for b1, b2 in combinations(bigrams, 2)
+            if (b1, b2) not in self._existing_pairs 
+            and (b2, b1) not in self._existing_pairs
+        ]
         
-        required_columns = {'feature_name'}
-        missing_cols = required_columns - set(feature_metrics.columns)
+        # Sample if too many
+        if len(candidates) > self.max_candidates:
+            candidates = list(np.random.choice(
+                candidates, 
+                self.max_candidates, 
+                replace=False
+            ))
         
-        if missing_cols:
-            raise ValueError(f"Missing required columns in metrics file: {missing_cols}")
-            
-        return feature_metrics
+        logger.info(f"Generated {len(candidates)} candidate pairs")
+        return candidates
 
-    def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]) -> None:
-        """Create plot showing existing bigrams plus recommended pairs."""
-        feature_vectors = []
-        bigram_labels = []
-        unique_bigrams = set()
-
-        # Get existing bigram features 
-        for pref in self.dataset.preferences:
-            if pref.bigram1 not in unique_bigrams:
-                feat1 = [pref.features1.get(f, 0.0) for f in self.model.selected_features]
-                feature_vectors.append(feat1)
-                bigram_labels.append(pref.bigram1)
-                unique_bigrams.add(pref.bigram1)
-            if pref.bigram2 not in unique_bigrams:
-                feat2 = [pref.features2.get(f, 0.0) for f in self.model.selected_features]
-                feature_vectors.append(feat2)
-                bigram_labels.append(pref.bigram2)
-                unique_bigrams.add(pref.bigram2)
-
-        X = np.array(feature_vectors)
+    def _filter_candidates(self, candidates: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """
+        Filter candidates based on basic criteria.
         
-        # Same log transform as in plot_feature_space
-        epsilon = 1e-10
-        X_transformed = np.sign(X) * np.log1p(np.abs(X) + epsilon)
-        X_transformed = StandardScaler().fit_transform(X_transformed)
+        Criteria:
+        1. Minimum comfort threshold - avoid clearly uncomfortable pairs
+        2. Feature space novelty - ensure sufficient difference from existing data
         
-        # Fit PCA
-        pca = PCA(n_components=2)
-        X_2d = pca.fit_transform(X_transformed)
-        
-        # Create figure
-        fig, ax = plt.subplots(figsize=self.figure_size)
-        
-        # Plot existing bigrams
-        scatter = ax.scatter(X_2d[:, 0], X_2d[:, 1],
-                            c='lightblue', s=100, alpha=0.6,
-                            edgecolor='darkblue', label='Existing bigrams')
-        
-        # Add labels for existing bigrams
-        texts = []
-        offset = 0.05
-        for i, label in enumerate(bigram_labels):
-            texts.append(ax.text(X_2d[i, 0] + offset, 
-                            X_2d[i, 1] + offset,
-                            label,
-                            fontsize=8,
-                            alpha=0.7))
-        
-        # Add edges for existing pairs
-        processed_pairs = set()
-        for pref in self.dataset.preferences:
-            pair = (pref.bigram1, pref.bigram2)
-            if pair not in processed_pairs:
-                try:
-                    idx1 = bigram_labels.index(pref.bigram1)
-                    idx2 = bigram_labels.index(pref.bigram2)
-                    curve = plt.matplotlib.patches.ConnectionPatch(
-                        xyA=(X_2d[idx1, 0], X_2d[idx1, 1]),
-                        xyB=(X_2d[idx2, 0], X_2d[idx2, 1]),
-                        coordsA="data", coordsB="data",
-                        axesA=ax, axesB=ax,
-                        color='gray', alpha=0.2,
-                        connectionstyle="arc3,rad=0.2")
-                    ax.add_patch(curve)
-                    processed_pairs.add(pair)
-                except ValueError:
-                    continue
-
-        # Add recommended pairs
-        recommended_points = []
-        recommended_labels = []
-        
-        for b1, b2 in recommended_pairs:
+        This quick filtering step reduces the number of pairs needing detailed scoring.
+        """
+        filtered = []
+        for pair in candidates:
             try:
-                # Get feature vectors for recommended bigrams
-                feat1 = [self.model._extract_features(b1).get(f, 0.0) for f in self.model.selected_features]
-                feat2 = [self.model._extract_features(b2).get(f, 0.0) for f in self.model.selected_features]
+                if self._meets_basic_criteria(pair):
+                    filtered.append(pair)
+            except Exception as e:
+                logger.debug(f"Error filtering pair {pair}: {str(e)}")
+                continue
                 
-                # Transform using same parameters
-                feat1_transformed = np.sign(feat1) * np.log1p(np.abs(feat1) + epsilon)
-                feat2_transformed = np.sign(feat2) * np.log1p(np.abs(feat2) + epsilon)
+        logger.info(f"Filtered to {len(filtered)} valid candidates")
+        return filtered
+
+    def _meets_basic_criteria(self, pair: Tuple[str, str]) -> bool:
+        """
+        Check if pair meets basic suitability criteria.
+        
+        A pair is suitable if:
+        1. Both bigrams have acceptable predicted comfort scores
+        2. The pair adds sufficient novelty to the feature space
+        """
+        try:
+            # Check comfort predictions
+            pred1 = self.model.predict_comfort_score(pair[0])
+            pred2 = self.model.predict_comfort_score(pair[1])
+            
+            if min(pred1.score, pred2.score) < self.comfort_threshold:
+                return False
+            
+            # Check feature space novelty
+            features1 = self._get_features(pair[0])
+            features2 = self._get_features(pair[1])
+            
+            density = self._estimate_density([features1, features2])
+            if density > (1 - self.min_feature_coverage):
+                return False
                 
-                # Project into same PCA space
-                point1 = pca.transform(feat1_transformed.reshape(1, -1))
-                point2 = pca.transform(feat2_transformed.reshape(1, -1))
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Error checking criteria for {pair}: {str(e)}")
+            return False
+
+    def _score_candidates(self, candidates: List[Tuple[str, str]]) -> List[Tuple[Tuple[str, str], float, Dict[str, float]]]:
+        """
+        Score candidates using information gain and coverage metrics.
+        
+        Scoring components:
+        1. Information gain: Potential model improvement from pair
+        2. Coverage value: Contribution to feature space exploration
+        
+        Returns sorted list of (pair, total_score, detailed_scores).
+        """
+        scored = []
+        
+        for pair in candidates:
+            try:
+                # Check cache first
+                if pair in self._score_cache:
+                    scored.append(self._score_cache[pair])
+                    continue
                 
-                recommended_points.extend([point1[0], point2[0]])
-                recommended_labels.extend([b1, b2])
+                # Calculate component scores
+                scores = {
+                    'information_gain': self._calculate_information_gain(pair),
+                    'coverage_value': self._calculate_coverage_value(pair)
+                }
                 
-                # Plot recommended pairs with distinct style
-                ax.scatter([point1[0, 0], point2[0, 0]], 
-                        [point1[0, 1], point2[0, 1]], 
-                        c='red', s=150, alpha=0.8, 
-                        edgecolor='darkred', marker='*',
-                        label='Recommended' if len(recommended_points) == 1 else "")
+                # Calculate total score using configuration weights
+                total_score = sum(self.weights[k] * v for k, v in scores.items())
                 
-                # Connect recommended pairs
-                curve = plt.matplotlib.patches.ConnectionPatch(
-                    xyA=(point1[0, 0], point1[0, 1]),
-                    xyB=(point2[0, 0], point2[0, 1]),
-                    coordsA="data", coordsB="data",
-                    axesA=ax, axesB=ax,
-                    color='red', alpha=0.4, linewidth=2,
-                    connectionstyle="arc3,rad=0.2")
-                ax.add_patch(curve)
+                result = (pair, total_score, scores)
+                self._score_cache[pair] = result
+                scored.append(result)
                 
             except Exception as e:
-                logger.warning(f"Could not plot recommended pair {b1}-{b2}: {str(e)}")
+                logger.debug(f"Error scoring pair {pair}: {str(e)}")
                 continue
         
-        # Add labels for recommended points
-        rec_texts = []
-        for i, label in enumerate(recommended_labels):
-            rec_texts.append(ax.text(recommended_points[i][0] + offset, 
-                                recommended_points[i][1] + offset, 
-                                label,
-                                fontsize=8,
-                                color='darkred',
-                                weight='bold'))
-        
-        # Adjust all labels
-        all_texts = texts + rec_texts
-        adjust_text(all_texts,
-                ax=ax,
-                arrowprops=dict(arrowstyle='->', color='gray', alpha=0.5),
-                expand_points=(2.0, 2.0))
-        
-        # Customize plot
-        var1, var2 = pca.explained_variance_ratio_ * 100
-        ax.set_xlabel(f'PC1 (log-transformed, {var1:.1f}% variance)')
-        ax.set_ylabel(f'PC2 (log-transformed, {var2:.1f}% variance)')
-        ax.set_title(f"Bigram Space with Recommendations\n"
-                    f"{len(unique_bigrams)} existing bigrams, "
-                    f"{len(recommended_pairs)} recommended pairs")
-        ax.grid(True, alpha=0.3)
-        
-        # Add transformation explanation
-        transform_text = ("Feature space transformation:\n"
-                        "sign(x) * log(|x| + ε)")
-        ax.text(0.02, 0.98, transform_text,
-                transform=ax.transAxes,
-                fontsize=8,
-                verticalalignment='top',
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
-        
-        ax.legend()
-        plt.tight_layout()
-        
-        # Save plot
-        plot_path = Path(self.config.paths.plots_dir) / 'bigram_recommendations.png'
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        logger.info(f"Saved bigram recommendation visualization to {plot_path}")
-                                    
-    def _calculate_pair_scores(self, pair: Tuple[str, str], 
-                            feature_metrics: pd.DataFrame,
-                            weights: Dict[str, float]) -> Dict[str, float]:
-        """Calculate all scores for a bigram pair."""
-        try:
-            # Get prediction uncertainty
-            prediction = self.model.predict_preference(*pair)
-            prediction_score = prediction.uncertainty  # Use uncertainty from ModelPrediction
-            
-            # Get comfort score uncertainties
-            comfort1_mean, comfort1_std = self.model.get_bigram_comfort_scores(pair[0])
-            comfort2_mean, comfort2_std = self.model.get_bigram_comfort_scores(pair[1])
-            comfort_score = (comfort1_std + comfort2_std) / 2
-            
-            # Calculate feature space coverage score
-            feature_score = self._calculate_feature_space_score(pair)
-            
-            # Get stability score from effect CV
-            stability_score = self._get_metric_average(pair, feature_metrics, 'effect_cv')
-            
-            # Calculate interaction testing score
-            interaction_score = self._calculate_interaction_score(pair[0], pair[1])
-            
-            # Calculate transitivity testing score
-            transitivity_score = self._calculate_transitivity_score(pair[0], pair[1])
-            
-            # Combine all scores
-            total_score = sum(
-                weight * score for weight, score in [
-                    (weights['prediction_uncertainty'], prediction_score),
-                    (weights['comfort_uncertainty'], comfort_score),
-                    (weights['feature_space'], feature_score),
-                    (weights['stability'], 1.0 - stability_score),
-                    (weights['transitivity'], transitivity_score)
-                ]
-            )
-            
-            return {
-                'prediction_uncertainty': prediction_score,
-                'comfort_uncertainty': comfort_score,
-                'feature_space': feature_score,
-                'stability': 1.0 - stability_score,
-                'transitivity': transitivity_score,
-                'total': total_score
-            }
-            
-        except Exception as e:
-            logger.warning(f"Error calculating scores for pair {pair}: {str(e)}")
-            return {k: 0.0 for k in weights.keys() | {'total'}}
+        return sorted(scored, key=lambda x: x[1], reverse=True)
 
-    def _calculate_feature_space_score(self, pair: Tuple[str, str]) -> float:
+    def _select_diverse_subset(self, scored_candidates: List[Tuple]) -> List[Tuple[str, str]]:
         """
-        Calculate how well a pair covers sparse regions of feature space.
-        """
-        try:
-            # Get features for both bigrams
-            features1 = self._extract_features(pair[0])
-            features2 = self._extract_features(pair[1])
-            
-            # Get feature vectors for existing data
-            existing_vectors = []
-            for pref in self.dataset.preferences:
-                feat1 = [pref.features1.get(f, 0.0) for f in self.selected_features]
-                feat2 = [pref.features2.get(f, 0.0) for f in self.selected_features]
-                existing_vectors.extend([feat1, feat2])
-            
-            existing_vectors = np.array(existing_vectors)
-            
-            # Calculate minimum distances to existing points
-            new_vector1 = np.array([features1.get(f, 0.0) for f in self.selected_features])
-            new_vector2 = np.array([features2.get(f, 0.0) for f in self.selected_features])
-            
-            dist1 = np.min(np.linalg.norm(existing_vectors - new_vector1, axis=1))
-            dist2 = np.min(np.linalg.norm(existing_vectors - new_vector2, axis=1))
-            
-            # Return average distance (higher = better coverage of sparse regions)
-            return (dist1 + dist2) / 2
-            
-        except Exception as e:
-            logger.warning(f"Error calculating feature space score: {str(e)}")
-            return 0.0
-          
-    def _calculate_interaction_score(self, bigram1: str, bigram2: str) -> float:
-        """
-        Calculate interaction score for bigram pair.
+        Select diverse subset of recommendations.
         
-        Args:
-            bigram1: First bigram to evaluate
-            bigram2: Second bigram to evaluate
-            
-        Returns:
-            float: Interaction score between the bigrams
-            
-        Notes:
-            Uses importance calculator to evaluate feature interactions
-            and returns normalized score between 0 and 1
+        Process:
+        1. Start with highest scoring candidates
+        2. For each additional selection:
+           - Check diversity against already selected pairs
+           - Only add if sufficiently different
+        3. Continue until either:
+           - Reached desired number of recommendations
+           - No more sufficiently diverse candidates available
         """
+        if not scored_candidates:
+            return []
+            
+        selected = []
+        candidates = scored_candidates.copy()
+        
+        while len(selected) < self.n_recommendations and candidates:
+            # Add highest scoring remaining candidate
+            best = candidates.pop(0)
+            selected.append(best[0])
+            
+            # Filter remaining candidates for diversity
+            candidates = [
+                c for c in candidates 
+                if self._is_sufficiently_diverse(c[0], selected)
+            ]
+            
+        logger.info(f"Selected {len(selected)} diverse recommendations")
+        return selected
+
+    def _is_sufficiently_diverse(self, pair: Tuple[str, str], 
+    
+                               selected: List[Tuple[str, str]]) -> bool:
+        """
+        Check if pair is sufficiently different from already selected pairs.
+        
+        Uses feature-based similarity calculation with configurable threshold.
+        """
+        if not selected:
+            return True
+            
         try:
-            # Input validation
-            if not isinstance(bigram1, str) or not isinstance(bigram2, str):
-                raise ValueError(f"Bigrams must be strings, got {type(bigram1)} and {type(bigram2)}")
+            features = self._get_features(pair[0]), self._get_features(pair[1])
+            
+            for sel_pair in selected:
+                sel_features = (
+                    self._get_features(sel_pair[0]), 
+                    self._get_features(sel_pair[1])
+                )
                 
-            if len(bigram1) != 2 or len(bigram2) != 2:
-                raise ValueError(f"Bigrams must be exactly 2 characters, got '{bigram1}' and '{bigram2}'")
-                
-            # Get features for both bigrams using model's feature extractor
-            features1 = self.model._extract_features(bigram1)
-            features2 = self.model._extract_features(bigram2)
-            
-            # Calculate feature differences for importance metrics
-            feature_diffs = {
-                name: features1.get(name, 0.0) - features2.get(name, 0.0)
-                for name in self.model.selected_features
-            }
-            
-            # Get metrics using importance calculator
-            metrics = self.model.importance_calculator.calculate_feature_importance(
-                feature_diffs=feature_diffs,
-                dataset=self.dataset,
-                model=self.model
-            )
-            
-            # Calculate interaction score
-            interaction_score = self.model.importance_calculator.calculate_interaction_score(metrics)
-            
-            # Log detailed metrics for debugging
-            logger.debug(f"Interaction metrics for {bigram1}-{bigram2}:")
-            for metric_name, value in metrics.items():
-                logger.debug(f"  {metric_name}: {value:.4f}")
-            
-            return float(interaction_score)
-            
-        except ValueError as e:
-            # Re-raise validation errors with context
-            raise ValueError(f"Invalid bigrams for interaction score: {str(e)}")
-        except Exception as e:
-            logger.warning(
-                f"Error calculating interaction score for {bigram1}-{bigram2}: {str(e)}\n"
-                f"Returning zero score"
-            )
-            return 0.0
-                
-    def _calculate_transitivity_score(self, bigram1: str, bigram2: str) -> float:
-        """
-        Score how valuable a pair would be for transitivity testing.
-        Higher score = pair better validates transitivity.
-        """
-        try:
-            pref_graph = self._build_preference_graph()
-            
-            # Look for potential transitive chains
-            score = 0.0
-            for intermediate in pref_graph:
-                if (bigram1 in pref_graph.get(intermediate, set()) and 
-                    intermediate in pref_graph.get(bigram2, set())):
-                    # Found potential chain, increase score
-                    score += 1.0
+                similarity = self._calculate_similarity(features, sel_features)
+                if similarity > (1 - self.diversity_threshold):
+                    return False
                     
-            return float(score)
+            return True
             
         except Exception as e:
-            logger.warning(f"Error calculating transitivity score: {str(e)}")
-            return 0.0
-                        
-    def _build_preference_graph(self) -> Dict[str, Set[str]]:
-        """Build graph of existing preferences."""
-        pref_graph = {}
-        
-        # Build graph from dataset preferences
-        for pref in self.dataset.preferences:
-            better = pref.bigram1 if pref.preferred else pref.bigram2
-            worse = pref.bigram2 if pref.preferred else pref.bigram1
-                
-            if better not in pref_graph:
-                pref_graph[better] = set()
-            pref_graph[better].add(worse)
-        
-        return pref_graph
+            logger.debug(f"Error checking diversity: {str(e)}")
+            return False
 
-    def _get_metric_average(self, pair: Tuple[str, str],
-                        metrics_df: pd.DataFrame,
-                        metric_name: str) -> float:
-        """Get average metric value for bigram pair."""
+    #--------------------------------------------
+    # Analysis and calculation methods
+    #--------------------------------------------
+    def _calculate_information_gain(self, pair: Tuple[str, str]) -> float:
+        """
+        Calculate expected information gain from evaluating this pair.
+        
+        Information gain is estimated by:
+        1. Current model entropy
+        2. Expected entropy after hypothetical observation
+        3. Difference represents potential model improvement
+        """
         try:
-            value1 = metrics_df[metrics_df['feature_name'] == pair[0]][metric_name].iloc[0]
-            value2 = metrics_df[metrics_df['feature_name'] == pair[1]][metric_name].iloc[0]
-            return (value1 + value2) / 2
-        except Exception:
+            pred1 = self.model.predict_comfort_score(pair[0])
+            pred2 = self.model.predict_comfort_score(pair[1])
+            
+            # Higher uncertainty means more potential information gain
+            uncertainty_component = (pred1.uncertainty + pred2.uncertainty) / 2
+            
+            # Calculate expected entropy reduction
+            expected_entropy = self._estimate_posterior_entropy(pair, pred1, pred2)
+            entropy_reduction = self._model_entropy - expected_entropy
+            
+            # Combine components (both normalized to [0,1] range)
+            return float(0.4 * uncertainty_component + 0.6 * entropy_reduction)
+            
+        except Exception as e:
+            logger.debug(f"Error calculating information gain: {str(e)}")
             return 0.0
-                
-    def _save_recommendation_results(self, scored_pairs: List[Tuple]):
-        """Save detailed recommendation results."""
-        # Log detailed scoring information
-        logger.info("\nTop recommended pairs with scores:")
-        for pair, total_score, scores_detail in scored_pairs[:self.n_recommendations]:
-            logger.info(f"\nPair: {pair[0]}-{pair[1]}")
-            logger.info(f"Total score: {total_score:.3f}")
-            for metric, score in scores_detail.items():
-                logger.info(f"  {metric}: {score:.3f}")
+
+    def _calculate_coverage_value(self, pair: Tuple[str, str]) -> float:
+        """
+        Calculate how well pair improves feature space coverage.
         
-        # Save detailed scores
-        scores_df = pd.DataFrame([
-            {
-                'bigram1': pair[0],
-                'bigram2': pair[1],
-                **scores_detail
+        Coverage value considers:
+        1. Distance to existing data points
+        2. Local density in feature space
+        3. Distribution of feature values
+        """
+        try:
+            features1 = self._get_features(pair[0])
+            features2 = self._get_features(pair[1])
+            
+            # Calculate minimum distances to existing data
+            distances = self._calculate_distances([features1, features2])
+            mean_distance = np.mean(distances)
+            
+            # Calculate local density penalty
+            density = self._estimate_density([features1, features2])
+            density_penalty = 1 - density
+            
+            # Combine with weight toward distance (prefer exploring empty regions)
+            return float(0.7 * mean_distance + 0.3 * density_penalty)
+            
+        except Exception as e:
+            logger.debug(f"Error calculating coverage: {str(e)}")
+            return 0.0
+
+    def _analyze_comfort_range(self) -> Tuple[float, float]:
+        """Calculate current comfort score range from existing data."""
+        scores = []
+        for pref in self.dataset.preferences:
+            pred1 = self.model.predict_comfort_score(pref.bigram1)
+            pred2 = self.model.predict_comfort_score(pref.bigram2)
+            scores.extend([pred1.score, pred2.score])
+            
+        scores = np.array(scores)
+        return float(np.min(scores)), float(np.max(scores))
+
+    def _analyze_feature_coverage(self) -> np.ndarray:
+        """
+        Analyze current feature space coverage.
+        
+        Returns matrix of feature vectors for all existing bigrams.
+        """
+        features = []
+        for pref in self.dataset.preferences:
+            features.append(self._get_features(pref.bigram1))
+            features.append(self._get_features(pref.bigram2))
+        return np.array(features)
+
+    def _calculate_model_entropy(self) -> float:
+        """Calculate current model entropy."""
+        try:
+            # Use model's entropy calculation if available
+            if hasattr(self.model, 'calculate_entropy'):
+                return float(self.model.calculate_entropy())
+            
+            # Fallback: estimate from prediction uncertainties
+            uncertainties = []
+            for pref in self.dataset.preferences:
+                pred1 = self.model.predict_comfort_score(pref.bigram1)
+                pred2 = self.model.predict_comfort_score(pref.bigram2)
+                uncertainties.extend([pred1.uncertainty, pred2.uncertainty])
+            
+            return float(np.mean(uncertainties))
+            
+        except Exception as e:
+            logger.debug(f"Error calculating entropy: {str(e)}")
+            return 1.0  # Conservative fallback
+
+    def _estimate_posterior_entropy(self, pair: Tuple[str, str], 
+                                 pred1: Any, pred2: Any) -> float:
+        """
+        Estimate model entropy after hypothetical observation.
+        
+        Uses model's built-in method if available, otherwise estimates
+        based on current predictions and uncertainties.
+        """
+        try:
+            # Use model's method if available
+            if hasattr(self.model, 'estimate_posterior_entropy'):
+                return float(self.model.estimate_posterior_entropy(pair, pred1, pred2))
+            
+            # Fallback: simple estimate based on uncertainties
+            current_uncertainty = self._model_entropy
+            improvement = (pred1.uncertainty + pred2.uncertainty) / 4
+            return float(current_uncertainty - improvement)
+            
+        except Exception as e:
+            logger.debug(f"Error estimating posterior entropy: {str(e)}")
+            return self._model_entropy
+
+    def _get_features(self, bigram: str) -> np.ndarray:
+        """Get cached or compute feature vector for bigram."""
+        if bigram in self._feature_cache:
+            return self._feature_cache[bigram]
+            
+        features = self.model.extract_features(bigram)
+        self._feature_cache[bigram] = features
+        return features
+
+    def _calculate_distances(self, features: List[np.ndarray]) -> np.ndarray:
+        """Calculate minimum distances to existing data points."""
+        try:
+            return np.min(
+                np.linalg.norm(
+                    self._feature_coverage[:, np.newaxis] - features, 
+                    axis=2
+                ), 
+                axis=0
+            )
+        except Exception as e:
+            logger.debug(f"Error calculating distances: {str(e)}")
+            return np.array([0.0])
+
+    def _estimate_density(self, features: List[np.ndarray]) -> float:
+        """Estimate local density in feature space."""
+        try:
+            kde = KernelDensity(kernel='gaussian', bandwidth=0.1)
+            kde.fit(self._feature_coverage)
+            return float(np.mean(np.exp(kde.score_samples(features))))
+        except Exception as e:
+            logger.debug(f"Error estimating density: {str(e)}")
+            return 1.0  # Conservative fallback (assume dense region)
+
+    def _calculate_similarity(self, features1: Tuple[np.ndarray, np.ndarray],
+                            features2: Tuple[np.ndarray, np.ndarray]) -> float:
+        """Calculate feature-based similarity between pairs."""
+        try:
+            similarities = [
+                np.dot(f1, f2) / (np.linalg.norm(f1) * np.linalg.norm(f2))
+                for f1, f2 in zip(features1, features2)
+            ]
+            return float(np.mean(similarities))
+        except Exception as e:
+            logger.debug(f"Error calculating similarity: {str(e)}")
+            return 1.0  # Conservative fallback (assume similar)
+
+    def _save_recommendations(self, recommendations: List[Tuple[str, str]]) -> None:
+        """Save recommendations and analysis metadata."""
+        try:
+            results = {
+                'recommendations': recommendations,
+                'metadata': {
+                    'comfort_range': self._comfort_range,
+                    'model_entropy': float(self._model_entropy),
+                    'n_existing_pairs': len(self._existing_pairs)
+                },
+                'scores': {
+                    str(pair): self._score_cache.get(pair, {})
+                    for pair in recommendations
+                }
             }
-            for pair, _, scores_detail in scored_pairs[:self.n_recommendations]
-        ])
-        
-        # Save to output files
-        scores_df.to_csv(self.config.paths.root_dir / 'detailed_scores.csv', index=False)
-        
-        # Simple pair list for backward compatibility
-        pd.DataFrame([
-            {'bigram1': pair[0], 'bigram2': pair[1]}
-            for pair, _, _ in scored_pairs[:self.n_recommendations]
-        ]).to_csv(self.config.recommendations.recommendations_file, index=False)
+            
+            output_path = Path(self.config.recommendations.recommendations_file)
+            
+            # Save basic recommendations
+            pd.DataFrame(recommendations, columns=['bigram1', 'bigram2']).to_csv(
+                output_path, index=False
+            )
+            
+            # Save detailed results
+            detailed_path = output_path.parent / 'recommendation_details.json'
+            import json
+            with open(detailed_path, 'w') as f:
+                json.dump(results, f, indent=2)
+                
+        except Exception as e:
+            logger.error(f"Error saving recommendations: {str(e)}")
 
