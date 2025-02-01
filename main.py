@@ -308,7 +308,7 @@ def main():
             processed_train.file_path = feature_select_train.file_path
             processed_train.config = feature_select_train.config
             processed_train.control_features = feature_select_train.control_features
-            processed_train.feature_extractor = feature_select_train.feature_extractor  # Make sure this is set
+            processed_train.feature_extractor = feature_select_train.feature_extractor
             processed_train.feature_names = feature_select_train.feature_names
             processed_train.all_bigrams = feature_select_train.all_bigrams
             processed_train.all_bigram_features = feature_select_train.all_bigram_features  
@@ -341,69 +341,28 @@ def main():
                 val_metrics = model.evaluate(feature_select_val)
                 logger.info(f"Validation metrics - Accuracy: {val_metrics['accuracy']:.4f}, AUC: {val_metrics['auc']:.4f}")
                 
-                # Get final weights and metrics
-                feature_weights = model.get_feature_weights(include_control=True)
-                
-                # Evaluate features using feature selection training data
-                results = []
-                selectable_features = [f for f in all_features if f not in config.features.control_features]
-                for feature_name in selectable_features:
-                    importance = model._calculate_feature_importance(
-                        feature=feature_name,
-                        dataset=processed_train,
-                        current_features=selected_features
-                    )
-                    
-                    weight, std = feature_weights.get(feature_name, (0.0, 0.0))
-                    components = feature_name.split('_x_')
-                    
-                    results.append({
-                        'feature_name': feature_name,
-                        'n_components': len(components),
-                        'selected': 1 if feature_name in selected_features else 0,
-                        'importance': importance,
-                        'weight': weight,
-                        'weight_std': std,
-                        'validation_accuracy': val_metrics['accuracy'],
-                        'validation_auc': val_metrics['auc']
-                    })
-                
-                # Save results and metrics
-                metrics_file = Path(config.feature_selection.metrics_file)
-                pd.DataFrame(results).to_csv(metrics_file, index=False)
-                
                 # Final model fit on full training data
                 model.fit(train_data, selected_features, fit_purpose="Final model fit with selected features")
                 model_save_path = Path(config.feature_selection.model_file)
                 model.save(model_save_path)
                 
-                # Log final results and summary
-                logger.info("Feature selection summary:")
-                logger.info(f"  Features selected: {len(selected_features)}/{len(selectable_features)}")
-                logger.info(f"  Validation AUC: {val_metrics['auc']:.4f}")
-                
+                # Log final feature weights and importances
+                feature_weights = model.get_feature_weights(include_control=True)
                 for feature in selected_features:
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
-
-                    # Ensure model is fitted before calculating feature importance
-                    if not model.is_fitted:
-                        logger.error("Model must be fitted before evaluating feature importance. Fitting now...")
-                        model.fit(dataset)  # Ensure model is trained first
-
-                    # Now safely compute feature importance
                     importance = model._calculate_feature_importance(
                         feature=feature,
-                        dataset=model.processed_dataset,
+                        dataset=train_data,  # Use train_data instead of processed_dataset
                         current_features=selected_features
                     )
                     logger.info(f"{feature}:")
                     logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                    logger.info(f"  Importance: {importance:.3f}")
+                    logger.info(f"  Importance: {importance['selected_importance']:.3f}")  # Access selected_importance from metrics dict
 
             except Exception as e:
-                logger.error(f"Error generating visualizations: {str(e)}")
+                logger.error(f"Error in feature selection: {str(e)}")
                 raise
-                
+                            
         #---------------------------------
         # Visualize feature space
         #---------------------------------

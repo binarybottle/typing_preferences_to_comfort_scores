@@ -1119,6 +1119,12 @@ class PreferenceModel:
             current_features = list(control_features)  # Features to use in current round
             selected_features = list(control_features)  # All selected features
 
+            # Initialize empty feature weights dictionary
+            feature_weights = {f: (0.0, 0.0) for f in all_features}
+
+            # Track all feature metrics
+            feature_metrics = []
+
             # Log initial state
             logger.info("\n=== Starting Feature Selection ===")
             logger.info(f"Control features: {control_features}")
@@ -1137,24 +1143,47 @@ class PreferenceModel:
                 
                 # Evaluate each candidate
                 for feature in candidate_features:
-                    importance = self._calculate_feature_importance(
+                    metrics = self._calculate_feature_importance(
                         feature=feature,
                         dataset=self.dataset,
-                        current_features=current_features  # Uses currently selected features
+                        current_features=current_features
                     )
+                    
+                    # Add metadata and model metrics
+                    weight, std = feature_weights.get(feature, (0.0, 0.0))
+                    metrics.update({
+                        'feature_name': feature,
+                        'round': round_num,
+                        'n_components': len(feature.split('_x_')),
+                        'selected': 0,  # Will update to 1 if selected
+                        'weight': weight,
+                        'weight_std': std
+                    })
+                    feature_metrics.append(metrics)
 
+                    importance = metrics['selected_importance']
                     if importance > self.config.feature_selection.importance_threshold:
                         if importance > best_importance:
                             best_importance = importance
                             best_feature = feature
                             logger.info(f"Feature '{feature}' is new best: importance = {importance:.6f}")
-                
+                            logger.info(f"  Effect magnitude: {metrics['effect_magnitude']:.6f}")
+                            logger.info(f"  Effect std dev: {metrics['effect_std']:.6f}")
+                            logger.info(f"  Std/magnitude ratio: {metrics['std_magnitude_ratio']:.6f}")
+                    
                 if best_feature is None:
                     logger.info("\nNo remaining features improve predictions sufficiently.")
                     break
-                    
+                        
                 # Add best feature and update lists for next round
                 logger.info(f"\nSelected feature '{best_feature}' with importance {best_importance:.6f}")
+                
+                # Update selected status in metrics
+                for metric in feature_metrics:
+                    if metric['feature_name'] == best_feature:
+                        metric['selected'] = 1
+                        break
+                        
                 selected_features.append(best_feature)
                 current_features = selected_features.copy()  # Update current_features to include new selection
                 candidate_features.remove(best_feature)
@@ -1166,6 +1195,10 @@ class PreferenceModel:
                 
                 round_num += 1
                 
+            # Save feature metrics
+            metrics_file = Path(self.config.feature_selection.metrics_file)
+            pd.DataFrame(feature_metrics).to_csv(metrics_file, index=False)
+                    
             # Log final feature selection results
             logger.info("\n=== Feature Selection Complete ===")
             main_features = [f for f in selected_features if f not in control_features]
@@ -1183,7 +1216,7 @@ class PreferenceModel:
 
         finally:
             self.cleanup()
-            
+                                    
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> float:
         """Calculate feature importance based on prediction improvement."""
@@ -1287,26 +1320,26 @@ class PreferenceModel:
                     
             # Calculate metrics if we have effects
             if cv_aligned_effects:
+
+
                 cv_aligned_effects = np.array(cv_aligned_effects)
                 mean_aligned_effect = float(np.mean(cv_aligned_effects))
                 effect_std = float(np.std(cv_aligned_effects))
                 effect_magnitude = abs(mean_aligned_effect)
-                
+                std_magnitude_ratio = effect_std / effect_magnitude if effect_magnitude > 0 else float('inf')
+                                
                 # Calculate different consistency metrics
                 # 1. Unbounded negative
                 consistency_unbounded = 1 - (effect_std / (effect_magnitude + 1e-6))
-                
                 # 2. Bounded [0,1] using inverse ratio
-                consistency_bounded = 1 / (1 + (effect_std / effect_magnitude))
-                
+                consistency_bounded = 1 / (1 + (effect_std / effect_magnitude))   
                 # 3. Bounded [0,1] using capped ratio
-                consistency_capped = 1 - min(1, effect_std / effect_magnitude)
-                
+                consistency_capped = 1 - min(1, effect_std / effect_magnitude)         
                 # 4. Bounded [0,1] using sigmoid of ratio
                 consistency_sigmoid = 1 / (1 + np.exp(effect_std / effect_magnitude - 1))
                 
                 # Calculate importance scores using different methods
-                importance_original = effect_magnitude * max(0, consistency_unbounded)
+                importance_unbounded = effect_magnitude * max(0, consistency_unbounded)
                 importance_bounded = effect_magnitude * consistency_bounded  
                 importance_capped = effect_magnitude * consistency_capped
                 importance_sigmoid = effect_magnitude * consistency_sigmoid
@@ -1327,23 +1360,53 @@ class PreferenceModel:
                 logger.info(f"  sygmoid-bounded: 1/(1 + exp(std/magnitude - 1)) = {consistency_sigmoid:.5f}")
                 
                 logger.info(f"\nImportance scores = effect magnitude multiplied by:")
-                logger.info(f"  max(0, unbounded consistency): {importance_original:.5f}")
+                logger.info(f"  max(0, unbounded consistency): {importance_unbounded:.5f}")
                 logger.info(f"  min-capped consistency: {importance_capped:.5f}")
                 logger.info(f"  inverse-bounded consistency: {importance_bounded:.5f}")
                 logger.info(f"  sigmoid-bounded consistency: {importance_sigmoid:.5f}")
                 
-                # Return selected importance measure
-                selected_importance = importance_bounded
-                return selected_importance
-                
+                return {
+                    'effect_magnitude': effect_magnitude,
+                    'effect_std': effect_std,
+                    'std_magnitude_ratio': std_magnitude_ratio,
+                    'n_effects': len(cv_aligned_effects),
+                    'mean_aligned_effect': mean_aligned_effect,
+                    'consistency_unbounded': consistency_unbounded,
+                    'consistency_bounded': consistency_bounded,
+                    'consistency_capped': consistency_capped,
+                    'consistency_sigmoid': consistency_sigmoid,
+                    'importance_unbounded': importance_unbounded,
+                    'importance_bounded': importance_bounded,
+                    'importance_capped': importance_capped,
+                    'importance_sigmoid': importance_sigmoid,
+                    'selected_importance': importance_bounded  # Use bounded for selection
+                }
             else:
                 logger.warning("No valid effects calculated")
-                return 0.0
+                return {
+                    'effect_magnitude': 0.0,
+                    'effect_std': 0.0,
+                    'std_magnitude_ratio': float('inf'),
+                    'n_effects': 0,
+                    'mean_aligned_effect': 0.0,
+                    'consistency_unbounded': 0.0,
+                    'consistency_bounded': 0.0,
+                    'consistency_capped': 0.0,
+                    'consistency_sigmoid': 0.0,
+                    'importance_unbounded': 0.0,
+                    'importance_bounded': 0.0,
+                    'importance_capped': 0.0,
+                    'importance_sigmoid': 0.0,
+                    'selected_importance': 0.0
+                }
                 
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
-            return 0.0
-        
+            return {
+                'error': str(e),
+                'selected_importance': 0.0
+            }
+
         finally:
             # Ensure cleanup even if error occurs, but preserve feature state
             self.cleanup(preserve_features=True)
