@@ -1263,12 +1263,12 @@ class PreferenceModel:
                         
                         # Set up baseline model
                         fold_baseline_model.feature_extractor = dataset.feature_extractor
-                        fold_baseline_model.selected_features = saved_features
-                        fold_baseline_model.feature_names = saved_features
+                        fold_baseline_model.selected_features = current_features  # Changed from saved_features
+                        fold_baseline_model.feature_names = current_features     # Changed from saved_features
                         
                         # Train baseline model
                         logger.info(f"Training baseline model for fold {fold}")
-                        fold_baseline_model.fit(train_data, features=saved_features)
+                        fold_baseline_model.fit(train_data, features=current_features)  # Changed from saved_features
                         
                         # Check if baseline model fitted
                         if not hasattr(fold_baseline_model, 'fit_result'):
@@ -1277,12 +1277,12 @@ class PreferenceModel:
                             
                         # Set up and train feature model
                         fold_feature_model.feature_extractor = dataset.feature_extractor
-                        fold_feature_model.selected_features = saved_features + [feature]
-                        fold_feature_model.feature_names = saved_features + [feature]
+                        fold_feature_model.selected_features = current_features + [feature]  # Changed from saved_features
+                        fold_feature_model.feature_names = current_features + [feature]     # Changed from saved_features
                         
                         logger.info(f"Training feature model for fold {fold}")
-                        fold_feature_model.fit(train_data, features=saved_features + [feature])
-                        
+                        fold_feature_model.fit(train_data, features=current_features + [feature])  # Changed from saved_features
+                                                
                         # Check if feature model fitted
                         if not hasattr(fold_feature_model, 'fit_result'):
                             logger.warning(f"No fit result for feature model in fold {fold}")
