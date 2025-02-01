@@ -68,9 +68,12 @@ logger = LoggingManager.getLogger(__name__)
 
 class ModelPrediction:
     """Holds prediction results."""
-    def __init__(self, score: float, uncertainty: float):
-        self.score = score
+    def __init__(self, probability: float, uncertainty: float, 
+                 features_used: List[str] = None, computation_time: float = 0.0):
+        self.probability = probability
         self.uncertainty = uncertainty
+        self.features_used = features_used or []
+        self.computation_time = computation_time
 
 class PreferenceModel:
     # Class variable for cache storage
@@ -1166,8 +1169,8 @@ class PreferenceModel:
                             logger.info(f"  Current features: {current_features}")
 
                     # Break after finding a good enough feature
-                    if best_feature is not None:
-                        break
+                    #if best_feature is not None:
+                    #    break
 
                 # After finding best feature (or checking all candidates)
                 if best_feature is not None:  
