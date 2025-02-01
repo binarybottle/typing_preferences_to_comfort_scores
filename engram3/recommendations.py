@@ -68,10 +68,10 @@ class BigramRecommender:
         self.weights = self._validate_weights(rec_config.weights)
         
         # Thresholds
-        self.comfort_threshold = rec_config.get('min_comfort_score', 0.3)
-        self.min_feature_coverage = rec_config.get('min_feature_coverage', 0.1)
-        self.diversity_threshold = rec_config.get('min_diversity', 0.2)
-        
+        self.comfort_threshold = rec_config.min_comfort_score
+        self.min_feature_coverage = rec_config.min_feature_coverage
+        self.diversity_threshold = rec_config.min_diversity
+
         # Initialize state tracking
         self._comfort_range = None
         self._feature_coverage = None
