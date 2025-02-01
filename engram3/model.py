@@ -1218,7 +1218,7 @@ class PreferenceModel:
             self.cleanup()
                                     
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
-                                current_features: List[str]) -> float:
+                                current_features: List[str]) -> Dict[str, float]:
         """Calculate feature importance based on prediction improvement."""
         logger.info(f"\nCalculating importance for feature: {feature}")
         logger.info(f"Current features: {current_features}")
@@ -1227,8 +1227,23 @@ class PreferenceModel:
             # Verify dataset and feature extractor
             if dataset is None or dataset.feature_extractor is None:
                 logger.error("Invalid dataset or missing feature extractor")
-                return -float('inf')
-                
+                return {
+                    'effect_magnitude': 0.0,
+                    'effect_std': 0.0,
+                    'std_magnitude_ratio': float('inf'),
+                    'n_effects': 0,
+                    'mean_aligned_effect': 0.0,
+                    'consistency_unbounded': 0.0,
+                    'consistency_bounded': 0.0,
+                    'consistency_capped': 0.0,
+                    'consistency_sigmoid': 0.0,
+                    'importance_unbounded': 0.0,
+                    'importance_bounded': 0.0,
+                    'importance_capped': 0.0,
+                    'importance_sigmoid': 0.0,
+                    'selected_importance': 0.0
+                }
+                    
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
             
@@ -1403,7 +1418,19 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
             return {
-                'error': str(e),
+                'effect_magnitude': 0.0,
+                'effect_std': 0.0,
+                'std_magnitude_ratio': float('inf'),
+                'n_effects': 0,
+                'mean_aligned_effect': 0.0,
+                'consistency_unbounded': 0.0,
+                'consistency_bounded': 0.0,
+                'consistency_capped': 0.0,
+                'consistency_sigmoid': 0.0,
+                'importance_unbounded': 0.0,
+                'importance_bounded': 0.0,
+                'importance_capped': 0.0,
+                'importance_sigmoid': 0.0,
                 'selected_importance': 0.0
             }
 
