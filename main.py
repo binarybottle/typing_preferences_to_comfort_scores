@@ -345,24 +345,27 @@ def main():
                 model.fit(train_data, selected_features, fit_purpose="Final model fit with selected features")
                 model_save_path = Path(config.feature_selection.model_file)
                 model.save(model_save_path)
-                
-                # Log final feature weights and importances
+
+                # Get feature weights once and log both weights and stored importance metrics
                 feature_weights = model.get_feature_weights(include_control=True)
                 for feature in selected_features:
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
-                    importance = model._calculate_feature_importance(
-                        feature=feature,
-                        dataset=train_data,  # Use train_data instead of processed_dataset
-                        current_features=selected_features
-                    )
                     logger.info(f"{feature}:")
                     logger.info(f"  Weight: {weight:.3f} ± {std:.3f}")
-                    logger.info(f"  Importance: {importance['selected_importance']:.3f}")  # Access selected_importance from metrics dict
+                    
+                    # Use stored importance metrics if available and feature is not a control feature
+                    if feature not in control_features and feature in model.feature_importance_metrics:
+                        importance = model.feature_importance_metrics[feature]
+                        logger.info(f"  Importance metrics:")
+                        logger.info(f"    Effect magnitude: {importance['effect_magnitude']:.3f}")
+                        logger.info(f"    Effect consistency: {importance['consistency_bounded']:.3f}")
+                        logger.info(f"    Selected importance: {importance['selected_importance']:.3f}")
+                        logger.info(f"    Selected consistency: {importance['selected_consistency']:.3f}")                
 
             except Exception as e:
                 logger.error(f"Error in feature selection: {str(e)}")
                 raise
-                            
+                                        
         #---------------------------------
         # Visualize feature space
         #---------------------------------
@@ -560,7 +563,7 @@ def main():
             logger.info("Generating bigram pair recommendations...")
             recommender = BigramRecommender(dataset, feature_selection_model, config)
             logger.debug(f"Using features (including control): {feature_selection_model.get_feature_weights(include_control=True).keys()}")
-            recommended_pairs = recommender.get_recommended_pairs()
+            recommended_pairs = recommender.recommended_pairs()
             
             # Visualize recommendations
             logger.info("Visualizing recommendations...")

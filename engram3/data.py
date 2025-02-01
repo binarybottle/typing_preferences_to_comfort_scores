@@ -161,21 +161,20 @@ class PreferenceDataset:
         self._load_csv()
 
         # Filter out preferences with NaN typing times
-        if hasattr(self, 'feature_names') and 'typing_time' in self.feature_names:
-            original_count = len(self.preferences)
-            valid_prefs = []
-            for pref in self.preferences:
-                if (pref.features1.get('typing_time') is not None and 
-                    pref.features2.get('typing_time') is not None):
-                    valid_prefs.append(pref)
-            
-            n_filtered = original_count - len(valid_prefs)
-            logger.info(f"Filtered out {n_filtered} preferences with NaN typing times")
-            self.preferences = valid_prefs
-            self.participants = {p.participant_id for p in self.preferences}
-            logger.info(f"Remaining preferences: {len(self.preferences)}")
-            logger.info(f"Remaining participants: {len(self.participants)}")
-
+        original_count = len(self.preferences)
+        valid_prefs = []
+        for pref in self.preferences:
+            if (pref.typing_time1 is not None and 
+                pref.typing_time2 is not None):
+                valid_prefs.append(pref)
+        
+        n_filtered = original_count - len(valid_prefs)
+        logger.info(f"Filtered out {n_filtered} preferences with missing typing times")
+        self.preferences = valid_prefs
+        self.participants = {p.participant_id for p in self.preferences}
+        logger.info(f"Remaining preferences: {len(self.preferences)}")
+        logger.info(f"Remaining participants: {len(self.participants)}")
+    
     #--------------------------------------------
     # Primary data loading
     #--------------------------------------------   

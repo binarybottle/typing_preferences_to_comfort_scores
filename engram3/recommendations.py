@@ -561,3 +561,91 @@ class BigramRecommender:
         except Exception as e:
             logger.error(f"Error saving recommendations: {str(e)}")
 
+    #--------------------------------------------
+    # Visualization method
+    #--------------------------------------------
+    def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
+        """
+        Visualize how recommendations complement existing data in feature space.
+        
+        Creates two plots:
+        1. PCA projection showing existing data and recommendations
+        2. Feature coverage comparison before/after recommendations
+        """
+        try:
+            import matplotlib.pyplot as plt
+            from sklearn.decomposition import PCA
+            
+            # Get features for existing and recommended pairs
+            existing_features = self._feature_coverage
+            recommended_features = []
+            for b1, b2 in recommended_pairs:
+                recommended_features.append(self._get_features(b1))
+                recommended_features.append(self._get_features(b2))
+            recommended_features = np.array(recommended_features)
+            
+            # Combine for PCA
+            all_features = np.vstack([existing_features, recommended_features])
+            
+            # Fit PCA
+            pca = PCA(n_components=2)
+            all_projected = pca.fit_transform(all_features)
+            
+            # Split back into existing and recommended
+            n_existing = len(existing_features)
+            existing_projected = all_projected[:n_existing]
+            recommended_projected = all_projected[n_existing:]
+            
+            # Create figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            
+            # Plot 1: PCA projection
+            ax1.scatter(existing_projected[:, 0], existing_projected[:, 1], 
+                    alpha=0.5, label='Existing Data', color='blue')
+            ax1.scatter(recommended_projected[:, 0], recommended_projected[:, 1],
+                    alpha=0.7, label='Recommendations', color='red')
+            ax1.set_title('Feature Space Coverage')
+            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot 2: Feature coverage comparison
+            feature_names = list(self.model.get_feature_weights(include_control=True).keys())
+            existing_coverage = np.percentile(existing_features, [25, 50, 75], axis=0)
+            recommended_coverage = np.percentile(recommended_features, [25, 50, 75], axis=0)
+            
+            x = np.arange(len(feature_names))
+            width = 0.35
+            
+            # Plot existing coverage
+            ax2.bar(x - width/2, existing_coverage[1], width, 
+                    label='Existing', color='blue', alpha=0.5)
+            ax2.vlines(x - width/2, existing_coverage[0], existing_coverage[2],
+                    color='blue', alpha=0.3)
+                    
+            # Plot recommended coverage
+            ax2.bar(x + width/2, recommended_coverage[1], width,
+                    label='Recommended', color='red', alpha=0.5)
+            ax2.vlines(x + width/2, recommended_coverage[0], recommended_coverage[2],
+                    color='red', alpha=0.3)
+            
+            ax2.set_title('Feature Value Distribution')
+            ax2.set_xticks(x)
+            ax2.set_xticklabels(feature_names, rotation=45, ha='right')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # Save plot
+            output_path = Path(self.config.paths.plots_dir) / 'recommendation_analysis.png'
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            logger.info(f"Saved recommendation visualization to {output_path}")
+            
+        except Exception as e:
+            logger.error(f"Error visualizing recommendations: {str(e)}")
+
+            
