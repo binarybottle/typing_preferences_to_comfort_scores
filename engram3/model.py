@@ -1166,7 +1166,7 @@ class PreferenceModel:
                         if importance > best_importance:
                             best_importance = importance
                             best_feature = feature
-                            logger.info(f"Feature '{feature}' is new best: importance = {importance:.6f}")
+                            logger.info(f"\nFeature '{feature}' is new best: importance = {importance:.6f}")
                             logger.info(f"  Effect magnitude: {metrics['effect_magnitude']:.6f}")
                             logger.info(f"  Effect std dev: {metrics['effect_std']:.6f}")
                             logger.info(f"  Std/magnitude ratio: {metrics['std_magnitude_ratio']:.6f}")
@@ -1243,20 +1243,14 @@ class PreferenceModel:
                     'importance_sigmoid': 0.0,
                     'selected_importance': 0.0
                 }
-                    
-            self.dataset = dataset
-            self.feature_extractor = dataset.feature_extractor
-            
-            # Store the current feature state before CV
-            saved_features = current_features.copy()
-            
-            # Get cross-validation splits  
+
+            # Use passed dataset directly instead of storing in self
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             cv_aligned_effects = []
-            
+                
             # Process each fold
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
-                logger.info(f"\nProcessing fold {fold}/5 for {feature}")
+                logger.info(f"Processing fold {fold}/5 for {feature}")
                 train_data = dataset._create_subset_dataset(train_idx)
                 val_data = dataset._create_subset_dataset(val_idx)
                 logger.info(f"Train set size: {len(train_data.preferences)} preferences")
@@ -1335,8 +1329,6 @@ class PreferenceModel:
                     
             # Calculate metrics if we have effects
             if cv_aligned_effects:
-
-
                 cv_aligned_effects = np.array(cv_aligned_effects)
                 mean_aligned_effect = float(np.mean(cv_aligned_effects))
                 effect_std = float(np.std(cv_aligned_effects))
@@ -1394,7 +1386,7 @@ class PreferenceModel:
                     'importance_bounded': importance_bounded,
                     'importance_capped': importance_capped,
                     'importance_sigmoid': importance_sigmoid,
-                    'selected_importance': importance_bounded  # Use bounded for selection
+                    'selected_importance': importance_bounded  # Keep using bounded for selection
                 }
             else:
                 logger.warning("No valid effects calculated")
@@ -1433,10 +1425,6 @@ class PreferenceModel:
                 'importance_sigmoid': 0.0,
                 'selected_importance': 0.0
             }
-
-        finally:
-            # Ensure cleanup even if error occurs, but preserve feature state
-            self.cleanup(preserve_features=True)
                                     
     #--------------------------------------------
     # Cross-validation methods
