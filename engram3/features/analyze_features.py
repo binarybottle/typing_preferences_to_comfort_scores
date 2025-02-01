@@ -4,7 +4,7 @@ Analyze feature selection metrics and trained model to determine optimal importa
 and visualize feature relationships.
 
 Usage:
-    python analyze_features.py --metrics ../output/data/feature_metrics.csv [--model ../output/data/feature_selection_model.pkl]
+    python engram3/features/analyze_features.py --metrics ../output/data/feature_metrics.csv [--model ../output/data/feature_selection_model.pkl]
 
 """
 

@@ -210,6 +210,9 @@ class RecommendationsConfig(BaseModel):
     n_recommendations: int = Field(gt=0)
     max_candidates: int = Field(gt=0)
     recommendations_file: str
+    min_comfort_score: float = Field(default=0.333)
+    min_feature_coverage: float = Field(default=0.168)
+    min_diversity: float = Field(default=0.632)
 
     @validator('weights')
     def weights_must_sum_to_one(cls, v: Dict[str, float]) -> Dict[str, float]:
@@ -228,6 +231,24 @@ class RecommendationsConfig(BaseModel):
     def n_recommendations_must_be_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("n_recommendations must be positive")
+        return v
+
+    @validator('min_comfort_score')
+    def validate_comfort_score(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("min_comfort_score must be between 0 and 1")
+        return v
+
+    @validator('min_feature_coverage')
+    def validate_feature_coverage(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("min_feature_coverage must be between 0 and 1")
+        return v
+
+    @validator('min_diversity')
+    def validate_diversity(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("min_diversity must be between 0 and 1")
         return v
 
 #--------------------------------------------

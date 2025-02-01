@@ -66,6 +66,12 @@ from engram3.utils.visualization import PlottingUtils
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
+class ModelPrediction:
+    """Holds prediction results."""
+    def __init__(self, score: float, uncertainty: float):
+        self.score = score
+        self.uncertainty = uncertainty
+
 class PreferenceModel:
     # Class variable for cache storage
     _feature_data_cache_: Dict[str, Dict[str, np.ndarray]] = {}
@@ -354,7 +360,25 @@ class PreferenceModel:
                 features_used=[],
                 computation_time=0.0
             )
-                                
+
+    def predict_comfort_score(self, bigram: str) -> ModelPrediction:
+        """
+        Adapter method to match BigramRecommender's expected interface.
+        Wraps get_bigram_comfort_scores to return ModelPrediction object.
+        
+        Args:
+            bigram: Two-character string to predict comfort for
+            
+        Returns:
+            ModelPrediction with score and uncertainty values
+        """
+        try:
+            score, uncertainty = self.get_bigram_comfort_scores(bigram)
+            return ModelPrediction(score=score, uncertainty=uncertainty)
+        except Exception as e:
+            logger.error(f"Error predicting comfort score for {bigram}: {str(e)}")
+            return ModelPrediction(score=0.0, uncertainty=1.0)
+                                        
     #--------------------------------------------
     # Resource management methods
     #--------------------------------------------
@@ -600,6 +624,22 @@ class PreferenceModel:
                 del cache[k]
         cache[key] = value
 
+    def extract_features(self, bigram: str) -> Dict[str, float]:
+        """
+        Public method to extract features for a bigram.
+        
+        Args:
+            bigram: Two-character string to extract features for
+            
+        Returns:
+            Dictionary mapping feature names to their values
+            
+        Raises:
+            NotFittedError: If feature extractor is not initialized
+            ValueError: If bigram is not valid
+        """
+        return self._extract_features(bigram)
+
     def _extract_features(self, bigram: str) -> Dict[str, float]:
         """
         Extract features for a bigram using feature extractor with caching.
@@ -839,11 +879,11 @@ class PreferenceModel:
             # Log dimensions and stats
             logger.info(f"Number of unique participants: {len(unique_participants)}")
             logger.info(f"Participant ID range: 0 to {len(unique_participants) - 1}")
-            logger.info(f"Matrix shapes:")
-            logger.info(f"  Main features: {len(main_features)}")
-            logger.info(f"  Control features: {len(control_features)}")
-            logger.info(f"  X1, X2: {X1.shape}, {X2.shape}")
-            logger.info(f"  C1, C2: {C1.shape}, {C2.shape}")
+            logger.debug(f"Matrix shapes:")
+            logger.debug(f"  Main features: {len(main_features)}")
+            logger.debug(f"  Control features: {len(control_features)}")
+            logger.debug(f"  X1, X2: {X1.shape}, {X2.shape}")
+            logger.debug(f"  C1, C2: {C1.shape}, {C2.shape}")
 
             # Log standardization results
             for feature in main_features + control_features:
@@ -1099,9 +1139,6 @@ class PreferenceModel:
                                 model.cleanup()
                             if model in self._temp_models:
                                 self._temp_models.remove(model)
-
-                    logger.info(f"After importance calculation for {feature}:")
-                    logger.info(f"  Current features: {current_features}")
                     
                     # Add metadata and model metrics
                     weight, std = feature_weights.get(feature, (0.0, 0.0))
@@ -1134,10 +1171,6 @@ class PreferenceModel:
 
                 # After finding best feature (or checking all candidates)
                 if best_feature is not None:  
-                    logger.info(f"\nAdding best feature '{best_feature}' to selected set:")
-                    logger.info(f"  Before update - Current features: {current_features}")
-                    logger.info(f"  Before update - Selected features: {selected_features}")
-
                     # Update selected status in metrics
                     for metric in feature_metrics:
                         if metric['feature_name'] == best_feature:
@@ -1148,10 +1181,6 @@ class PreferenceModel:
                     current_features = selected_features.copy()
                     candidate_features.remove(best_feature)
 
-                    logger.info(f"  After update - Current features: {current_features}")
-                    logger.info(f"  After update - Selected features: {selected_features}")
-                    logger.info(f"  After update - Remaining candidates: {len(candidate_features)}")
-                    
                     round_num += 1
                 else:
                     logger.info("\nNo remaining features improve predictions sufficiently.")
@@ -1343,14 +1372,14 @@ class PreferenceModel:
                 logger.info(f"\nConsistency metrics:")
                 logger.info(f"  unbounded ratio: 1 - (std/magnitude) = {consistency_unbounded:.5f}")
                 logger.info(f"  min-capped ratio: 1 - min(1, std/magnitude) = {consistency_capped:.5f}")
-                logger.info(f"  inverse-bounded: 1/(1 + std/magnitude) = {consistency_bounded:.5f}")
                 logger.info(f"  sygmoid-bounded: 1/(1 + exp(std/magnitude - 1)) = {consistency_sigmoid:.5f}")
+                logger.info(f"  inverse-bounded: 1/(1 + std/magnitude) = {consistency_bounded:.5f}")
                 
                 logger.info(f"\nImportance scores = effect magnitude multiplied by:")
                 logger.info(f"  max(0, unbounded consistency): {importance_unbounded:.5f}")
                 logger.info(f"  min-capped consistency: {importance_capped:.5f}")
-                logger.info(f"  inverse-bounded consistency: {importance_bounded:.5f}")
                 logger.info(f"  sigmoid-bounded consistency: {importance_sigmoid:.5f}")
+                logger.info(f"  inverse-bounded consistency: {importance_bounded:.5f}")
                 
                 return {
                     'effect_magnitude': effect_magnitude,
@@ -1493,7 +1522,10 @@ class PreferenceModel:
             'feature_weights': self.feature_weights,
             'fit_result': self.fit_result,
             'interaction_metadata': self.interaction_metadata,
-            'feature_importance_metrics': self.feature_importance_metrics
+            'feature_importance_metrics': self.feature_importance_metrics,
+            'feature_extractor': self.feature_extractor,
+            'feature_stats': getattr(self, 'feature_stats', {}),
+            'is_fitted': self._is_fitted
         }
         with open(path, 'wb') as f:
             pickle.dump(save_dict, f)
@@ -1509,18 +1541,30 @@ class PreferenceModel:
             
             model = cls(config=save_dict['config'])
             try:
+                # Core model attributes
                 model.feature_names = save_dict['feature_names']
                 model.selected_features = save_dict['selected_features']
                 model.feature_weights = save_dict['feature_weights']
                 model.fit_result = save_dict['fit_result']
                 model.interaction_metadata = save_dict['interaction_metadata']
-                # Load feature importance metrics if they exist
                 model.feature_importance_metrics = save_dict.get('feature_importance_metrics', {})
+                
+                # Feature extraction related attributes
+                model.feature_extractor = save_dict.get('feature_extractor')
+                model.feature_stats = save_dict.get('feature_stats', {})
+                
+                # Model state
+                model._is_fitted = save_dict.get('is_fitted', False)
+                
+                if model.feature_extractor is None:
+                    logger.warning("No feature extractor found in saved model state")
+                
                 return model
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error restoring model attributes: {e}")
                 raise
-        except Exception:
-            logger.error(f"Error loading model from {path}")
+        except Exception as e:
+            logger.error(f"Error loading model from {path}: {e}")
             raise
 
     #--------------------------------------------
