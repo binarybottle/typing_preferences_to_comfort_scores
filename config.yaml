@@ -55,8 +55,8 @@ feature_selection:
   cross_validation:
     n_splits: 5                         # Number of CV folds for evaluating importance
     min_fold_size: 100                  # Minimum number of preferences per fold
-  metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
-  model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
+  metrics_file: "output1/data/feature_metrics.csv"   # File to store feature metrics
+  model_file: "output1/data/feature_selection_model.pkl"  # File to store feature selection model
 
 features:
   base_features:                        # Core features for analysis

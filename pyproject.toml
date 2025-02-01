@@ -22,6 +22,8 @@ datetime = "^5.5"
 pathlib = "^1.0.1"
 psutil = "^6.1.1"
 tenacity = "^9.0.0"
+kneed = "^0.8.5"
+seaborn = "^0.13.2"
 
 
 [build-system]
