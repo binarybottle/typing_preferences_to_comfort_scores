@@ -120,8 +120,8 @@ features:                               # 2nd stage of feature selection (see "a
     - [rows_apart, outward_roll, sum_engram_position_values]
     - [rows_apart, outward_roll, sum_row_position_values]
     - [angle_apart, outward_roll, sum_engram_position_values]
-  control_features:                     # Features to control for but not analyze
-    - bigram_frequency                  # Bigram frequency in the English language
+  control_features:                       # Features to control for but not analyze
+    - bigram_frequency                    # Bigram frequency in the English language
 
 #-----------------------------------------------------------------------
 # Bigram pair recommendations
@@ -148,29 +148,38 @@ __model_fast: &debug
   max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
   adapt_delta: 0.80                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
-# Settings to select features (takes days on an M1/M2 Macbook Pro)
-__model_feature_selection: &feature_selection
-  chains: 2                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 1000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 3000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 10                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
-  adapt_delta: 0.90                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+# Settings to analyze features
+__model_analysis: &feature_analysis
+  chains: 2                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 500                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 1000                      # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  max_treedepth: 8                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.85                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+
+# Settings to select features
+__model_selection: &feature_selection
+  chains: 2                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 1000                         # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 3000                      # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  max_treedepth: 10                    # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.9                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 # Settings to train the model on the selected features
 __model_slow: &model_train
-  chains: 4                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 3000                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 7000                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 15                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
-  adapt_delta: 0.95                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
+  chains: 4                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
+  warmup: 3000                         # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
+  n_samples: 7000                      # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  max_treedepth: 15                    # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
+  adapt_delta: 0.95                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
-model:                                  # Bayesian model parameters (Stan)
-  #<<: *debug                            # Model debug settings
-  <<: *feature_selection                # Model feature selection settings
-  #<<: *model_train                      # Model training settings
-  feature_scale: 1.5                    # Scale parameter for feature weight priors (lower for more regularization)
-  participant_scale: 0.5                # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
-  required_temp_mb: 2000                # Required temporary space in MB
+model:                                 # Bayesian model parameters (Stan)
+  #<<: *debug                          # Model debug settings
+  <<: *feature_analysis                # Model feature analysis settings
+  #<<: *feature_selection              # Model feature selection settings
+  #<<: *model_train                    # Model training settings
+  feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
+  participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
+  required_temp_mb: 2000               # Required temporary space in MB
   predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
   model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
 
@@ -178,21 +187,21 @@ model:                                  # Bayesian model parameters (Stan)
 # Visualization, logging, and paths
 #-----------------------------------------------------------------------
 visualization:
-  dpi: 300                              # Resolution of saved plots (dots per inch)
-  figure_size: [12, 8]                  # Default figure dimensions (width, height)
-  alpha: 0.6                            # Transparency for plot elements
-  color_map: "viridis"                  # Default colormap for visualizations (viridis is perceptually uniform)
+  dpi: 300                            # Resolution of saved plots (dots per inch)
+  figure_size: [12, 8]                # Default figure dimensions (width, height)
+  alpha: 0.6                          # Transparency for plot elements
+  color_map: "viridis"                # Default colormap for visualizations (viridis is perceptually uniform)
 
-logging:                                # Logging configuration
+logging:                              # Logging configuration
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Standard Python logging format
-  console_level: "INFO"                 # Show INFO and above messages in console
-  file_level: "DEBUG"                   # Store DEBUG and above messages in log file
+  console_level: "INFO"               # Show INFO and above messages in console
+  file_level: "DEBUG"                 # Store DEBUG and above messages in log file
 
-paths:                                  # Directory structure for outputs
-  root_dir: "output"                    # Base directory for all outputs
-  metrics_dir: "output/data"            # Directory for storing computed metrics
-  plots_dir: "output/plots"             # Directory for saving visualizations
-  logs_dir: "output/logs"               # Directory for log files
+paths:                                # Directory structure for outputs
+  root_dir: "output"                  # Base directory for all outputs
+  metrics_dir: "output/data"          # Directory for storing computed metrics
+  plots_dir: "output/plots"           # Directory for saving visualizations
+  logs_dir: "output/logs"             # Directory for log files
 
 #-----------------------------------------------------------------------
 # analyze_features mode 
@@ -201,17 +210,17 @@ paths:                                  # Directory structure for outputs
 # and set importance threshold using the analyze_features.py script
 #-----------------------------------------------------------------------
 #features:
-#  base_features:                        # Core features for analysis
-#    - typing_time                       # Time taken to type bigram
-#    - same_finger                       # Whether bigram uses same finger
-#    - sum_finger_values                 # Combined finger load values
-#    - adj_finger_diff_row               # Adjacent fingers in different rows
-#    - rows_apart                        # Number of rows between keys
-#    - angle_apart                       # Angular distance between keys
-#    - outward_roll                      # Whether movement rolls outward
-#    - middle_column                     # Keys in middle column (outside home columns)
-#    - sum_engram_position_values        # Combined Engram position values
-#    - sum_row_position_values           # Combined row position values
+#  base_features:                    # Core features for analysis
+#    - typing_time                   # Time taken to type bigram
+#    - same_finger                   # Whether bigram uses same finger
+#    - sum_finger_values             # Combined finger load values
+#    - adj_finger_diff_row           # Adjacent fingers in different rows
+#    - rows_apart                    # Number of rows between keys
+#    - angle_apart                   # Angular distance between keys
+#    - outward_roll                  # Whether movement rolls outward
+#    - middle_column                 # Keys in middle column (outside home columns)
+#    - sum_engram_position_values    # Combined Engram position values
+#    - sum_row_position_values       # Combined row position values
 #  interactions:
 #    # 2-way interactions
 #    - [same_finger, sum_finger_values] 

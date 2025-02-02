@@ -1497,8 +1497,9 @@ class PreferenceModel:
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> Dict[str, float]:
         """Calculate feature importance based on prediction improvement."""
-        logger.info(f"\nCalculating importance for feature: {feature}")
-        logger.info(f"Current features: {current_features}")
+        logger.info(f"\n=== Feature Importance Calculation for '{feature}' ===")
+        logger.info(f"Base features: {current_features}")
+        logger.info(f"Number of CV folds: 5")
         
         try:
             # Verify dataset and feature extractor
@@ -1527,24 +1528,29 @@ class PreferenceModel:
                     # Create fold datasets
                     train_data = dataset._create_subset_dataset(train_idx)
                     val_data = dataset._create_subset_dataset(val_idx)
+                    logger.info(f"│  • Train set: {len(train_data.preferences)} preferences")
+                    logger.info(f"│  • Val set: {len(val_data.preferences)} preferences")
                     
                     # Process fold with temporary models
                     with self._create_temp_model() as fold_baseline_model, \
                         self._create_temp_model() as fold_feature_model:
                         
-                        # Set up and train baseline model
+                        # Train baseline model
+                        logger.info(f"│  • Training baseline model...")
                         fold_baseline_model.feature_extractor = dataset.feature_extractor
                         fold_baseline_model.selected_features = current_features
                         fold_baseline_model.feature_names = current_features
                         fold_baseline_model.fit(train_data, features=current_features)
                         
-                        # Set up and train feature model
+                        # Train feature model
+                        logger.info(f"│  • Training feature model...")
                         fold_feature_model.feature_extractor = dataset.feature_extractor
                         fold_feature_model.selected_features = current_features + [feature]
                         fold_feature_model.feature_names = current_features + [feature]
                         fold_feature_model.fit(train_data, features=current_features + [feature])
                         
                         # Calculate effects for validation set
+                        logger.info(f"│  • Calculating validation effects...")
                         fold_effects = []
                         for pref in val_data.preferences:
                             try:
@@ -1561,7 +1567,7 @@ class PreferenceModel:
                                 fold_effects.append(aligned_effect)
                                 
                             except Exception as e:
-                                logger.warning(f"Error processing preference: {str(e)}")
+                                logger.debug(f"│    Error processing preference: {str(e)}")
                                 continue
                         
                         # Aggregate fold results
@@ -1571,10 +1577,10 @@ class PreferenceModel:
                             all_effects.extend(fold_effects)
                             n_valid_effects += len(fold_effects)
                             
-                            logger.info(f"Fold {fold} mean effect: {mean_fold_effect:.4f}")
+                            logger.info(f"│  • Fold {fold} complete: {len(fold_effects)} effects, mean = {mean_fold_effect:.4f}")
                     
                 except Exception as e:
-                    logger.warning(f"Error processing fold {fold}: {str(e)}")
+                    logger.error(f"│  ✗ Error in fold {fold}: {str(e)}")
                     continue
                     
                 finally:
@@ -1583,6 +1589,12 @@ class PreferenceModel:
                         self.cleanup_temp_models()
                     gc.collect()
             
+                # Visual separator between folds
+                if fold < 5:
+                    logger.info("├─────────────────────────────────────────────")
+                else:
+                    logger.info("└─────────────────────────────────────────────")
+ 
             # Calculate final metrics from aggregated data
             if all_effects:
                 all_effects = np.array(all_effects)
@@ -1590,19 +1602,36 @@ class PreferenceModel:
                 effect_std = np.std(all_effects)
                 effect_magnitude = abs(mean_effect)
                 
-                # Calculate importance metrics as before
-                # ... rest of the metrics calculation ...
+                # Calculate consistency metrics
+                std_magnitude_ratio = effect_std / effect_magnitude if effect_magnitude > 0 else float('inf')
+                consistency = 1 / (1 + std_magnitude_ratio)  # Bounded [0,1]
+                importance = effect_magnitude * consistency
+                
+                logger.info("\nFinal metrics:")
+                logger.info(f"• Total valid effects: {n_valid_effects}")
+                logger.info(f"• Mean effect: {mean_effect:.4f}")
+                logger.info(f"• Effect magnitude: {effect_magnitude:.4f}")
+                logger.info(f"• Effect std dev: {effect_std:.4f}")
+                logger.info(f"• Consistency score: {consistency:.4f}")
+                logger.info(f"• Importance score: {importance:.4f}")
                 
                 return {
                     'effect_magnitude': effect_magnitude,
                     'effect_std': effect_std,
+                    'std_magnitude_ratio': std_magnitude_ratio,
                     'mean_aligned_effect': mean_effect,
-                    # ... other metrics ...
+                    'consistency': consistency,
+                    'selected_importance': importance,
+                    'n_effects': n_valid_effects
                 }
+                
+            else:
+                logger.warning("No valid effects calculated")
+                return self._get_default_metrics()
                 
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
-            return default_metrics_dict
+            return self._get_default_metrics()
         
     #--------------------------------------------
     # Cross-validation methods
