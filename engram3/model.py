@@ -404,9 +404,7 @@ class PreferenceModel:
         
         if hasattr(self, '_feature_data_cache'):
             self._feature_data_cache.clear()
-                
-        self.cleanup_temp_models()
-        
+                        
         # Don't reset state if model is fitted
         if not self.is_fitted:
             self.reset_state()
@@ -573,9 +571,6 @@ class PreferenceModel:
             # Clear feature cache
             if hasattr(self, '_feature_data_cache'):
                 self._feature_data_cache.clear()
-            
-            # Clear any temporary models
-            self.cleanup_temp_models()
             
             # Clear Stan results if not needed
             if hasattr(self, 'fit_result') and not self.is_fitted:
@@ -1491,7 +1486,6 @@ class PreferenceModel:
             }
         finally:
             # Final cleanup
-            self.cleanup_temp_models()
             gc.collect()
 
     def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
@@ -1585,8 +1579,6 @@ class PreferenceModel:
                     
                 finally:
                     # Clean up fold resources
-                    if hasattr(self, '_temp_models'):
-                        self.cleanup_temp_models()
                     gc.collect()
             
                 # Visual separator between folds
@@ -1627,11 +1619,9 @@ class PreferenceModel:
                 
             else:
                 logger.warning("No valid effects calculated")
-                return self._get_default_metrics()
                 
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
-            return self._get_default_metrics()
         
     #--------------------------------------------
     # Cross-validation methods
