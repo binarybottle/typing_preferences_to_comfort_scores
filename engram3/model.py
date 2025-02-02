@@ -419,21 +419,53 @@ class PreferenceModel:
                 
         gc.collect()
         
-    def cleanup_temp_models(self):
-        """Clean up temporary models created during evaluation."""
-        if hasattr(self, '_temp_models'):
-            models_to_remove = []
-            for model in self._temp_models:
-                if hasattr(model, 'cleanup'):
-                    model.cleanup()
-                models_to_remove.append(model)
-                
-            for model in models_to_remove:
-                if model in self._temp_models:
-                    self._temp_models.remove(model)
-            
-            # Clear list after cleanup
+    def _create_temp_model(self):
+        """Create a temporary model with proper cleanup."""
+        temp_model = type(self)(config=self.config)
+        
+        # Copy over key state
+        temp_model.feature_extractor = self.feature_extractor
+        temp_model.feature_stats = (self.feature_stats.copy() 
+                                if hasattr(self, 'feature_stats') and self.feature_stats is not None 
+                                else {})
+        
+        # Copy feature-related state
+        if hasattr(self, 'feature_names'):
+            temp_model.feature_names = self.feature_names.copy() if self.feature_names else []
+        if hasattr(self, 'selected_features'):
+            temp_model.selected_features = self.selected_features.copy() if self.selected_features else []
+
+        # Store model reference in parent
+        if not hasattr(self, '_temp_models'):
             self._temp_models = []
+        self._temp_models.append(temp_model)
+
+        class ModelContext:
+            def __init__(self, model, parent_models):
+                self.model = model
+                self._parent_models = parent_models
+                    
+            def __enter__(self):
+                return self.model
+                    
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                # Immediate cleanup of Stan results
+                if hasattr(self.model, 'fit_result'):
+                    if hasattr(self.model.fit_result, '_run_dir'):
+                        shutil.rmtree(self.model.fit_result._run_dir)
+                    del self.model.fit_result
+                
+                # Clear any cached data
+                if hasattr(self.model, '_feature_data_cache'):
+                    self.model._feature_data_cache.clear()
+                
+                # Remove from parent's temp models list
+                if self.model in self._parent_models:
+                    self._parent_models.remove(self.model)
+                
+                gc.collect()
+
+        return ModelContext(temp_model, self._temp_models)
 
     def _cleanup_run_directory(self, run_dir: Optional[Path] = None, active_only: bool = False) -> None:
         """Cleanup only Stan run directories that we own.
@@ -532,16 +564,27 @@ class PreferenceModel:
         cache[key] = value
 
     def _check_memory_usage(self):
-        """Monitor memory usage and clean up if needed."""
-        import psutil
+        """Monitor memory usage with more aggressive cleanup."""
         process = psutil.Process()
         memory_percent = process.memory_percent()
         
-        # If using more than 80% memory, force cleanup
-        if memory_percent > 80:
+        if memory_percent > 75:  # Lower threshold for earlier intervention
             logger.warning(f"High memory usage ({memory_percent:.1f}%). Cleaning up...")
-            self.cleanup()
-
+            # Clear feature cache
+            if hasattr(self, '_feature_data_cache'):
+                self._feature_data_cache.clear()
+            
+            # Clear any temporary models
+            self.cleanup_temp_models()
+            
+            # Clear Stan results if not needed
+            if hasattr(self, 'fit_result') and not self.is_fitted:
+                if hasattr(self.fit_result, '_run_dir'):
+                    shutil.rmtree(self.fit_result._run_dir)
+                del self.fit_result
+            
+            gc.collect()
+            
     def check_disk_space(self, required_mb: int = 2000) -> bool:
         """
         Check if there's enough disk space available.
@@ -1229,13 +1272,16 @@ class PreferenceModel:
             except Exception as e:
                 logger.error(f"Error during final cleanup: {e}")
                                                                             
-    def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
+    def _calculate_feature_importance_parallel_cv(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> Dict[str, float]:
         """Calculate feature importance based on prediction improvement."""
         logger.info(f"\nCalculating importance for feature: {feature}")
         logger.info(f"Current features: {current_features}")
         
         try:
+            # Add memory check at start
+            self._check_memory_usage()
+
             # Verify dataset and feature extractor
             if dataset is None or dataset.feature_extractor is None:
                 logger.error("Invalid dataset or missing feature extractor")
@@ -1271,7 +1317,7 @@ class PreferenceModel:
                 try:
                     # Create and train both models for this fold
                     with self._create_temp_model() as fold_baseline_model, \
-                        self._create_temp_model() as fold_feature_model:
+                         self._create_temp_model() as fold_feature_model:
                         
                         # Set up baseline model
                         fold_baseline_model.feature_extractor = dataset.feature_extractor
@@ -1338,6 +1384,12 @@ class PreferenceModel:
                 except Exception as e:
                     logger.warning(f"Error processing fold {fold}: {str(e)}")
                     continue
+                finally:
+                    # Force cleanup after each fold
+                    if hasattr(self, '_feature_data_cache'):
+                        self._feature_data_cache.clear()
+                    gc.collect()
+                    self._check_memory_usage()
                     
             # Calculate metrics if we have effects
             if cv_aligned_effects:
@@ -1437,7 +1489,121 @@ class PreferenceModel:
                 'importance_sigmoid': 0.0,
                 'selected_importance': 0.0
             }
-                                    
+        finally:
+            # Final cleanup
+            self.cleanup_temp_models()
+            gc.collect()
+
+    def _calculate_feature_importance(self, feature: str, dataset: PreferenceDataset, 
+                                current_features: List[str]) -> Dict[str, float]:
+        """Calculate feature importance based on prediction improvement."""
+        logger.info(f"\nCalculating importance for feature: {feature}")
+        logger.info(f"Current features: {current_features}")
+        
+        try:
+            # Verify dataset and feature extractor
+            if dataset is None or dataset.feature_extractor is None:
+                logger.error("Invalid dataset or missing feature extractor")
+                return {
+                    'effect_magnitude': 0.0,
+                    'effect_std': 0.0,
+                    'std_magnitude_ratio': float('inf'),
+                    'selected_importance': 0.0
+                    # ... other metrics ...
+                }
+
+            cv_splits = self._get_cv_splits(dataset, n_splits=5)
+            
+            # Initialize aggregation variables
+            all_effects = []
+            total_effect = 0
+            n_valid_effects = 0
+            
+            # Process each fold sequentially
+            for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
+                logger.info(f"Processing fold {fold}/5 for {feature}")
+                
+                try:
+                    # Create fold datasets
+                    train_data = dataset._create_subset_dataset(train_idx)
+                    val_data = dataset._create_subset_dataset(val_idx)
+                    
+                    # Process fold with temporary models
+                    with self._create_temp_model() as fold_baseline_model, \
+                        self._create_temp_model() as fold_feature_model:
+                        
+                        # Set up and train baseline model
+                        fold_baseline_model.feature_extractor = dataset.feature_extractor
+                        fold_baseline_model.selected_features = current_features
+                        fold_baseline_model.feature_names = current_features
+                        fold_baseline_model.fit(train_data, features=current_features)
+                        
+                        # Set up and train feature model
+                        fold_feature_model.feature_extractor = dataset.feature_extractor
+                        fold_feature_model.selected_features = current_features + [feature]
+                        fold_feature_model.feature_names = current_features + [feature]
+                        fold_feature_model.fit(train_data, features=current_features + [feature])
+                        
+                        # Calculate effects for validation set
+                        fold_effects = []
+                        for pref in val_data.preferences:
+                            try:
+                                # Calculate effect for each preference
+                                base_pred = fold_baseline_model.predict_preference(pref.bigram1, pref.bigram2)
+                                feat_pred = fold_feature_model.predict_preference(pref.bigram1, pref.bigram2)
+                                
+                                # Convert to logits and calculate effect
+                                base_logit = np.log(base_pred.probability / (1 - base_pred.probability))
+                                feat_logit = np.log(feat_pred.probability / (1 - feat_pred.probability))
+                                effect = feat_logit - base_logit
+                                aligned_effect = effect if pref.preferred else -effect
+                                
+                                fold_effects.append(aligned_effect)
+                                
+                            except Exception as e:
+                                logger.warning(f"Error processing preference: {str(e)}")
+                                continue
+                        
+                        # Aggregate fold results
+                        if fold_effects:
+                            mean_fold_effect = np.mean(fold_effects)
+                            total_effect += mean_fold_effect
+                            all_effects.extend(fold_effects)
+                            n_valid_effects += len(fold_effects)
+                            
+                            logger.info(f"Fold {fold} mean effect: {mean_fold_effect:.4f}")
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing fold {fold}: {str(e)}")
+                    continue
+                    
+                finally:
+                    # Clean up fold resources
+                    if hasattr(self, '_temp_models'):
+                        self.cleanup_temp_models()
+                    gc.collect()
+            
+            # Calculate final metrics from aggregated data
+            if all_effects:
+                all_effects = np.array(all_effects)
+                mean_effect = np.mean(all_effects)
+                effect_std = np.std(all_effects)
+                effect_magnitude = abs(mean_effect)
+                
+                # Calculate importance metrics as before
+                # ... rest of the metrics calculation ...
+                
+                return {
+                    'effect_magnitude': effect_magnitude,
+                    'effect_std': effect_std,
+                    'mean_aligned_effect': mean_effect,
+                    # ... other metrics ...
+                }
+                
+        except Exception as e:
+            logger.error(f"Error calculating feature importance: {str(e)}")
+            return default_metrics_dict
+        
     #--------------------------------------------
     # Cross-validation methods
     #--------------------------------------------

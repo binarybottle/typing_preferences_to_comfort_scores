@@ -58,8 +58,9 @@ feature_selection:
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
-features:                               # 2nd stage of feature selection (see "analyze_features" below)
+features:                               # 2nd stage of feature selection (see "analyze_features" below) (69 total)
   base_features:                        # Core features for analysis
+    # individual features (10)
     - typing_time                       # Time taken to type bigram
     - same_finger                       # Whether bigram uses same finger
     - sum_finger_values                 # Combined finger load values
@@ -71,7 +72,7 @@ features:                               # 2nd stage of feature selection (see "a
     - sum_engram_position_values        # Combined Engram position values
     - sum_row_position_values           # Combined row position values
   interactions:
-    # 2-way interactions
+    # 2-way interactions (20)
     - [same_finger, sum_finger_values] 
     - [same_finger, rows_apart]
     - [same_finger, sum_row_position_values]
@@ -93,7 +94,7 @@ features:                               # 2nd stage of feature selection (see "a
     - [angle_apart, sum_engram_position_values]
     - [outward_roll, sum_engram_position_values]
     - [outward_roll, sum_row_position_values]
-    # 3-way interactions
+    # 3-way interactions (25)
     - [same_finger, sum_finger_values, rows_apart]
     - [same_finger, sum_finger_values, sum_row_position_values]
     - [same_finger, rows_apart, sum_row_position_values]
@@ -119,21 +120,6 @@ features:                               # 2nd stage of feature selection (see "a
     - [rows_apart, outward_roll, sum_engram_position_values]
     - [rows_apart, outward_roll, sum_row_position_values]
     - [angle_apart, outward_roll, sum_engram_position_values]
-    # 4-way interactions
-    - [same_finger, sum_finger_values, rows_apart, sum_row_position_values]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, outward_roll]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, rows_apart, sum_row_position_values]
-    - [sum_finger_values, adj_finger_diff_row, angle_apart, outward_roll]
-    - [sum_finger_values, adj_finger_diff_row, angle_apart, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_engram_position_values]
-    - [sum_finger_values, adj_finger_diff_row, outward_roll, sum_row_position_values]
-    - [sum_finger_values, rows_apart, outward_roll, sum_engram_position_values]
-    - [sum_finger_values, rows_apart, outward_roll, sum_row_position_values]
-    - [sum_finger_values, angle_apart, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, outward_roll, sum_row_position_values]
-    - [adj_finger_diff_row, angle_apart, outward_roll, sum_engram_position_values]
   control_features:                     # Features to control for but not analyze
     - bigram_frequency                  # Bigram frequency in the English language
 
