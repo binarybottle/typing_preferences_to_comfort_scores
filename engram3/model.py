@@ -60,6 +60,7 @@ import shutil
 import psutil
 from tenacity import retry, stop_after_attempt, wait_fixed
 import gc
+from datetime import datetime, timedelta
 
 from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from engram3.data import PreferenceDataset
@@ -665,6 +666,42 @@ class PreferenceModel:
             logger.error(f"Error checking disk space: {e}")
             return False
         
+    def _get_progress_stats(self, features_done: int, total_features: int, 
+                        start_time: datetime, current_feature: str) -> Dict[str, Any]:
+        """Calculate progress statistics."""
+        now = datetime.now()
+        elapsed = now - start_time
+        
+        if features_done > 0:
+            avg_time_per_feature = elapsed / features_done
+            features_left = total_features - features_done
+            est_time_left = avg_time_per_feature * features_left
+        else:
+            est_time_left = timedelta(0)
+            avg_time_per_feature = timedelta(0)
+        
+        return {
+            'features_done': features_done,
+            'features_left': total_features - features_done,
+            'percent_done': (features_done / total_features) * 100,
+            'elapsed_time': elapsed,
+            'est_time_left': est_time_left,
+            'avg_time_per_feature': avg_time_per_feature,
+            'current_feature': current_feature
+        }
+
+    def _print_progress(self, stats: Dict[str, Any]):
+        """Print progress information."""
+        logger.info("\n=== Progress Update ===")
+        logger.info(f"Current feature: {stats['current_feature']}")
+        logger.info(f"Progress: {stats['features_done']}/{stats['features_done'] + stats['features_left']} features " +
+                    f"({stats['percent_done']:.1f}%)")
+        logger.info(f"Time elapsed: {str(stats['elapsed_time']).split('.')[0]}")
+        logger.info(f"Est. time remaining: {str(stats['est_time_left']).split('.')[0]}")
+        if stats['features_done'] > 0:
+            logger.info(f"Avg. time per feature: {str(stats['avg_time_per_feature']).split('.')[0]}")
+        logger.info("=" * 30 + "\n")
+        
     #--------------------------------------------
     # Feature handling methods
     #--------------------------------------------  
@@ -912,7 +949,32 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error calculating comfort scores: {str(e)}")
             return 0.0, 1.0
+
+    def _save_feature_metrics(self, feature: str, metrics: Dict[str, float], metrics_file: Path):
+        """Save metrics for a single feature to CSV, creating or appending as needed."""
+        # Add metadata to metrics
+        metrics_row = {
+            'feature_name': feature,
+            'selected': 0,  # Default to not selected
+            'round': 1,     # Default to first round
+            **metrics      # Include all calculated metrics
+        }
         
+        df_row = pd.DataFrame([metrics_row])
+        
+        try:
+            if metrics_file.exists():
+                # Append to existing file
+                df_row.to_csv(metrics_file, mode='a', header=False, index=False)
+            else:
+                # Create new file with header
+                metrics_file.parent.mkdir(parents=True, exist_ok=True)
+                df_row.to_csv(metrics_file, index=False)
+                
+            logger.info(f"Saved metrics for feature '{feature}' to {metrics_file}")
+        except Exception as e:
+            logger.error(f"Error saving metrics for feature '{feature}': {e}")
+
     #--------------------------------------------
     # Data preparation methods
     #--------------------------------------------
@@ -1155,13 +1217,27 @@ class PreferenceModel:
     #--------------------------------------------  
     def select_features(self, dataset: PreferenceDataset, all_features: List[str]) -> List[str]:
         """Select features by evaluating their importance for prediction."""
+        start_time = datetime.now()
+        
         try:
             self._check_memory_usage()
             self.dataset = dataset
             self.feature_extractor = dataset.feature_extractor
+            metrics_file = Path(self.config.feature_selection.metrics_file)
 
             # Initialize feature importance metrics storage
             self.feature_importance_metrics = {}
+
+            # Load existing progress if any
+            existing_metrics = {}
+            if metrics_file.exists():
+                try:
+                    existing_df = pd.read_csv(metrics_file)
+                    logger.info(f"Found existing metrics file with {len(existing_df)} features")
+                    existing_metrics = {row['feature_name']: dict(row) 
+                                    for _, row in existing_df.iterrows()}
+                except Exception as e:
+                    logger.warning(f"Error reading existing metrics: {e}")
 
             # Preprocess dataset
             logger.info("Preprocessing dataset for feature selection...")
@@ -1194,16 +1270,11 @@ class PreferenceModel:
             current_features = list(control_features)  # Features to use in current round
             selected_features = list(control_features)  # All selected features
 
-            # Initialize empty feature weights dictionary 
-            feature_weights = {f: (0.0, 0.0) for f in all_features}
-
-            # Track all feature metrics
-            feature_metrics = []
-
             # Log initial state
             logger.info("\n=== Starting Feature Selection ===")
             logger.info(f"Initial control features: {control_features}")
-            logger.info(f"Initial candidate features: {candidate_features}")
+            logger.info(f"Initial candidate features: {len(candidate_features)} features")
+            logger.info(f"Previously evaluated: {len(existing_metrics)} features")
             logger.info(f"Importance threshold: {self.config.feature_selection.importance_threshold}")
             
             # Keep selecting features until no more useful ones found
@@ -1213,51 +1284,69 @@ class PreferenceModel:
                 logger.info(f"Round {round_num} - Starting features:")
                 logger.info(f"  Current features: {current_features}")
                 logger.info(f"  Selected features: {selected_features}")
-                logger.info(f"  Candidate features: {candidate_features}")
+                logger.info(f"  Candidates remaining: {len(candidate_features)} features")
                 
                 best_feature = None
                 best_importance = -float('inf')
                 best_metrics = None
                 
                 # Evaluate each candidate
+                features_done = len(existing_metrics)
+                total_features = len(candidate_features)
+                
                 for feature in candidate_features:
-
-                    # Skip if feature is already selected or in current features
+                    # Skip if already evaluated or selected
                     if feature in current_features or feature in selected_features:
                         logger.warning(f"Feature '{feature}' is already selected, skipping...")
                         continue
 
-                    logger.info(f"\nEvaluating candidate: {feature}")
-                    metrics = self._calculate_feature_importance(
-                        feature=feature,
-                        dataset=self.dataset,
-                        current_features=current_features
-                    )
+                    # Check if we already have metrics for this feature
+                    if feature in existing_metrics:
+                        metrics = existing_metrics[feature]
+                        logger.info(f"Using existing metrics for '{feature}'")
+                    else:
+                        # Print progress
+                        elapsed = datetime.now() - start_time
+                        if features_done > 0:
+                            time_per_feature = elapsed / features_done
+                            est_remaining = time_per_feature * (total_features - features_done)
+                        else:
+                            est_remaining = timedelta(0)
+                        
+                        logger.info("\n=== Progress Update ===")
+                        logger.info(f"Evaluating: {feature}")
+                        logger.info(f"Progress: {features_done}/{total_features} features " +
+                                f"({(features_done/total_features*100):.1f}%)")
+                        logger.info(f"Time elapsed: {str(elapsed).split('.')[0]}")
+                        logger.info(f"Est. remaining: {str(est_remaining).split('.')[0]}")
+                        
+                        # Evaluate feature
+                        metrics = self._calculate_feature_importance(
+                            feature=feature,
+                            dataset=self.dataset,
+                            current_features=current_features
+                        )
+                        
+                        # Add metadata
+                        metrics.update({
+                            'feature_name': feature,
+                            'round': round_num,
+                            'n_components': len(feature.split('_x_')),
+                            'selected': 0  # Will update to 1 if selected
+                        })
+                        
+                        # Save metrics immediately
+                        metrics_df = pd.DataFrame([metrics])
+                        if metrics_file.exists():
+                            metrics_df.to_csv(metrics_file, mode='a', header=False, index=False)
+                        else:
+                            metrics_df.to_csv(metrics_file, index=False)
+                        
+                        existing_metrics[feature] = metrics
+                        features_done += 1
                     
-                    # Store metrics
+                    # Store metrics and check if best
                     self.feature_importance_metrics[feature] = metrics
-
-                    # Clean up any models that are ready
-                    if hasattr(self, '_temp_models'):
-                        models_to_cleanup = [m for m in self._temp_models if hasattr(m, 'ready_for_cleanup') and m.ready_for_cleanup]
-                        for model in models_to_cleanup:
-                            if hasattr(model, 'cleanup'):
-                                model.cleanup()
-                            if model in self._temp_models:
-                                self._temp_models.remove(model)
-                    
-                    # Add metadata and model metrics
-                    weight, std = feature_weights.get(feature, (0.0, 0.0))
-                    metrics.update({
-                        'feature_name': feature,
-                        'round': round_num,
-                        'n_components': len(feature.split('_x_')),
-                        'selected': 0,  # Will update to 1 if selected
-                        'weight': weight,
-                        'weight_std': std
-                    })
-                    feature_metrics.append(metrics)
-
                     importance = metrics['selected_importance']
                     if importance > self.config.feature_selection.importance_threshold:
                         if importance > best_importance:
@@ -1268,36 +1357,30 @@ class PreferenceModel:
                             logger.info(f"  Importance = {importance:.6f}")
                             logger.info(f"  Effect magnitude: {metrics['effect_magnitude']:.6f}")
                             logger.info(f"  Effect std dev: {metrics['effect_std']:.6f}")
-                            logger.info(f"  Std/magnitude ratio: {metrics['std_magnitude_ratio']:.6f}")
-                            logger.info(f"  Current features: {current_features}")
 
-                    # Break after finding a good enough feature
-                    #if best_feature is not None:
-                    #    break
+                    # Cleanup after each feature
+                    gc.collect()
 
-                # After finding best feature (or checking all candidates)
-                if best_feature is not None:  
-                    # Update selected status in metrics
-                    for metric in feature_metrics:
-                        if metric['feature_name'] == best_feature:
-                            metric['selected'] = 1
-                            break
-                            
+                # After finding best feature
+                if best_feature is not None:
+                    # Update selected status in metrics file
+                    if metrics_file.exists():
+                        df = pd.read_csv(metrics_file)
+                        df.loc[df['feature_name'] == best_feature, 'selected'] = 1
+                        df.to_csv(metrics_file, index=False)
+                    
                     selected_features.append(best_feature)
                     current_features = selected_features.copy()
                     candidate_features.remove(best_feature)
-
                     round_num += 1
                 else:
                     logger.info("\nNo remaining features improve predictions sufficiently.")
                     break
 
-            # Save feature metrics after all rounds complete
-            metrics_file = Path(self.config.feature_selection.metrics_file)
-            pd.DataFrame(feature_metrics).to_csv(metrics_file, index=False)
-                        
-            # Log final feature selection results
+            # Log final results
             logger.info("\n=== Feature Selection Complete ===")
+            total_time = datetime.now() - start_time
+            logger.info(f"Total time: {str(total_time).split('.')[0]}")
             main_features = [f for f in selected_features if f not in control_features]
             logger.info(f"Selected {len(main_features)} features:")
             for feat in main_features:
@@ -1315,7 +1398,7 @@ class PreferenceModel:
             try:
                 # Clean up all remaining temp models
                 if hasattr(self, '_temp_models'):
-                    for model in list(self._temp_models):  # Use list to make a copy since we're modifying
+                    for model in list(self._temp_models):
                         try:
                             if hasattr(model, 'cleanup'):
                                 model.cleanup()
@@ -1331,7 +1414,7 @@ class PreferenceModel:
                 
             except Exception as e:
                 logger.error(f"Error during final cleanup: {e}")
-                                                                            
+                                                                                            
     def _calculate_feature_importance_parallel_cv(self, feature: str, dataset: PreferenceDataset, 
                                 current_features: List[str]) -> Dict[str, float]:
         """Calculate feature importance based on prediction improvement."""
