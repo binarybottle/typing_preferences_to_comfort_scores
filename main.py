@@ -69,6 +69,7 @@ from typing import Dict, Any, Tuple
 from pathlib import Path
 import matplotlib.pyplot as plt
 from itertools import combinations
+from datetime import datetime
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
@@ -273,71 +274,103 @@ def main():
         # Analyze features
         #---------------------------------
         if args.mode == 'analyze_features':
-            logger.info("\n=== ANALYZE FEATURES MODE ===")
-            logger.info(f"Config base features: {config.features.base_features}")
-            logger.info(f"Config interactions: {config.features.interactions}")
-            logger.info(f"Config control features: {config.features.control_features}")
+            try:
+                logger.info("\n=== ANALYZE FEATURES MODE ===")
+                logger.info(f"Config base features: {config.features.base_features}")
+                logger.info(f"Config interactions: {config.features.interactions}")
+                logger.info(f"Config control features: {config.features.control_features}")
 
-            # Load/create dataset split
-            train_data, test_data = load_or_create_split(dataset, config)
-            logger.info(f"Split dataset:\n  Train: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")
+                # Load/create dataset split
+                train_data, test_data = load_or_create_split(dataset, config)
+                logger.info(f"Split dataset:\n  Train: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")
 
-            # Initialize model
-            model = PreferenceModel(config=config)
+                # Initialize model
+                model = PreferenceModel(config=config)
 
-            # Get all features (base + interactions)
-            base_features = config.features.base_features
-            control_features = config.features.control_features
-            interaction_features = config.features.get_all_interaction_names()
-            all_features = base_features + interaction_features
+                # Get all features (base + interactions)
+                base_features = config.features.base_features
+                control_features = config.features.control_features
+                interaction_features = config.features.get_all_interaction_names()
+                all_features = base_features + interaction_features
+                
+                logger.info("\nFeatures prepared:")
+                logger.info(f"  Base features: {base_features}")
+                logger.info(f"  Interaction features: {interaction_features}")
+                logger.info(f"  Control features: {control_features}")
+                logger.info(f"  All features: {all_features}")
+
+                # Check for existing results
+                feature_metrics = []
+                metrics_file = Path(config.feature_selection.metrics_file)
+                completed_features = set()
+                if metrics_file.exists():
+                    try:
+                        existing_df = pd.read_csv(metrics_file)
+                        feature_metrics.extend(existing_df.to_dict('records'))
+                        completed_features = set(existing_df['feature_name'])
+                        logger.info(f"Loaded {len(completed_features)} existing feature metrics")
+                    except Exception as e:
+                        logger.error(f"Error loading existing metrics: {e}")
+
+                # Initialize progress tracking
+                start_time = datetime.now()
+                total_features = len(all_features)
+                features_done = len(completed_features)
+                current_features = control_features.copy()  # Start with just control features
+
+                for feature in all_features:
+                    if feature in completed_features:
+                        logger.info(f"Skipping already evaluated feature: {feature}")
+                        continue
+
+                    # Print progress stats
+                    stats = model._get_progress_stats(features_done, total_features, start_time, feature)
+                    model._print_progress(stats)
+
+                    logger.info(f"\nEvaluating feature: {feature}")
+                    try:
+                        # Calculate importance metrics for this feature alone
+                        metrics = model._calculate_feature_importance(
+                            feature=feature,
+                            dataset=train_data,
+                            current_features=current_features
+                        )
+                        
+                        # Add feature name and selected status
+                        metrics['feature_name'] = feature
+                        metrics['selected'] = 0  # Not selected yet
+                        
+                        feature_metrics.append(metrics)
+                        features_done += 1  # Increment counter after successful evaluation
+                        
+                        logger.info(f"\nImportance metrics for '{feature}':")
+                        logger.info(f"  Effect magnitude: {metrics['effect_magnitude']:.6f}")
+                        logger.info(f"  Effect std dev: {metrics['effect_std']:.6f}")
+                        logger.info(f"  Importance score: {metrics['selected_importance']:.6f}")
+                        
+                        # Save metrics after each feature
+                        metrics_df = pd.DataFrame(feature_metrics)
+                        metrics_df.to_csv(metrics_file, index=False)
+                        logger.info(f"Saved metrics through feature '{feature}' to {metrics_file}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error evaluating feature {feature}: {str(e)}")
+                        continue
+
+                # Basic statistics
+                if feature_metrics:  # Only if we have any metrics
+                    try:
+                        logger.info("\nFeature evaluation summary:")
+                        metrics_df = pd.DataFrame(feature_metrics)
+                        logger.info(f"Total features evaluated: {len(metrics_df)}")
+                        logger.info(f"Mean importance score: {metrics_df['selected_importance'].mean():.6f}")
+                        logger.info(f"Max importance score: {metrics_df['selected_importance'].max():.6f}")
+                    except Exception as e:
+                        logger.error(f"Error generating summary statistics: {e}")
             
-            logger.info("\nFeatures prepared:")
-            logger.info(f"  Base features: {base_features}")
-            logger.info(f"  Interaction features: {interaction_features}")
-            logger.info(f"  Control features: {control_features}")
-            logger.info(f"  All features: {all_features}")
+            except Exception as e:
+                logger.error(f"Error in analyze_features mode: {e}")
 
-            # Evaluate each feature independently
-            feature_metrics = []
-            current_features = control_features.copy()  # Start with just control features
-
-            for feature in all_features:
-                logger.info(f"\nEvaluating feature: {feature}")
-                try:
-                    # Calculate importance metrics for this feature alone
-                    metrics = model._calculate_feature_importance(
-                        feature=feature,
-                        dataset=train_data,
-                        current_features=current_features
-                    )
-                    
-                    # Add feature name and selected status
-                    metrics['feature_name'] = feature
-                    metrics['selected'] = 0  # Not selected yet
-                    
-                    feature_metrics.append(metrics)
-                    
-                    logger.info(f"\nImportance metrics for '{feature}':")
-                    logger.info(f"  Effect magnitude: {metrics['effect_magnitude']:.6f}")
-                    logger.info(f"  Effect std dev: {metrics['effect_std']:.6f}")
-                    logger.info(f"  Importance score: {metrics['selected_importance']:.6f}")
-                    
-                except Exception as e:
-                    logger.error(f"Error evaluating feature {feature}: {str(e)}")
-                    continue
-
-            # Save metrics
-            metrics_file = Path(config.feature_selection.metrics_file)
-            metrics_df = pd.DataFrame(feature_metrics)
-            metrics_df.to_csv(metrics_file, index=False)
-            logger.info(f"\nSaved feature metrics to {metrics_file}")
-            
-            # Basic statistics
-            logger.info("\nFeature evaluation summary:")
-            logger.info(f"Total features evaluated: {len(metrics_df)}")
-            logger.info(f"Mean importance score: {metrics_df['selected_importance'].mean():.6f}")
-            logger.info(f"Max importance score: {metrics_df['selected_importance'].max():.6f}")
-        
         #---------------------------------
         # Select features
         #---------------------------------
