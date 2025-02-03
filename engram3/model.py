@@ -38,6 +38,7 @@ Features:
     - Flexible model deployment
     - Extensive error handling
 """
+import random
 import cmdstanpy
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -66,6 +67,31 @@ from engram3.utils.visualization import PlottingUtils
 from engram3.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
+def set_all_seeds(base_seed: int):
+    """
+    Set all seeds for reproducibility.
+    Using different derived seeds for different components.
+    Args:
+        base_seed: Base seed from config.yaml to derive all other seeds
+    """
+    # Create different seeds for different components
+    np_seed = base_seed
+    python_seed = base_seed + 1
+    stan_seed = base_seed + 2
+    cv_seed = base_seed + 3
+    
+    # Set seeds
+    np.random.seed(np_seed)
+    random.seed(python_seed)
+    os.environ['PYTHONHASHSEED'] = str(python_seed)
+    
+    return {
+        'numpy': np_seed,
+        'python': python_seed,
+        'stan': stan_seed,
+        'cv': cv_seed
+    }
+
 class ModelPrediction:
     """Holds prediction results."""
     def __init__(self, probability: float, uncertainty: float, 
@@ -87,10 +113,15 @@ class PreferenceModel:
         if config is None:
             raise ValueError("Config is required")
         
-        self._is_fitted = False  # Private attribute to store the fitted state
+        # First convert config if needed
         self.config = config if isinstance(config, Config) else Config(**config)
-        self.reset_state()
         
+        # Then set seeds using the proper config object
+        self.seeds = set_all_seeds(self.config.data.splits['random_seed'])
+        
+        self._is_fitted = False
+        self.reset_state()
+                
         # Initialize visualization
         self.plotting = PlottingUtils(self.config.paths.plots_dir)
 
@@ -214,14 +245,20 @@ class PreferenceModel:
             self.selected_features = main_features + list(control_features)
 
             # Stan sampling
+            sampling_params = {
+                'chains': self.config.model.chains,
+                'iter_warmup': self.config.model.warmup,
+                'iter_sampling': self.config.model.n_samples,
+                'adapt_delta': self.config.model.adapt_delta,
+                'max_treedepth': self.config.model.max_treedepth,
+                'seed': self.seeds['stan'], 
+                'refresh': None
+            }
+            
+            # Use sampling params in _sample_with_retry
             self.fit_result = self._sample_with_retry(
                 data=processed_data,
-                chains=self.config.model.chains,
-                iter_warmup=self.config.model.warmup,
-                iter_sampling=self.config.model.n_samples,
-                adapt_delta=self.config.model.adapt_delta,
-                max_treedepth=self.config.model.max_treedepth,
-                refresh=None
+                **sampling_params
             )
 
             # Check diagnostics but only log if issues found
@@ -1524,6 +1561,9 @@ class PreferenceModel:
         logger.info(f"Number of CV folds: 5")
         
         try:
+            # Reset numpy seed before each feature calculation
+            np.random.seed(self.seeds['numpy'])
+
             # Verify dataset and feature extractor
             if dataset is None or dataset.feature_extractor is None:
                 logger.error("Invalid dataset or missing feature extractor")
@@ -1677,7 +1717,8 @@ class PreferenceModel:
     #--------------------------------------------
     def _get_cv_splits(self, dataset: PreferenceDataset, n_splits: int) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Get cross-validation splits preserving participant structure with validation."""
-        from sklearn.model_selection import KFold
+        # Use specific CV seed
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=self.seeds['cv'])
         
         # Check for dataset size consistency
         if not hasattr(self, '_dataset_size'):
