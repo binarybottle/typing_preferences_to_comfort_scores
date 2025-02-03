@@ -584,7 +584,7 @@ class PreferenceModel:
         """Check memory status and clean up if needed. Returns True if safe to proceed."""
         try:
             mem = psutil.virtual_memory()
-            if mem.percent > 80:
+            if mem.percent > 90:  # Increased from 80% to 90%
                 logger.warning(f"High memory usage ({mem.percent}%). Cleaning up...")
                 
                 # Clear feature cache
@@ -598,15 +598,16 @@ class PreferenceModel:
                 time.sleep(5)
                 mem = psutil.virtual_memory()
                 
-                if mem.percent > 80:
+                if mem.percent > 95:  # Only skip if really high (95%)
+                    logger.error(f"Critical memory usage ({mem.percent}%), must skip fold")
                     return False
                 
             return True
             
         except Exception as e:
             logger.error(f"Error checking memory: {e}")
-            return True
-                    
+            return True  # Continue on error rather than skip
+                        
     def check_disk_space(self, required_mb: int = 2000) -> bool:
         """
         Check if there's enough disk space available.
