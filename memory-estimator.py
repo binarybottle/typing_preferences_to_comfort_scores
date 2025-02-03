@@ -104,16 +104,23 @@ def estimate_stan_memory(config_path: str, mode: str = "analyze_features") -> di
     print(f"Control matrices: {control_matrices_bytes / (1024**3):.2f} GB")
     print(f"Stan memory (all chains): {stan_total_memory / (1024**3):.2f} GB")
 
-    # Total memory with safety factor
-    safety_factor = 1.3
-    total_memory = cv_fold_memory * safety_factor  # Only 1 fold at a time
+    # More conservative memory estimation
+    base_safety_factor = 1.5      # Up from 1.3
+    peak_memory_factor = 2.0      # Account for MCMC peaks
+    python_overhead_gb = 2.0      # Fixed overhead for Python/Stan
 
-    # Get system memory info
-    mem = psutil.virtual_memory()
+    # Calculate total memory needed
+    total_memory = cv_fold_memory * base_safety_factor * peak_memory_factor
+    
+    # Add Python/Stan overhead
+    total_memory += python_overhead_gb * (1024**3)
 
     if mode == "select_features":
         # For select_features, account for concurrent model runs
         total_memory *= 2  # Two models running concurrently
+
+    # Get system memory info
+    mem = psutil.virtual_memory()
 
     return {
         'mode': mode,
@@ -126,7 +133,10 @@ def estimate_stan_memory(config_path: str, mode: str = "analyze_features") -> di
             'feature_matrices_gb': feature_matrices_bytes / (1024**3),
             'control_matrices_gb': control_matrices_bytes / (1024**3),
             'stan_per_fold_gb': cv_fold_memory / (1024**3),
-            'total_cv_memory_gb': cv_fold_memory / (1024**3)  # Only 1 fold at a time
+            'total_cv_memory_gb': cv_fold_memory / (1024**3),  # Only 1 fold at a time
+            'python_overhead_gb': python_overhead_gb,
+            'peak_factor': peak_memory_factor,
+            'safety_factor': base_safety_factor
         }
     }
 

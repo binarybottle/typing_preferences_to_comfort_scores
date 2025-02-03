@@ -152,7 +152,7 @@ __model_fast: &debug
 __model_analysis: &feature_analysis
   chains: 2                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 500                          # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 1000                      # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
+  n_samples: 750                       # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
   max_treedepth: 8                     # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
   adapt_delta: 0.85                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 

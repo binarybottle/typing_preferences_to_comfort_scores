@@ -579,7 +579,34 @@ class PreferenceModel:
                 del self.fit_result
             
             gc.collect()
+
+    def _check_memory_before_fold(self) -> bool:
+        """Check memory status and clean up if needed. Returns True if safe to proceed."""
+        try:
+            mem = psutil.virtual_memory()
+            if mem.percent > 80:
+                logger.warning(f"High memory usage ({mem.percent}%). Cleaning up...")
+                
+                # Clear feature cache
+                if hasattr(self, '_feature_data_cache'):
+                    self._feature_data_cache.clear()
+                
+                # Force garbage collection
+                gc.collect()
+                
+                # Wait a bit and check again
+                time.sleep(5)
+                mem = psutil.virtual_memory()
+                
+                if mem.percent > 80:
+                    return False
+                
+            return True
             
+        except Exception as e:
+            logger.error(f"Error checking memory: {e}")
+            return True
+                    
     def check_disk_space(self, required_mb: int = 2000) -> bool:
         """
         Check if there's enough disk space available.
@@ -1499,13 +1526,7 @@ class PreferenceModel:
             # Verify dataset and feature extractor
             if dataset is None or dataset.feature_extractor is None:
                 logger.error("Invalid dataset or missing feature extractor")
-                return {
-                    'effect_magnitude': 0.0,
-                    'effect_std': 0.0,
-                    'std_magnitude_ratio': float('inf'),
-                    'selected_importance': 0.0
-                    # ... other metrics ...
-                }
+                return self._get_default_metrics()
 
             cv_splits = self._get_cv_splits(dataset, n_splits=5)
             
@@ -1517,6 +1538,11 @@ class PreferenceModel:
             # Process each fold sequentially
             for fold, (train_idx, val_idx) in enumerate(cv_splits, 1):
                 logger.info(f"Processing fold {fold}/5 for {feature}")
+                
+                # Check memory before starting fold
+                if not self._check_memory_before_fold():
+                    logger.warning(f"Insufficient memory for fold {fold}, skipping...")
+                    continue
                 
                 try:
                     # Create fold datasets
@@ -1535,6 +1561,11 @@ class PreferenceModel:
                         fold_baseline_model.selected_features = current_features
                         fold_baseline_model.feature_names = current_features
                         fold_baseline_model.fit(train_data, features=current_features)
+                        
+                        # Check memory after baseline model
+                        if not self._check_memory_before_fold():
+                            logger.warning("Memory high after baseline model, skipping feature model")
+                            continue
                         
                         # Train feature model
                         logger.info(f"│  • Training feature model...")
@@ -1579,14 +1610,19 @@ class PreferenceModel:
                     
                 finally:
                     # Clean up fold resources
+                    if hasattr(self, '_feature_data_cache'):
+                        self._feature_data_cache.clear()
                     gc.collect()
-            
+                    
+                    # Brief pause between folds
+                    time.sleep(2)
+                
                 # Visual separator between folds
                 if fold < 5:
                     logger.info("├─────────────────────────────────────────────")
                 else:
                     logger.info("└─────────────────────────────────────────────")
- 
+
             # Calculate final metrics from aggregated data
             if all_effects:
                 all_effects = np.array(all_effects)
@@ -1617,11 +1653,23 @@ class PreferenceModel:
                     'n_effects': n_valid_effects
                 }
                 
-            else:
-                logger.warning("No valid effects calculated")
+            return self._get_default_metrics()
                 
         except Exception as e:
             logger.error(f"Error calculating feature importance: {str(e)}")
+            return self._get_default_metrics()
+
+    def _get_default_metrics(self) -> Dict[str, float]:
+        """Return default metrics dictionary with zero values."""
+        return {
+            'effect_magnitude': 0.0,
+            'effect_std': 0.0,
+            'std_magnitude_ratio': float('inf'),
+            'mean_aligned_effect': 0.0,
+            'consistency': 0.0,
+            'selected_importance': 0.0,
+            'n_effects': 0
+        }
         
     #--------------------------------------------
     # Cross-validation methods
