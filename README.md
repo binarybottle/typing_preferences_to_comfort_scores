@@ -137,3 +137,11 @@ EOL
 make clean-all
 STAN_CPU_ARCH=arm64 make build -j4
 
+
+
+Variations in Stan results are due to:
+- MCMC sampling being inherently probabilistic
+- Random initialization of Stan's MCMC chains
+- Random train/test data splits using numpy's random seed
+While the seed is set for reproducibility at each run, Stan chains operate independently and can explore the parameter space differently each time. This leads to slightly different posterior distributions and therefore different metrics.
+These variations are expected and normal in Bayesian inference.

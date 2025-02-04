@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
 Analyze feature selection metrics and trained model to determine optimal importance threshold
-and visualize feature relationships.
+and visualize feature relationships. 
 
-Usage:
-    python engram3/features/analyze_features.py --metrics ../output/data/feature_metrics.csv [--model ../output/data/feature_selection_model.pkl]
+The elbow point (knee) calculation in the code uses the KneeLocator from the kneed library
+and locates a steep drop in the log-scaled values.
+
+Usage (from within the engram3/engram3 directory):
+    python features/analyze_features.py --metrics ../output/data/feature_metrics.csv [--model ../output/data/feature_selection_model.pkl]
 
 """
 
@@ -153,33 +156,37 @@ def analyze_feature_standardization(df: pd.DataFrame, model):
     plt.savefig('feature_distributions.png', dpi=300)
     print("\nSaved feature distribution plot to 'feature_distributions.png'")
 
-def analyze_importance_distribution(df: pd.DataFrame):
+def analyze_importance_distribution(df: pd.DataFrame, importance_threshold: float = 0.00001):
     """Analyze distribution of importance scores and suggest thresholds."""
     print("\n=== Importance Score Analysis ===")
     
-    # Sort by importance score
     df_sorted = df.sort_values('selected_importance', ascending=False)
-    
-    # Basic statistics
-    print("\nImportance score statistics:")
-    print(f"Mean: {df_sorted['selected_importance'].mean():.6f}")
-    print(f"Median: {df_sorted['selected_importance'].median():.6f}")
-    print(f"Std: {df_sorted['selected_importance'].std():.6f}")
-    
-    # Find gaps in importance scores
-    gaps = df_sorted['selected_importance'].diff().sort_values(ascending=False)
-    print("\nLargest gaps in importance scores:")
-    print(gaps.head().to_frame('gap'))
-    
-    # Try to find natural elbow point
     importance_scores = df_sorted['selected_importance'].values
     n_scores = len(importance_scores)
     x_points = np.arange(n_scores)
     
+    # Calculate statistics
+    mean = df_sorted['selected_importance'].mean()
+    median = df_sorted['selected_importance'].median()
+    std = df_sorted['selected_importance'].std()
+    mad = np.median(np.abs(importance_scores - median))
+    
+    print(f"\nImportance score statistics:")
+    print(f"Mean: {mean:.6f}")
+    print(f"Median: {median:.6f}") 
+    print(f"Std: {std:.6f}")
+    print(f"MAD: {mad:.6f}")
+    
+    # Find gaps and elbow
+    gaps = df_sorted['selected_importance'].diff().sort_values(ascending=False)
+    print("\nLargest gaps in importance scores:")
+    print(gaps.head().to_frame('gap'))
+    
     try:
+        importance_scores_log = np.log10(importance_scores)
         kneedle = KneeLocator(
-            x_points, importance_scores,
-            S=1.0, curve='convex', direction='decreasing'
+            x_points, importance_scores_log,
+            S=1.0, curve='concave', direction='decreasing'
         )
         if kneedle.knee is not None:
             knee_value = importance_scores[kneedle.knee]
@@ -187,35 +194,52 @@ def analyze_importance_distribution(df: pd.DataFrame):
     except Exception as e:
         print(f"\nCould not detect elbow point: {e}")
     
-    # Plot importance distribution
     plt.figure(figsize=(12, 6))
     plt.plot(importance_scores, marker='o', linewidth=1, markersize=4)
-    plt.axhline(y=0.00025, color='r', linestyle='--', label='Current threshold (0.00025)')
     
-    try:
-        if kneedle.knee is not None:
-            plt.axhline(y=knee_value, color='g', linestyle='--', 
-                       label=f'Detected elbow ({knee_value:.6f})')
-    except:
-        pass
-        
+    # Plot threshold lines
+    percentiles = [25, 50, 75]
+    #colors = ['purple', 'blue', 'cyan']
+    #for p, c in zip(percentiles, colors):
+    #    threshold = np.percentile(importance_scores, p)
+    #    plt.axhline(y=threshold, color=c, linestyle='--', 
+    #               label=f'{p}th percentile ({threshold:.6f})')
+    
+    plt.axhline(y=median, color='blue', linestyle='--',
+                label=f'Median ({median:.6f})')
+    plt.axhline(y=median + mad, color='gray', linestyle=':',
+                label=f'Median + 1MAD ({median + mad:.6f})')
+    plt.axhline(y=median - mad, color='gray', linestyle=':',
+                label=f'Median - 1MAD ({median - mad:.6f})')
+    
+    #plt.axhline(y=importance_threshold, color='r', linestyle='--',
+    #            label=f'Current threshold ({importance_threshold:.6f})')
+    
+    if kneedle.knee is not None:
+        plt.axhline(y=knee_value, color='r', linestyle='--',
+                   label=f'Detected elbow ({knee_value:.6f})')
+    
     plt.yscale('log')
     plt.xlabel('Feature rank')
     plt.ylabel('Importance score (log scale)')
     plt.title('Feature Importance Distribution')
     plt.grid(True, alpha=0.3)
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    plt.savefig('importance_distribution.png', dpi=300)
+    plt.savefig('importance_distribution.png', dpi=300, bbox_inches='tight')
     print("\nSaved importance distribution plot to 'importance_distribution.png'")
     
-    # Suggest thresholds
-    percentiles = [50, 75, 90, 95]
-    print("\nSuggested thresholds based on percentiles:")
+    # Print threshold suggestions
+    print("\nSuggested thresholds:")
     for p in percentiles:
         threshold = np.percentile(importance_scores, p)
         n_features = sum(importance_scores >= threshold)
-        print(f"{p}th percentile: {threshold:.6f} (would select {n_features} features)")
+        print(f"{p}th percentile: {threshold:.6f} ({n_features} features)")
+    
+    n_med = sum(importance_scores >= median)
+    n_mad = sum(importance_scores >= median - mad)
+    print(f"Median: {median:.6f} ({n_med} features)")
+    print(f"Median - MAD: {median - mad:.6f} ({n_mad} features)")
         
     return df_sorted
 
@@ -301,6 +325,8 @@ def analyze_feature_interactions(df: pd.DataFrame):
         print("\nSaved feature type comparison plot to 'feature_types.png'")
 
 def main():
+    importance_threshold = 0.00001  #config.feature_selection['importance_threshold']
+
     parser = argparse.ArgumentParser(description='Analyze feature selection metrics')
     parser.add_argument('--metrics', required=True, help='Path to feature_metrics.csv')
     parser.add_argument('--model', help='Path to feature_selection_model.pkl')
@@ -315,7 +341,7 @@ def main():
     print(f"Selected features: {sum(df['selected'])}")
     
     # Analyze importance distribution
-    df_sorted = analyze_importance_distribution(df)
+    df_sorted = analyze_importance_distribution(df, importance_threshold)
     
     # Analyze feature consistency
     analyze_feature_consistency(df)
