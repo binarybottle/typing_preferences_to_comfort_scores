@@ -1,35 +1,57 @@
+# recommendations.py
 """
 Bigram pair recommendation system for keyboard layout optimization.
 
-The system balances two key objectives:
-1. Maximizing information gain: Select pairs that will best improve model predictions
-2. Ensuring comprehensive coverage: Maintain broad exploration of the typing space
+The system uses a weighted multi-objective approach to balance:
+1. Information Gain (φ ≈ 0.618):
+   - Model uncertainty for each bigram
+   - Expected entropy reduction
+   - Potential for model improvement
 
-This approach helps build a robust preference model while avoiding sampling biases.
+2. Feature Space Coverage (1-φ ≈ 0.382):
+   - Distance to existing data points 
+   - Penalty for closeness to already selected recommendations
+   - Maximize minimum distance between points
 
-Core Components:
-  1. Model-Driven Selection:
-    - Identifies high-uncertainty regions
-    - Estimates information gain potential
-    - Prioritizes impactful pairs
-    
-  2. Coverage Management:
-    - Tracks feature space exploration
-    - Identifies undersampled regions
-    - Maintains sampling diversity
-    
-  3. Recommendation Pipeline:
-    - Filters unsuitable candidates
-    - Applies multi-criteria scoring
-    - Ensures recommendation diversity
+The process iteratively selects bigram pairs by:
+1. First selecting the point furthest from existing data
+2. Then selecting points that maximize the minimum distance to all points (both existing and selected)
+3. Applying an exponential penalty for closeness to already selected recommendations
+
+This maximum-minimum distance approach optimizes for point separation to achieve good coverage
+of the feature space. Combined with information gain weighting, this helps select pairs that
+will both improve model accuracy and explore under-sampled regions of the feature space.
+
+The algorithm steps are:
+
+1. Generate all possible bigram pairs from the layout characters except for:
+   - Same-character bigrams
+   - Pairs already evaluated
+
+2. Project data to 2D PCA space:
+   - Project both existing data and candidate pairs
+   - Preserve key feature relationships
+   - Enable efficient distance calculations
+
+3. Select diverse pairs:
+   - Pick first pair furthest from existing data
+   - Iteratively select pairs maximizing minimum distance to all points
+   - Apply exponential penalty for closeness to already selected pairs
+   - Balance exploration vs local density
+
+4. Visualize results:
+   - Plot PCA projections of all points
+   - Show feature space coverage
+   - Display feature value distributions
 """
-
 from pathlib import Path
 from typing import List, Tuple, Dict, Set, Union, Optional, Any
 import numpy as np
 import pandas as pd
 from itertools import combinations
-from sklearn.neighbors import KernelDensity
+import random
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 import logging
 
 from engram3.utils.config import Config
@@ -89,18 +111,7 @@ class BigramRecommender:
     # Core class structure and basic functions
     #--------------------------------------------
     def recommend_pairs(self) -> List[Tuple[str, str]]:
-        """
-        Generate recommended bigram pairs.
-        
-        Process:
-        1. Analyze current state (model uncertainty and data coverage)
-        2. Generate and filter candidate pairs
-        3. Score candidates based on information gain and coverage
-        4. Select diverse, high-value subset
-        
-        Returns:
-            List of recommended bigram pairs
-        """
+        """Generate recommendations by maximizing minimum distances to all points."""
         try:
             self._initialize_state()
             
@@ -108,51 +119,112 @@ class BigramRecommender:
             if not candidates:
                 raise ValueError("No valid candidates generated")
                 
-            filtered = self._filter_candidates(candidates)
-            if not filtered:
-                raise ValueError("No candidates passed filtering criteria")
+            # Project to PCA space as before
+            existing_differences = []
+            for pref in self.dataset.preferences:
+                diff = self._get_pair_features(pref.bigram1, pref.bigram2)
+                existing_differences.append(diff)
+            existing_differences = np.array(existing_differences)
+
+            candidate_differences = []
+            for pair in candidates:
+                diff = self._get_pair_features(pair[0], pair[1])
+                candidate_differences.append(diff)
+            candidate_differences = np.array(candidate_differences)
+
+            pca = PCA(n_components=2)
+            all_differences = np.vstack([existing_differences, candidate_differences])
+            pca.fit(all_differences)
+            
+            existing_2d = pca.transform(existing_differences)
+            candidate_2d = pca.transform(candidate_differences)
+            
+            # Initialize selections
+            selected = []
+            selected_points = []
+            remaining_candidates = list(zip(candidates, candidate_2d))
+            
+            logger.info(f"Starting selection with {len(remaining_candidates)} candidates")
+
+            # First selection: point furthest from existing data
+            if remaining_candidates:
+                distances = []
+                for pair, point in remaining_candidates:
+                    min_dist = np.min(np.linalg.norm(existing_2d - point, axis=1))
+                    distances.append((min_dist, pair, point))
                 
-            scored = self._score_candidates(filtered)
-            recommendations = self._select_diverse_subset(scored)
-            
-            self._save_recommendations(recommendations)
-            return recommendations
-            
+                best_dist, best_pair, best_point = max(distances)
+                selected.append(best_pair)
+                selected_points.append(best_point)
+                remaining_candidates = [(p, pt) for p, pt in remaining_candidates if p != best_pair]
+
+            # Subsequent selections: maximize minimum distance to ALL points
+            while len(selected) < self.n_recommendations and remaining_candidates:
+                # Consider both existing and selected points
+                all_points = np.vstack([existing_2d, selected_points])
+                
+                # Find candidate that maximizes minimum distance to all points
+                max_min_dist = -float('inf')
+                best_candidate = None
+                best_point = None
+                
+                for pair, point in remaining_candidates:
+                    # Calculate minimum distance to any existing or selected point
+                    distances = np.linalg.norm(all_points - point, axis=1)
+                    min_dist = np.min(distances)
+                    
+                    if min_dist > max_min_dist:
+                        max_min_dist = min_dist
+                        best_candidate = pair
+                        best_point = point
+                
+                if best_candidate is None:
+                    break
+                    
+                selected.append(best_candidate)
+                selected_points.append(best_point)
+                remaining_candidates = [(p, pt) for p, pt in remaining_candidates if p != best_candidate]
+                
+                logger.info(f"Selected {len(selected)}/{self.n_recommendations} recommendations")
+
+            return selected
+
         except Exception as e:
             logger.error(f"Error generating recommendations: {str(e)}")
             raise
 
     def _initialize_state(self) -> None:
-        """
-        Initialize and validate system state.
-        
-        Sets up:
-        - Existing pair tracking
-        - Comfort score range
-        - Feature space coverage
-        - Model entropy baseline
-        """
+        """Initialize state with calibrated comfort threshold."""
         logger.info("Initializing recommendation state...")
         
-        # Track existing pairs (both directions)
+        # Track existing pairs
         self._existing_pairs = {
             (p.bigram1, p.bigram2) for p in self.dataset.preferences
         }
         self._existing_pairs.update(
             (p.bigram2, p.bigram1) for p in self.dataset.preferences
         )
-        
-        # Calculate comfort score range
-        self._comfort_range = self._analyze_comfort_range()
-        
-        # Analyze feature space
-        self._feature_coverage = self._analyze_feature_coverage()
-        
-        # Get model entropy baseline
-        self._model_entropy = self._calculate_model_entropy()
-        
         logger.info(f"State initialized with {len(self._existing_pairs)} existing pairs")
 
+        # Calibrate comfort threshold
+        all_scores = []
+        for pref in self.dataset.preferences:
+            pred1 = self.model.predict_comfort_score(pref.bigram1)
+            pred2 = self.model.predict_comfort_score(pref.bigram2)
+            all_scores.extend([pred1.probability, pred2.probability])
+        
+        self.comfort_threshold = np.median(all_scores)
+        logger.info(f"Calibrated comfort threshold to median: {self.comfort_threshold:.3f}")
+        logger.info(f"Score distribution - min: {np.min(all_scores):.3f}, max: {np.max(all_scores):.3f}")
+
+        # Initialize feature coverage matrix
+        self._feature_coverage = self._analyze_feature_coverage()
+        logger.info(f"Initialized feature coverage matrix with shape: {self._feature_coverage.shape}")
+        
+        # Calculate model entropy baseline
+        self._model_entropy = self._calculate_model_entropy()
+        logger.info(f"Initial model entropy: {self._model_entropy:.3f}")
+                                        
     def _validate_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
         """Validate scoring weights sum to 1.0 and contain required components."""
         required = {'information_gain', 'coverage_value'}
@@ -170,25 +242,15 @@ class BigramRecommender:
         return weights
     
     #--------------------------------------------
-    # Filtering and scoring system
+    # Scoring system
     #--------------------------------------------
     def _generate_candidates(self) -> List[Tuple[str, str]]:
-        """
-        Generate candidate bigram pairs.
-        
-        Generates all possible pairs excluding:
-        - Same-character bigrams
-        - Already evaluated pairs
-        - Reversed versions of existing pairs
-        
-        Randomly samples if exceeding max_candidates limit.
-        """
         # Generate possible bigrams
         bigrams = []
         for c1, c2 in combinations(self.layout_chars, 2):
             if c1 != c2:  # Exclude same-character bigrams
                 bigrams.extend([(c1 + c2), (c2 + c1)])
-            
+                
         # Generate candidate pairs
         candidates = [
             (b1, b2) for b1, b2 in combinations(bigrams, 2)
@@ -198,168 +260,38 @@ class BigramRecommender:
         
         # Sample if too many
         if len(candidates) > self.max_candidates:
-            candidates = list(np.random.choice(
-                candidates, 
+            indices = np.random.choice(
+                len(candidates), 
                 self.max_candidates, 
                 replace=False
-            ))
+            )
+            candidates = [candidates[i] for i in indices]
         
         logger.info(f"Generated {len(candidates)} candidate pairs")
         return candidates
-
-    def _filter_candidates(self, candidates: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-        """
-        Filter candidates based on basic criteria.
-        
-        Criteria:
-        1. Minimum comfort threshold - avoid clearly uncomfortable pairs
-        2. Feature space novelty - ensure sufficient difference from existing data
-        
-        This quick filtering step reduces the number of pairs needing detailed scoring.
-        """
-        filtered = []
-        for pair in candidates:
-            try:
-                if self._meets_basic_criteria(pair):
-                    filtered.append(pair)
-            except Exception as e:
-                logger.debug(f"Error filtering pair {pair}: {str(e)}")
-                continue
-                
-        logger.info(f"Filtered to {len(filtered)} valid candidates")
-        return filtered
-
-    def _meets_basic_criteria(self, pair: Tuple[str, str]) -> bool:
-        """
-        Check if pair meets basic suitability criteria.
-        
-        A pair is suitable if:
-        1. Both bigrams have acceptable predicted comfort scores
-        2. The pair adds sufficient novelty to the feature space
-        """
-        try:
-            # Check comfort predictions
-            pred1 = self.model.predict_comfort_score(pair[0])
-            pred2 = self.model.predict_comfort_score(pair[1])
-            
-            if min(pred1.score, pred2.score) < self.comfort_threshold:
-                return False
-            
-            # Check feature space novelty
-            features1 = self._get_features(pair[0])
-            features2 = self._get_features(pair[1])
-            
-            density = self._estimate_density([features1, features2])
-            if density > (1 - self.min_feature_coverage):
-                return False
-                
-            return True
-            
-        except Exception as e:
-            logger.debug(f"Error checking criteria for {pair}: {str(e)}")
-            return False
-
-    def _score_candidates(self, candidates: List[Tuple[str, str]]) -> List[Tuple[Tuple[str, str], float, Dict[str, float]]]:
-        """
-        Score candidates using information gain and coverage metrics.
-        
-        Scoring components:
-        1. Information gain: Potential model improvement from pair
-        2. Coverage value: Contribution to feature space exploration
-        
-        Returns sorted list of (pair, total_score, detailed_scores).
-        """
+           
+    def _score_candidates(self, candidates: List[Tuple[str, str]], 
+                        selected: List[Tuple[str, str]]) -> List[Tuple[Tuple[str, str], float, Dict[str, float]]]:
+        """Score candidates using information gain and coverage metrics."""
         scored = []
         
         for pair in candidates:
             try:
-                # Check cache first
-                if pair in self._score_cache:
-                    scored.append(self._score_cache[pair])
-                    continue
-                
-                # Calculate component scores
+                # Calculate scores considering currently selected pairs
                 scores = {
                     'information_gain': self._calculate_information_gain(pair),
-                    'coverage_value': self._calculate_coverage_value(pair)
+                    'coverage_value': self._calculate_coverage_value(pair, selected)
                 }
                 
-                # Calculate total score using configuration weights
                 total_score = sum(self.weights[k] * v for k, v in scores.items())
-                
-                result = (pair, total_score, scores)
-                self._score_cache[pair] = result
-                scored.append(result)
+                scored.append((pair, total_score, scores))
                 
             except Exception as e:
                 logger.debug(f"Error scoring pair {pair}: {str(e)}")
                 continue
         
         return sorted(scored, key=lambda x: x[1], reverse=True)
-
-    def _select_diverse_subset(self, scored_candidates: List[Tuple]) -> List[Tuple[str, str]]:
-        """
-        Select diverse subset of recommendations.
         
-        Process:
-        1. Start with highest scoring candidates
-        2. For each additional selection:
-           - Check diversity against already selected pairs
-           - Only add if sufficiently different
-        3. Continue until either:
-           - Reached desired number of recommendations
-           - No more sufficiently diverse candidates available
-        """
-        if not scored_candidates:
-            return []
-            
-        selected = []
-        candidates = scored_candidates.copy()
-        
-        while len(selected) < self.n_recommendations and candidates:
-            # Add highest scoring remaining candidate
-            best = candidates.pop(0)
-            selected.append(best[0])
-            
-            # Filter remaining candidates for diversity
-            candidates = [
-                c for c in candidates 
-                if self._is_sufficiently_diverse(c[0], selected)
-            ]
-            
-        logger.info(f"Selected {len(selected)} diverse recommendations")
-        return selected
-
-    def _is_sufficiently_diverse(self, pair: Tuple[str, str], 
-    
-                               selected: List[Tuple[str, str]]) -> bool:
-        """
-        Check if pair is sufficiently different from already selected pairs.
-        
-        Uses feature-based similarity calculation with configurable threshold.
-        """
-        if not selected:
-            return True
-            
-        try:
-            features = self._get_features(pair[0]), self._get_features(pair[1])
-            
-            for sel_pair in selected:
-                sel_features = (
-                    self._get_features(sel_pair[0]), 
-                    self._get_features(sel_pair[1])
-                )
-                
-                similarity = self._calculate_similarity(features, sel_features)
-                if similarity > (1 - self.diversity_threshold):
-                    return False
-                    
-            return True
-            
-        except Exception as e:
-            logger.debug(f"Error checking diversity: {str(e)}")
-            return False
-
     #--------------------------------------------
     # Analysis and calculation methods
     #--------------------------------------------
@@ -390,57 +322,46 @@ class BigramRecommender:
             logger.debug(f"Error calculating information gain: {str(e)}")
             return 0.0
 
-    def _calculate_coverage_value(self, pair: Tuple[str, str]) -> float:
-        """
-        Calculate how well pair improves feature space coverage.
-        
-        Coverage value considers:
-        1. Distance to existing data points
-        2. Local density in feature space
-        3. Distribution of feature values
-        """
+    def _calculate_coverage_value(self, pair: Tuple[str, str], selected: List[Tuple[str, str]]) -> float:
         try:
-            features1 = self._get_features(pair[0])
-            features2 = self._get_features(pair[1])
+            pair_features = np.concatenate([
+                self._get_features(pair[0]),
+                self._get_features(pair[1])
+            ])
+
+            # Base distance to existing data
+            existing_distances = []
+            for pref in self.dataset.preferences:
+                existing_features = np.concatenate([
+                    self._get_features(pref.bigram1),
+                    self._get_features(pref.bigram2)
+                ])
+                existing_distances.append(np.linalg.norm(pair_features - existing_features))
             
-            # Calculate minimum distances to existing data
-            distances = self._calculate_distances([features1, features2])
-            mean_distance = np.mean(distances)
-            
-            # Calculate local density penalty
-            density = self._estimate_density([features1, features2])
-            density_penalty = 1 - density
-            
-            # Combine with weight toward distance (prefer exploring empty regions)
-            return float(0.7 * mean_distance + 0.3 * density_penalty)
-            
+            base_score = np.min(existing_distances)
+
+            # Strong penalty for similarity to already selected recommendations
+            if selected:
+                selected_distances = []
+                for sel_pair in selected:
+                    sel_features = np.concatenate([
+                        self._get_features(sel_pair[0]),
+                        self._get_features(sel_pair[1])
+                    ])
+                    dist = np.linalg.norm(pair_features - sel_features)
+                    selected_distances.append(dist)
+                
+                # Exponential penalty for nearby recommendations
+                min_selected_dist = np.min(selected_distances)
+                selection_penalty = np.exp(-min_selected_dist)
+                base_score *= (1.0 - selection_penalty)
+
+            return float(base_score)
+
         except Exception as e:
-            logger.debug(f"Error calculating coverage: {str(e)}")
+            logger.error(f"Error calculating coverage: {str(e)}")
             return 0.0
-
-    def _analyze_comfort_range(self) -> Tuple[float, float]:
-        """Calculate current comfort score range from existing data."""
-        scores = []
-        for pref in self.dataset.preferences:
-            pred1 = self.model.predict_comfort_score(pref.bigram1)
-            pred2 = self.model.predict_comfort_score(pref.bigram2)
-            scores.extend([pred1.score, pred2.score])
-            
-        scores = np.array(scores)
-        return float(np.min(scores)), float(np.max(scores))
-
-    def _analyze_feature_coverage(self) -> np.ndarray:
-        """
-        Analyze current feature space coverage.
-        
-        Returns matrix of feature vectors for all existing bigrams.
-        """
-        features = []
-        for pref in self.dataset.preferences:
-            features.append(self._get_features(pref.bigram1))
-            features.append(self._get_features(pref.bigram2))
-        return np.array(features)
-
+                                                        
     def _calculate_model_entropy(self) -> float:
         """Calculate current model entropy."""
         try:
@@ -492,160 +413,149 @@ class BigramRecommender:
         self._feature_cache[bigram] = features
         return features
 
-    def _calculate_distances(self, features: List[np.ndarray]) -> np.ndarray:
-        """Calculate minimum distances to existing data points."""
-        try:
-            return np.min(
-                np.linalg.norm(
-                    self._feature_coverage[:, np.newaxis] - features, 
-                    axis=2
-                ), 
-                axis=0
-            )
-        except Exception as e:
-            logger.debug(f"Error calculating distances: {str(e)}")
-            return np.array([0.0])
-
-    def _estimate_density(self, features: List[np.ndarray]) -> float:
-        """Estimate local density in feature space."""
-        try:
-            kde = KernelDensity(kernel='gaussian', bandwidth=0.1)
-            kde.fit(self._feature_coverage)
-            return float(np.mean(np.exp(kde.score_samples(features))))
-        except Exception as e:
-            logger.debug(f"Error estimating density: {str(e)}")
-            return 1.0  # Conservative fallback (assume dense region)
-
-    def _calculate_similarity(self, features1: Tuple[np.ndarray, np.ndarray],
-                            features2: Tuple[np.ndarray, np.ndarray]) -> float:
-        """Calculate feature-based similarity between pairs."""
-        try:
-            similarities = [
-                np.dot(f1, f2) / (np.linalg.norm(f1) * np.linalg.norm(f2))
-                for f1, f2 in zip(features1, features2)
-            ]
-            return float(np.mean(similarities))
-        except Exception as e:
-            logger.debug(f"Error calculating similarity: {str(e)}")
-            return 1.0  # Conservative fallback (assume similar)
-
-    def _save_recommendations(self, recommendations: List[Tuple[str, str]]) -> None:
-        """Save recommendations and analysis metadata."""
-        try:
-            results = {
-                'recommendations': recommendations,
-                'metadata': {
-                    'comfort_range': self._comfort_range,
-                    'model_entropy': float(self._model_entropy),
-                    'n_existing_pairs': len(self._existing_pairs)
-                },
-                'scores': {
-                    str(pair): self._score_cache.get(pair, {})
-                    for pair in recommendations
-                }
-            }
+    def _get_features(self, bigram: str) -> np.ndarray:
+        """Get feature vector for bigram."""
+        if bigram in self._feature_cache:
+            return self._feature_cache[bigram]
             
-            output_path = Path(self.config.recommendations.recommendations_file)
-            
-            # Save basic recommendations
-            pd.DataFrame(recommendations, columns=['bigram1', 'bigram2']).to_csv(
-                output_path, index=False
-            )
-            
-            # Save detailed results
-            detailed_path = output_path.parent / 'recommendation_details.json'
-            import json
-            with open(detailed_path, 'w') as f:
-                json.dump(results, f, indent=2)
-                
-        except Exception as e:
-            logger.error(f"Error saving recommendations: {str(e)}")
+        features_dict = self.model.extract_features(bigram)
+        # Convert dictionary to array in consistent order
+        feature_names = list(self.model.get_feature_weights(include_control=True).keys())
+        features_array = np.array([features_dict[name] for name in feature_names])
+        
+        self._feature_cache[bigram] = features_array
+        return features_array
 
+    def _get_pair_features(self, bigram1: str, bigram2: str) -> np.ndarray:
+        """Get absolute feature differences between two bigrams."""
+        features1 = self._get_features(bigram1)
+        features2 = self._get_features(bigram2)
+        return np.abs(features1 - features2)
+
+    def _analyze_feature_coverage(self) -> np.ndarray:
+        """Analyze current feature space coverage."""
+        features = []
+        for pref in self.dataset.preferences:
+            # Get features for each bigram in existing pairs
+            features1 = self._get_features(pref.bigram1)
+            features2 = self._get_features(pref.bigram2)
+            # Concatenate features from both bigrams
+            pair_features = np.concatenate([features1, features2])
+            features.append(pair_features)
+        return np.array(features)
+        
     #--------------------------------------------
     # Visualization method
     #--------------------------------------------
     def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
-        """
-        Visualize how recommendations complement existing data in feature space.
-        
-        Creates two plots:
-        1. PCA projection showing existing data and recommendations
-        2. Feature coverage comparison before/after recommendations
-        """
+        """Visualize feature differences with separate figures."""
         try:
-            import matplotlib.pyplot as plt
-            from sklearn.decomposition import PCA
-            
-            # Get features for existing and recommended pairs
-            existing_features = self._feature_coverage
-            recommended_features = []
+            # Get feature differences for existing and recommended pairs
+            existing_differences = []
+            for pref in self.dataset.preferences:
+                diff = self._get_pair_features(pref.bigram1, pref.bigram2)
+                existing_differences.append(diff)
+            existing_differences = np.array(existing_differences)
+            logger.info(f"Existing differences shape: {existing_differences.shape}")
+
+            recommended_differences = []
             for b1, b2 in recommended_pairs:
-                recommended_features.append(self._get_features(b1))
-                recommended_features.append(self._get_features(b2))
-            recommended_features = np.array(recommended_features)
+                diff = self._get_pair_features(b1, b2)
+                recommended_differences.append(diff)
+            recommended_differences = np.array(recommended_differences)
+            logger.info(f"Recommended differences shape: {recommended_differences.shape}")
+
+            # Generate all possible pair differences
+            chars = self.config.data.layout['chars']
+            all_bigrams = [c1 + c2 for c1 in chars for c2 in chars if c1 != c2]
             
-            # Combine for PCA
-            all_features = np.vstack([existing_features, recommended_features])
+            possible_differences = []
+            possible_pairs = list(combinations(all_bigrams, 2))
             
-            # Fit PCA
+            logger.info(f"Generating features for all {len(possible_pairs)} possible pairs...")
+            for b1, b2 in possible_pairs:
+                diff = self._get_pair_features(b1, b2)
+                possible_differences.append(diff)
+            possible_differences = np.array(possible_differences)
+            logger.info(f"Possible differences shape: {possible_differences.shape}")
+
+            # 1. PCA Space Plot
+            fig1 = plt.figure(figsize=(12, 8))
+            
+            # Fit PCA on everything
             pca = PCA(n_components=2)
+            all_features = np.vstack([existing_differences, recommended_differences, possible_differences])
             all_projected = pca.fit_transform(all_features)
-            
-            # Split back into existing and recommended
-            n_existing = len(existing_features)
+
+            # Split back into groups
+            n_existing = len(existing_differences)
+            n_recommended = len(recommended_differences)
             existing_projected = all_projected[:n_existing]
-            recommended_projected = all_projected[n_existing:]
-            
-            # Create figure with two subplots
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-            
-            # Plot 1: PCA projection
-            ax1.scatter(existing_projected[:, 0], existing_projected[:, 1], 
+            recommended_projected = all_projected[n_existing:n_existing + n_recommended]
+            possible_projected = all_projected[n_existing + n_recommended:]
+
+            plt.scatter(possible_projected[:, 0], possible_projected[:, 1],
+                    alpha=0.05, label=f'Possible Pairs ({len(possible_pairs)})', color='gray')
+            plt.scatter(existing_projected[:, 0], existing_projected[:, 1],
                     alpha=0.5, label='Existing Data', color='blue')
-            ax1.scatter(recommended_projected[:, 0], recommended_projected[:, 1],
+            plt.scatter(recommended_projected[:, 0], recommended_projected[:, 1],
                     alpha=0.7, label='Recommendations', color='red')
-            ax1.set_title('Feature Space Coverage')
-            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
-            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
             
-            # Plot 2: Feature coverage comparison
-            feature_names = list(self.model.get_feature_weights(include_control=True).keys())
-            existing_coverage = np.percentile(existing_features, [25, 50, 75], axis=0)
-            recommended_coverage = np.percentile(recommended_features, [25, 50, 75], axis=0)
-            
-            x = np.arange(len(feature_names))
-            width = 0.35
-            
-            # Plot existing coverage
-            ax2.bar(x - width/2, existing_coverage[1], width, 
-                    label='Existing', color='blue', alpha=0.5)
-            ax2.vlines(x - width/2, existing_coverage[0], existing_coverage[2],
-                    color='blue', alpha=0.3)
-                    
-            # Plot recommended coverage
-            ax2.bar(x + width/2, recommended_coverage[1], width,
-                    label='Recommended', color='red', alpha=0.5)
-            ax2.vlines(x + width/2, recommended_coverage[0], recommended_coverage[2],
-                    color='red', alpha=0.3)
-            
-            ax2.set_title('Feature Value Distribution')
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(feature_names, rotation=45, ha='right')
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
+            plt.title('Feature Difference Space Coverage')
+            plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            plt.legend(bbox_to_anchor=(0.5, -0.15), loc='upper center', ncol=3)
+            plt.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            
-            # Save plot
-            output_path = Path(self.config.paths.plots_dir) / 'recommendation_analysis.png'
-            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            output_path1 = Path(self.config.paths.plots_dir) / 'feature_space_coverage.png'
+            plt.savefig(output_path1, dpi=300, bbox_inches='tight')
             plt.close()
+
+            # 2. Feature Distributions Plot
+            fig2 = plt.figure(figsize=(12, 8))
             
-            logger.info(f"Saved recommendation visualization to {output_path}")
+            feature_names = list(self.model.get_feature_weights(include_control=True).keys())
+            x = np.arange(len(feature_names))
+            width = 0.25
             
+            # Calculate percentiles for all three groups
+            def get_percentiles(features):
+                return np.percentile(features, [25, 50, 75], axis=0)
+            
+            existing_stats = get_percentiles(existing_differences)
+            recommended_stats = get_percentiles(recommended_differences)
+            possible_stats = get_percentiles(possible_differences)
+            
+            # Plot distributions
+            plt.bar(x - width, existing_stats[1], width, 
+                label='Existing', color='blue', alpha=0.5)
+            plt.vlines(x - width, existing_stats[0], existing_stats[2],
+                    color='blue', alpha=0.3)
+            
+            plt.bar(x, recommended_stats[1], width,
+                label='Recommended', color='red', alpha=0.5)
+            plt.vlines(x, recommended_stats[0], recommended_stats[2],
+                    color='red', alpha=0.3)
+            
+            plt.bar(x + width, possible_stats[1], width,
+                label='Possible Range', color='gray', alpha=0.3)
+            plt.vlines(x + width, possible_stats[0], possible_stats[2],
+                    color='gray', alpha=0.2)
+            
+            plt.title('Feature Difference Distributions')
+            plt.xticks(x, feature_names, rotation=45, ha='right')
+            plt.legend(loc='upper left')
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            output_path2 = Path(self.config.paths.plots_dir) / 'feature_distributions.png'
+            plt.savefig(output_path2, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            logger.info(f"Saved visualizations to {output_path1} and {output_path2}")
+
         except Exception as e:
             logger.error(f"Error visualizing recommendations: {str(e)}")
-
-            
+            raise
+    

@@ -403,23 +403,13 @@ class PreferenceModel:
             )
 
     def predict_comfort_score(self, bigram: str) -> ModelPrediction:
-        """
-        Adapter method to match BigramRecommender's expected interface.
-        Wraps get_bigram_comfort_scores to return ModelPrediction object.
-        
-        Args:
-            bigram: Two-character string to predict comfort for
-            
-        Returns:
-            ModelPrediction with score and uncertainty values
-        """
         try:
             score, uncertainty = self.get_bigram_comfort_scores(bigram)
-            return ModelPrediction(score=score, uncertainty=uncertainty)
+            return ModelPrediction(probability=score, uncertainty=uncertainty)
         except Exception as e:
             logger.error(f"Error predicting comfort score for {bigram}: {str(e)}")
-            return ModelPrediction(score=0.0, uncertainty=1.0)
-                                        
+            return ModelPrediction(probability=0.0, uncertainty=1.0)
+                                                
     #--------------------------------------------
     # Resource management methods
     #--------------------------------------------
