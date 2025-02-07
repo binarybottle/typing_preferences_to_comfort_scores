@@ -201,8 +201,14 @@ class ModelSettings(BaseModel):
 class DataConfig(BaseModel):
     """Data configuration."""
     input_file: str
+    input_file2: Optional[str] = None  # optional second input file
     splits: Dict[str, Any]
     layout: Dict[str, List[str]]
+
+    @validator('input_file2')
+    def validate_input_file2(cls, v: Optional[str]) -> Optional[str]:
+        """Allow input_file2 to be None"""
+        return v
 
 class RecommendationsConfig(BaseModel):
     """Recommendations configuration."""

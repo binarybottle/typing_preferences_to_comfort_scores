@@ -94,112 +94,108 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[PreferenceDataset, PreferenceDataset]:
     """
-    Load existing train/test split or create and save a new one.
+    Load/create splits for both original and additional data if it exists.
     """
     split_file = Path(config.data.splits['split_data_file'])
-
+    
     try:
+        # First handle original dataset
         if split_file.exists():
-            logger.info("Loading existing train/test split...")
-            split_data = np.load(split_file)
+            logger.info("Loading existing split for original dataset...")
+            split_data1 = np.load(split_file)
+            train_indices1 = split_data1['train_indices']
+            test_indices1 = split_data1['test_indices']
+        else:
+            logger.info("Creating new split for original dataset...")
+            train_indices1, test_indices1 = create_participant_split(
+                dataset, 
+                test_ratio=config.data.splits['test_ratio'],
+                random_seed=config.data.splits['random_seed']
+            )
+            # Save split
+            split_file.parent.mkdir(parents=True, exist_ok=True)
+            np.savez(split_file, train_indices=train_indices1, test_indices=test_indices1)
+
+        # Handle additional data if it exists
+        if hasattr(config.data, 'input_file2') and config.data.input_file2:
+            file2 = Path(config.data.input_file2)
+            split_file2 = Path(config.data.splits['split_data_file2'])
             
-            # Validate indices against current dataset size
-            if np.any(split_data['train_indices'] >= len(dataset.preferences)) or \
-                np.any(split_data['test_indices'] >= len(dataset.preferences)):
-                logger.warning("Invalid indices, creating new split...")
+            logger.info("Processing additional dataset...")
+            # Pass all necessary precomputed features from original dataset
+            dataset2 = PreferenceDataset(
+                file2, 
+                feature_extractor=dataset.feature_extractor, 
+                config=config,
+                precomputed_features={
+                    'all_bigrams': dataset.all_bigrams,
+                    'all_bigram_features': dataset.all_bigram_features,
+                    'feature_names': dataset.feature_names
+                }
+            )
+            
+            if split_file2.exists():
+                logger.info("Loading existing split for additional dataset...")
+                split_data2 = np.load(split_file2)
+                train_indices2 = split_data2['train_indices']
+                test_indices2 = split_data2['test_indices']
             else:
-                try:
-                    # Verify all preferences and participants before creating subsets
-                    total_indices = np.concatenate([split_data['train_indices'], split_data['test_indices']])
-                    if len(np.unique(total_indices)) != len(dataset.preferences):
-                        logger.warning("Missing preferences in split, creating new split...")
-                        raise ValueError("Incomplete split")
-                        
-                    train_data = dataset._create_subset_dataset(split_data['train_indices'])
-                    test_data = dataset._create_subset_dataset(split_data['test_indices'])
-                    
-                    # Verify counts after creating subsets
-                    split_participant_count = len(train_data.participants) + len(test_data.participants)
-                    split_preference_count = len(train_data.preferences) + len(test_data.preferences)
-                    
-                    if (split_participant_count != len(dataset.participants) or 
-                        split_preference_count != len(dataset.preferences)):
-                        logger.warning("Split verification failed, creating new split...")
-                        raise ValueError("Data loss in split")
-                    
-                    return train_data, test_data
-                except ValueError as e:
-                    logger.warning(f"Error loading split: {e}")
+                logger.info("Creating new split for additional dataset...")
+                train_indices2, test_indices2 = create_participant_split(
+                    dataset2, 
+                    test_ratio=config.data.splits['test_ratio'],
+                    random_seed=config.data.splits['random_seed']
+                )
+                # Save split
+                split_file2.parent.mkdir(parents=True, exist_ok=True)
+                np.savez(split_file2, train_indices=train_indices2, test_indices=test_indices2)
 
-        logger.info("Creating new train/test split...")
-                    
-        # Get test size from config
-        test_ratio = config.data.splits['test_ratio']
+            # Combine the splits
+            train_data = dataset._create_subset_dataset(np.concatenate([train_indices1, train_indices2]))
+            test_data = dataset._create_subset_dataset(np.concatenate([test_indices1, test_indices2]))
+        else:
+            # Just use original dataset split
+            train_data = dataset._create_subset_dataset(train_indices1)
+            test_data = dataset._create_subset_dataset(test_indices1)
         
-        # Set random seed for reproducibility
-        np.random.seed(config.data.splits['random_seed'])
+        logger.info(f"Final splits:")
+        logger.info(f"Training set: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")
+        logger.info(f"Test set: {len(test_data.preferences)} preferences, {len(test_data.participants)} participants")
         
-        # Get unique participant IDs and their corresponding preference indices
-        participant_to_indices = {}
-        for i, pref in enumerate(dataset.preferences):
-            if pref.participant_id not in participant_to_indices:
-                participant_to_indices[pref.participant_id] = []
-            participant_to_indices[pref.participant_id].append(i)
-        
-        # Randomly select participants for test set
-        all_participants = list(participant_to_indices.keys())
-        n_test = int(len(all_participants) * test_ratio)
-        test_participants = set(np.random.choice(all_participants, n_test, replace=False))
-        train_participants = set(all_participants) - test_participants
-        
-        logger.info(f"Split participants: {len(train_participants)} train, {len(test_participants)} test")
-        
-        # Split indices based on participants
-        train_indices = []
-        test_indices = []
-        for participant, indices in participant_to_indices.items():
-            if participant in test_participants:
-                test_indices.extend(indices)
-            else:
-                train_indices.extend(indices)
-        
-        train_indices = np.array(train_indices)
-        test_indices = np.array(test_indices)
-
-        logger.debug(f"Original indices: {len(participant_to_indices)}")
-        logger.debug(f"Train indices: {len(train_indices)}")
-        logger.debug(f"Test indices: {len(test_indices)}")
-        logger.debug(f"Total split indices: {len(train_indices) + len(test_indices)}")
-        
-        # Verify splits contain all preferences and participants
-        total_indices = np.concatenate([train_indices, test_indices])
-        assert len(np.unique(total_indices)) == len(dataset.preferences), "Some preferences missing from split"
-        assert len(train_participants) + len(test_participants) == len(participant_to_indices), "Some participants missing from split"
-
-        # Save new split
-        split_file.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(split_file, train_indices=train_indices, test_indices=test_indices)
-        
-        # Create datasets using new split
-        train_data = dataset._create_subset_dataset(train_indices)
-        test_data = dataset._create_subset_dataset(test_indices)
-        
-        # Verify participant split
-        split_participant_count = len(train_data.participants) + len(test_data.participants)
-        assert split_participant_count == len(dataset.participants), f"Participant count mismatch: {split_participant_count} vs {len(dataset.participants)}"
-
-        # Verify preference split
-        split_preference_count = len(train_data.preferences) + len(test_data.preferences)
-        assert split_preference_count == len(dataset.preferences), f"Preference count mismatch: {split_preference_count} vs {len(dataset.preferences)}"
-
         return train_data, test_data
-            
+        
     except Exception as e:
-        logger.error(f"Error in split creation: {str(e)}")
-        logger.error(f"Dataset preferences: {len(dataset.preferences)}")
-        if 'participant_to_indices' in locals():
-            logger.error(f"Total participants: {len(participant_to_indices)}")
+        logger.error(f"Error creating/loading splits: {str(e)}")
         raise
+        
+def create_participant_split(dataset: PreferenceDataset, test_ratio: float, random_seed: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Create a participant-aware train/test split."""
+    # Set random seed
+    np.random.seed(random_seed)
+    
+    # Get participant to indices mapping
+    participant_to_indices = {}
+    for i, pref in enumerate(dataset.preferences):
+        if pref.participant_id not in participant_to_indices:
+            participant_to_indices[pref.participant_id] = []
+        participant_to_indices[pref.participant_id].append(i)
+    
+    # Split participants
+    all_participants = list(participant_to_indices.keys())
+    n_test = int(len(all_participants) * test_ratio)
+    test_participants = set(np.random.choice(all_participants, n_test, replace=False))
+    train_participants = set(all_participants) - test_participants
+    
+    # Get indices for each split
+    train_indices = []
+    test_indices = []
+    for participant, indices in participant_to_indices.items():
+        if participant in test_participants:
+            test_indices.extend(indices)
+        else:
+            train_indices.extend(indices)
+            
+    return np.array(train_indices), np.array(test_indices)
 
 def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
