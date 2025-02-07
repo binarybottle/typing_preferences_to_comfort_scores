@@ -21,7 +21,7 @@
 # Input data and key layout
 #-----------------------------------------------------------------------
 data:                                   # Path to processed preference data
-  input_file: "data/input/processed_bigram_data_406participants_0inconsistencies.csv"
+  input_file: "data/input/processed_bigram_data_452participants_0inconsistencies.csv"
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
     random_seed: 26                     # Seed for reproducible train/test splits
@@ -164,6 +164,8 @@ paths:                                # Directory structure for outputs
   metrics_dir: "output/data"          # Directory for storing computed metrics
   plots_dir: "output/plots"           # Directory for saving visualizations
   logs_dir: "output/logs"             # Directory for log files
+
+
 
 
 #-----------------------------------------------------------------------
