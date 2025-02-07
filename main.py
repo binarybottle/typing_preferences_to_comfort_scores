@@ -1,65 +1,32 @@
 # main.py
 """
-Command-line pipeline for keyboard layout optimization through preference learning.
+Command-line pipeline for estimating latent bigram typing comfort scores through preference learning.
 
-Pipeline Modes:
-  1. Feature Selection:
-    - Processes preference dataset with train/validation split
-    - Evaluates features through cross-validation
-    - Selects optimal feature combination
-    - Exports selection metrics and visualizations
-    - Saves feature selection model
+The input is bigram typing preference data (which bigram is easier to type?),
+and the output is a set of latent bigram typing comfort scores.
+The goal is to use these scores to optimize keyboard layouts.
+Core features:
 
-  2. Model Training:
-    - Uses participant-aware train/test splitting
-    - Trains model using selected features
-    - Evaluates on holdout data
-    - Saves trained model state
-    - Reports performance metrics
+1. Data Management:
+- Participant-aware train/test splitting
+- Additional dataset handling
+- Feature extraction setup
+- Precomputed feature validation
 
-  3. Visualization:
-    - Generates feature space projections
-    - Plots feature importance metrics
-    - Shows feature weight distributions
-    - Compares main vs control features
-    - Creates model analysis plots
+2. Mode Implementation:
+- analyze_features: Calculate feature importance metrics
+- select_features: Iterative feature selection with CV
+- recommend_bigram_pairs: Generate diverse pair recommendations
+- train_model: Train on selected features with splits
+- predict_bigram_scores: Generate comfort predictions
 
-  4. Bigram Score Prediction:
-    - Loads trained model
-    - Generates all possible bigram pairs
-    - Calculates comfort scores and uncertainties
-    - Exports predictions to CSV
-    - Provides summary statistics
+3. Resource Handling:
+- Memory monitoring
+- Logging configuration
+- Result persistence
+- Error recovery
 
-  5. Recommendations:
-    - Generates optimal bigram pairs for testing
-    - Balances multiple recommendation criteria
-    - Visualizes recommendation distribution
-    - Exports recommendations for data collection
-
-Core Components:
-  - YAML configuration management
-  - Feature extraction and caching
-  - Participant-aware data splitting
-  - Comprehensive logging
-  - Error handling and validation
-  - Memory and resource management
-
-Usage:
-    python main.py --config config.yaml --mode MODE
-
-    Modes:
-        select_features
-        train_model
-        visualize_feature_space
-        predict_bigram_scores
-        recommend_bigram_pairs
-
-Requirements:
-    - Python 3.7+
-    - Valid YAML config file
-    - Preference dataset
-    - Feature definitions
+Usage: python main.py --config config.yaml --mode MODE
 """
 import argparse
 import yaml
@@ -167,7 +134,7 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[Pref
     except Exception as e:
         logger.error(f"Error creating/loading splits: {str(e)}")
         raise
-        
+
 def create_participant_split(dataset: PreferenceDataset, test_ratio: float, random_seed: int) -> Tuple[np.ndarray, np.ndarray]:
     """Create a participant-aware train/test split."""
     # Set random seed
@@ -201,7 +168,8 @@ def main():
     parser = argparse.ArgumentParser(description='Preference Learning Pipeline')
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['analyze_features', 'select_features', 
-                                           'train_model', 'recommend_bigram_pairs'], 
+                                           'recommend_bigram_pairs', 'train_model',
+                                           'predict_bigram_scores'], 
                        required=True,
                        help='Pipeline mode: feature selection, model training, or bigram recommendations')
     args = parser.parse_args()

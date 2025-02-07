@@ -1,47 +1,31 @@
 # data.py
 """
-Dataset management for keyboard layout preference learning.
-Handles loading, preprocessing, and organizing typing preference data with features.
+Dataset management for keyboard layout preference learning. Core functionality:
 
-Core functionality:
-  1. Data Loading & Validation:
-    - CSV parsing with required columns
-    - Bigram feature computation
-    - Invalid data filtering
-    - Participant tracking
-    - NaN and error handling
+1. Data Loading:
+- CSV parsing with validation
+- Required column verification
+- Participant ID tracking 
+- Typing time validation
+- Missing data handling
 
-  2. Feature Management:
-    - Base feature extraction
-    - Interaction feature computation
-    - Control feature handling
-    - Feature normalization
-    - Feature caching
-    - Memory-efficient processing
+2. Feature Management:
+- Feature extraction interface
+- Base/interaction/control features
+- Feature caching systems
+- Feature name validation
+- Feature normalization
+- Precomputed feature handling
 
-  3. Dataset Operations:
-    - Participant-aware splitting
-    - Subset creation
-    - Feature name access
-    - Data validation
-    - Resource cleanup
-    - Error recovery
+3. Dataset Operations:
+- Participant-aware splitting
+- Validated subset creation
+- Feature name management
+- Dataset validation checks
+- Memory usage optimization
 
-  4. Performance Optimization:
-    - Caching mechanisms
-    - Memory usage monitoring
-    - Efficient data structures
-    - Resource management
-    - Batch processing
-
-Class:
-    PreferenceDataset: Main class for preference data management
-    
-Requirements:
-    - Properly formatted CSV input
-    - Valid feature configurations
-    - Sufficient system resources
-    - Proper feature definitions
+Class: PreferenceDataset - Core preference data management
+Requirements: CSV with required columns, valid feature config
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, Any

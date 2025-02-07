@@ -1,42 +1,42 @@
 # model.py
 """
-Bayesian preference learning model for keyboard layout optimization.
+Bayesian hierarchical model for keyboard layout preference learning. 
 
-Core Components:
-  1. Model Architecture:
-    - Bayesian hierarchical model
-    - Participant-specific effects
-    - Feature importance estimation
-    - Uncertainty quantification
-    - Control feature handling
+Core components:
 
-  2. Training Pipeline:
-    - Feature preparation
-    - MCMC sampling
-    - Convergence monitoring
-    - Resource management
-    - Model state persistence
+1. Model Architecture:
+- Stan-based Bayesian hierarchical model 
+- Participant-specific random effects
+- Configurable feature interactions
+- Feature importance estimation
+- Control feature handling
 
-  3. Prediction Systems:
-    - Comfort score estimation
-    - Uncertainty calculation
-    - Feature interaction handling
-    - Temporary model management
-    - Caching mechanisms
+2. Training Pipeline:
+- Feature preprocessing and standardization
+- MCMC sampling with convergence checks
+- Cross-validation with participant awareness
+- Model state persistence
+- Memory usage monitoring
 
-  4. Resource Management:
-    - Memory monitoring
-    - Disk space verification
-    - Temporary file cleanup
-    - Cache size control
-    - Resource allocation
+3. Prediction Systems:
+- Bigram comfort score estimation
+- Uncertainty quantification
+- Feature interaction handling
+- Temporary model management
+- Basic prediction caching
 
-Features:
-    - Robust feature importance calculation
-    - Comprehensive uncertainty estimation
-    - Efficient resource utilization
-    - Flexible model deployment
-    - Extensive error handling
+4. Resource Management:
+- Memory usage monitoring
+- Disk space verification
+- Temporary file cleanup
+- Cache size limits
+- Error recovery
+
+Core Features:
+- Cross-validated feature selection
+- Bayesian uncertainty estimation
+- Resource-aware computation
+- Comprehensive error handling
 """
 import random
 import cmdstanpy

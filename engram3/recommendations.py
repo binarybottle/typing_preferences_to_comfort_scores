@@ -1,48 +1,27 @@
 # recommendations.py
 """
-Bigram pair recommendation system for keyboard layout optimization.
+Bigram pair recommendation system for keyboard layout preference learning. 
+Uses maximum-minimum distance selection in PCA space to identify diverse bigram pairs
+for further bigram pair typing data collection. Key components:
 
-The system uses a weighted multi-objective approach to balance:
-1. Information Gain (φ ≈ 0.618):
-   - Model uncertainty for each bigram
-   - Expected entropy reduction
-   - Potential for model improvement
+1. Selection Strategy:
+- Initial selection of point furthest from existing data
+- Iterative selection maximizing minimum distances
+- Exponential penalty for proximity to selected pairs
 
-2. Feature Space Coverage (1-φ ≈ 0.382):
-   - Distance to existing data points 
-   - Penalty for closeness to already selected recommendations
-   - Maximize minimum distance between points
+2. Implementation:
+- PCA-based feature space projection
+- Efficient distance calculations
+- Feature difference analysis
+- Cached feature extraction
 
-The process iteratively selects bigram pairs by:
-1. First selecting the point furthest from existing data
-2. Then selecting points that maximize the minimum distance to all points (both existing and selected)
-3. Applying an exponential penalty for closeness to already selected recommendations
+3. Visualization:
+- PCA space coverage plots
+- Feature distribution analysis
+- Comparative visualization of selected pairs
 
-This maximum-minimum distance approach optimizes for point separation to achieve good coverage
-of the feature space. Combined with information gain weighting, this helps select pairs that
-will both improve model accuracy and explore under-sampled regions of the feature space.
-
-The algorithm steps are:
-
-1. Generate all possible bigram pairs from the layout characters except for:
-   - Same-character bigrams
-   - Pairs already evaluated
-
-2. Project data to 2D PCA space:
-   - Project both existing data and candidate pairs
-   - Preserve key feature relationships
-   - Enable efficient distance calculations
-
-3. Select diverse pairs:
-   - Pick first pair furthest from existing data
-   - Iteratively select pairs maximizing minimum distance to all points
-   - Apply exponential penalty for closeness to already selected pairs
-   - Balance exploration vs local density
-
-4. Visualize results:
-   - Plot PCA projections of all points
-   - Show feature space coverage
-   - Display feature value distributions
+Provides systematic exploration of the feature space while maintaining
+diversity among recommendations. Supports visualization of feature differences
 """
 from pathlib import Path
 from typing import List, Tuple, Dict, Set, Union, Optional, Any

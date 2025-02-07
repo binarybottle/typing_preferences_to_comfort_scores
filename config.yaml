@@ -1,21 +1,12 @@
 # engram3/config.yaml
-# Configuration file for keyboard layout preference learning system
-#
-# Core components:
-# - data: Dataset and layout configuration
-# - features: Feature selection and interaction settings
-# - model: Bayesian model parameters and MCMC settings
-# - recommendations: Bigram pair recommendation parameters
-# - visualization: Plot configuration
-# - logging: System logging settings
-#
-# The system supports three operational modes:
-# 1. Feature selection: Identifies optimal feature set
-# 2. Model training: Trains preference model
-# 3. Recommendations: Generates bigram pairs for data collection
-#
-# Each section includes detailed parameter documentation and
-# typical values/ranges where appropriate.
+# Configuration file for keyboard layout preference learning system, controlling the entire pipeline.
+# Handles dataset configuration, feature selection, model parameters, recommendation generation,
+# visualization, and logging settings. Supports five operational modes:
+#   1. analyze_features: Determine feature importance thresholds
+#   2. select_features: Select optimal feature combinations
+#   3. recommend_bigram_pairs: Generate new data collection targets
+#   4. train_model: Train on selected features with original/additional data
+#   5. predict_bigram_scores: Generate typing comfort predictions
 
 #-----------------------------------------------------------------------
 # Input data and key layout
@@ -36,13 +27,8 @@ data:                                   # Path to processed preference data
 #-----------------------------------------------------------------------
 # Feature selection
 #-----------------------------------------------------------------------
-# Select from among features not excluded in the feature analysis mode 
+# Select from among features not excluded in the analyze_features mode 
 # (see "Excluded features" below; base features required for included interactions are retained).
-# In the round-robin feature selection process, we're making relative comparisons between features to select 
-# the best one at each round. Therefore high precision MCMC settings (chains, warmup, n_samples) are less critical:
-# - We only need enough precision to reliably determine which feature is better
-# - We're not using the absolute values for final inference
-# - The relative ranking is more important than precise effect estimates
 feature_selection:
   importance_threshold: 0.000039        # Threshold for aligned effect importance
   cross_validation:
@@ -104,14 +90,6 @@ recommendations:
 #-----------------------------------------------------------------------
 # Model training
 #-----------------------------------------------------------------------
-# Settings to debug the model
-__model_fast: &debug  
-  chains: 1                             # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
-  warmup: 200                           # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
-  n_samples: 500                        # Number of post-warmup samples per chain (kept) (higher for more precise posterior estimates)
-  max_treedepth: 1                      # Maximum depth of NUTS sampling tree (higher = more exhaustive exploration; leapfrog steps = 2^max_treedepth)
-  adapt_delta: 0.80                     # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
-
 # Settings to analyze features
 __model_analysis: &feature_analysis
   chains: 2                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
@@ -121,6 +99,11 @@ __model_analysis: &feature_analysis
   adapt_delta: 0.85                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 # Settings to select features
+# In the round-robin feature selection process, we're making relative comparisons between features to select 
+# the best one at each round. Therefore high precision MCMC settings (chains, warmup, n_samples) are less critical:
+# - We only need enough precision to reliably determine which feature is better
+# - We're not using the absolute values for final inference
+# - The relative ranking is more important than precise effect estimates
 __model_selection: &feature_selection
   chains: 2                            # Number of parallel MCMC chains for sampling (higher for better convergence diagnostics)
   warmup: 1000                         # Number of warmup samples per chain for adaptation to parameter space (discarded) (usually 25-50% of total iterations = chains x n_samples)
@@ -137,7 +120,6 @@ __model_slow: &model_train
   adapt_delta: 0.95                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 model:                                 # Bayesian model parameters (Stan)
-  #<<: *debug                          # Model debug settings
   #<<: *feature_analysis               # Model feature analysis settings
   #<<: *feature_selection               # Model feature selection settings
   <<: *model_train                    # Model training settings
@@ -171,7 +153,7 @@ paths:                                # Directory structure for outputs
 
 
 #-----------------------------------------------------------------------
-# Excluded features: below threshold determined in feature analysis mode
+# Excluded features: below threshold determined in analyze_features mode
 #-----------------------------------------------------------------------
 ### |
   excluded base_features:
