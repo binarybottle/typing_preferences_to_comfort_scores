@@ -26,7 +26,7 @@ data:                                   # Path to processed preference data
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
     random_seed: 26                     # Seed for reproducible train/test splits
-    split_data_file: "data/split_train_test_indices_feature_selection.npz"  # File to store train/test indices
+    split_data_file: "data/split_train_test_indices_select_features_mode.npz"  # File to store train/test indices
     split_data_file2: "data/split_train_test_indices_additional_training_data.npz"  # File to store train/test indices
   layout:
     chars: [q, w, e, r, t,              # Characters in keyboard layout (half-QWERTY)
