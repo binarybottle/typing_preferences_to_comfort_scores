@@ -12,13 +12,13 @@
 # Input data and key layout
 #-----------------------------------------------------------------------
 data:                                   # Path to processed preference data
-  input_file: "data/input/processed_bigram_data_406participants_0inconsistencies.csv"
-  input_file2: "data/input/processed_bigram_data_46participants_0inconsistencies.csv"
+  input_file: "data/input/processed_bigram_data_275of452participants_9518of20722rows.csv"
+  input_file2:                          # Additional training data
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
     random_seed: 26                     # Seed for reproducible train/test splits
-    split_data_file: "data/split_train_test_indices_select_features_mode.npz"  # File to store train/test indices
-    split_data_file2: "data/split_train_test_indices_additional_training_data.npz"  # File to store train/test indices
+    split_data_file: "data/split_train_test_indices.npz"  # File to store train/test indices
+    split_data_file2:                   # File to store train/test indices for additional training data
   layout:
     chars: [q, w, e, r, t,              # Characters in keyboard layout (half-QWERTY)
             a, s, d, f, g,              # (only left-hand side used for symmetric analysis)
@@ -30,49 +30,70 @@ data:                                   # Path to processed preference data
 # Select from among features not excluded in the analyze_features mode 
 # (see "Excluded features" below; base features required for included interactions are retained).
 feature_selection:
-  importance_threshold: 0.000039        # Threshold for aligned effect importance
+  importance_threshold: 0.00001         # Threshold for aligned effect importance
   cross_validation:
     n_splits: 5                         # Number of CV folds for evaluating importance
     min_fold_size: 100                  # Minimum number of preferences per fold
   metrics_file: "output/data/feature_metrics.csv"   # File to store feature metrics
   model_file: "output/data/feature_selection_model.pkl"  # File to store feature selection model
 
-features:                               # features to analyze and select from (55 total)
+features:                               # features to analyze and select from
   base_features:                        # Core features for analysis
-    # individual features (5)
+    # individual features (9)
+    - typing_time                       # Time taken to type bigram
     - same_finger                       # Whether bigram uses same finger
     - sum_finger_values                 # Combined finger load values
-    - adj_finger_diff_row               # Adjacent fingers in different rows
+    - outward_roll                      # Whether movement rolls outward
     - rows_apart                        # Number of rows between keys
     - angle_apart                       # Angular distance between keys
+    - adj_finger_diff_row               # Adjacent fingers in different rows
     - sum_engram_position_values        # Combined Engram position values
     - sum_row_position_values           # Combined row position values
   interactions:
-    # 2-way (13)
-    - [adj_finger_diff_row, angle_apart]
-    - [adj_finger_diff_row, rows_apart]
-    - [adj_finger_diff_row, sum_engram_position_values]
-    - [adj_finger_diff_row, sum_row_position_values]
-    - [angle_apart, sum_engram_position_values]
-    - [angle_apart, sum_finger_values] 
-    - [rows_apart, same_finger]
-    - [rows_apart, sum_engram_position_values]
-    - [rows_apart, sum_row_position_values]
-    - [same_finger, sum_finger_values]
-    - [same_finger, sum_row_position_values]
-    - [sum_engram_position_values, sum_finger_values]
-    - [sum_finger_values, sum_row_position_values]
-    # 3-way (10)
-    - [adj_finger_diff_row, angle_apart, sum_engram_position_values]
-    - [adj_finger_diff_row, angle_apart, sum_finger_values]
-    - [adj_finger_diff_row, rows_apart, sum_engram_position_values]
-    - [adj_finger_diff_row, rows_apart, sum_row_position_values]
-    - [adj_finger_diff_row, sum_engram_position_values, sum_finger_values]
-    - [angle_apart, sum_engram_position_values, sum_finger_values]
-    - [rows_apart, same_finger, sum_finger_values]
-    - [rows_apart, same_finger, sum_row_position_values]
-    - [rows_apart, sum_engram_position_values, sum_finger_values]
-    - [same_finger, sum_finger_values, sum_row_position_values]
+    # pairs (20)
+    - ['same_finger', 'rows_apart']
+    - ['same_finger', 'sum_row_position_values']
+    - ['sum_finger_values', 'outward_roll']
+    - ['sum_finger_values', 'rows_apart']
+    - ['sum_finger_values', 'angle_apart']
+    - ['sum_finger_values', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'sum_engram_position_values']
+    - ['sum_finger_values', 'sum_row_position_values']
+    - ['outward_roll', 'rows_apart']
+    - ['outward_roll', 'angle_apart']
+    - ['outward_roll', 'adj_finger_diff_row']
+    - ['outward_roll', 'sum_engram_position_values']
+    - ['outward_roll', 'sum_row_position_values']
+    - ['rows_apart', 'adj_finger_diff_row']
+    - ['rows_apart', 'sum_engram_position_values']
+    - ['rows_apart', 'sum_row_position_values']
+    - ['angle_apart', 'adj_finger_diff_row']
+    - ['angle_apart', 'sum_engram_position_values']
+    - ['adj_finger_diff_row', 'sum_engram_position_values']
+    - ['adj_finger_diff_row', 'sum_row_position_values']
+    # triples (22)
+    - ['sum_finger_values', 'outward_roll', 'rows_apart']
+    - ['sum_finger_values', 'outward_roll', 'angle_apart']
+    - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
+    - ['sum_finger_values', 'outward_roll', 'sum_row_position_values']
+    - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'rows_apart', 'sum_engram_position_values']
+    - ['sum_finger_values', 'rows_apart', 'sum_row_position_values']
+    - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'angle_apart', 'sum_engram_position_values']
+    - ['sum_finger_values', 'adj_finger_diff_row', 'sum_engram_position_values']
+    - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
+    - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
+    - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
+    - ['outward_roll', 'rows_apart', 'sum_row_position_values']
+    - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
+    - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
+    - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
+    - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
+    - ['rows_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
+    - ['rows_apart', 'adj_finger_diff_row', 'sum_row_position_values']
+    - ['angle_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
   control_features:                       # Features to control for but not analyze
     - bigram_frequency                    # Bigram frequency in the English language
 
@@ -120,9 +141,9 @@ __model_slow: &model_train
   adapt_delta: 0.95                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 model:                                 # Bayesian model parameters (Stan)
-  #<<: *feature_analysis               # Model feature analysis settings
+  <<: *feature_analysis               # Model feature analysis settings
   #<<: *feature_selection               # Model feature selection settings
-  <<: *model_train                    # Model training settings
+  #<<: *model_train                    # Model training settings
   feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   required_temp_mb: 2000               # Required temporary space in MB
@@ -157,31 +178,5 @@ paths:                                # Directory structure for outputs
 #-----------------------------------------------------------------------
 ### |
   excluded base_features:
-    - typing_time                       # Time taken to type bigram
-    - outward_roll                      # Whether movement rolls outward
-    - middle_column                     # Keys in middle column (outside home columns)
   excluded interactions:
-    - [adj_finger_diff_row, outward_roll]
-    - [adj_finger_diff_row, sum_finger_values]
-    - [angle_apart, outward_roll]
-    - [outward_roll, rows_apart]
-    - [outward_roll, sum_engram_position_values]
-    - [outward_roll, sum_finger_values]
-    - [outward_roll, sum_row_position_values]
-    - [rows_apart, sum_finger_values]
-    - [adj_finger_diff_row, angle_apart, outward_roll]
-    - [adj_finger_diff_row, outward_roll, rows_apart]
-    - [adj_finger_diff_row, outward_roll, sum_engram_position_values]
-    - [adj_finger_diff_row, outward_roll, sum_finger_values]
-    - [adj_finger_diff_row, outward_roll, sum_row_position_values]
-    - [adj_finger_diff_row, rows_apart, sum_finger_values]
-    - [adj_finger_diff_row, sum_finger_values, sum_row_position_values]
-    - [angle_apart, outward_roll, sum_engram_position_values]
-    - [angle_apart, outward_roll, sum_finger_values]
-    - [outward_roll, rows_apart, sum_engram_position_values]
-    - [outward_roll, rows_apart, sum_finger_values]
-    - [outward_roll, rows_apart, sum_row_position_values]
-    - [outward_roll, sum_engram_position_values, sum_finger_values]
-    - [outward_roll, sum_finger_values, sum_row_position_values]
-    - [rows_apart, sum_finger_values, sum_row_position_values]
 ###

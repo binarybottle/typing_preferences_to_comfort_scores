@@ -340,25 +340,26 @@ class PreferenceModel:
             main_features = [f for f in self.feature_names if f not in control_features]
             
             # Initialize arrays for each feature group
-            X1 = np.zeros((1, len(main_features)))
-            X2 = np.zeros((1, len(main_features)))
+            X1 = np.zeros((1, len(main_features))) if main_features else None
+            X2 = np.zeros((1, len(main_features))) if main_features else None
             C1 = np.zeros((1, len(control_features)))
             C2 = np.zeros((1, len(control_features)))
 
-            # Process main features
-            for i, feature in enumerate(main_features):
-                feat1 = features1.get(feature, 0.0)
-                feat2 = features2.get(feature, 0.0)
-                
-                # Standardize using stored stats
-                if feature in self.feature_stats:
-                    mean = self.feature_stats[feature]['mean']
-                    std = self.feature_stats[feature]['std']
-                    feat1 = (feat1 - mean) / std
-                    feat2 = (feat2 - mean) / std
+            # Process main features if they exist
+            if main_features and 'beta' in self.fit_result.stan_variables():
+                for i, feature in enumerate(main_features):
+                    feat1 = features1.get(feature, 0.0)
+                    feat2 = features2.get(feature, 0.0)
                     
-                X1[0, i] = feat1
-                X2[0, i] = feat2
+                    # Standardize using stored stats
+                    if feature in self.feature_stats:
+                        mean = self.feature_stats[feature]['mean']
+                        std = self.feature_stats[feature]['std']
+                        feat1 = (feat1 - mean) / std
+                        feat2 = (feat2 - mean) / std
+                        
+                    X1[0, i] = feat1
+                    X2[0, i] = feat2
 
             # Process control features
             for i, feature in enumerate(control_features):
@@ -374,21 +375,24 @@ class PreferenceModel:
                 C1[0, i] = feat1
                 C2[0, i] = feat2
 
-            # Get model weights
-            beta = self.fit_result.stan_variable('beta')  # Main feature weights
+            # Get model weights and number of samples
             gamma = self.fit_result.stan_variable('gamma')  # Control feature weights
-
-            # Calculate logits for each MCMC sample
-            n_samples = len(beta)
+            n_samples = len(gamma)
             logits = np.zeros(n_samples)
             
+            # Calculate logits for each MCMC sample
             for i in range(n_samples):
-                # Main features contribution
-                main_diff = np.dot(X1 - X2, beta[i])
-                # Control features contribution
+                logit = 0.0
+                # Add main features contribution if they exist
+                if main_features and 'beta' in self.fit_result.stan_variables():
+                    beta = self.fit_result.stan_variable('beta')
+                    main_diff = np.dot(X1 - X2, beta[i])
+                    logit += main_diff
+                
+                # Add control features contribution
                 control_diff = np.dot(C1 - C2, gamma[i])
-                # Combined logit
-                logits[i] = main_diff + control_diff
+                logit += control_diff
+                logits[i] = logit
 
             # Calculate probability and uncertainty
             probabilities = 1 / (1 + np.exp(-logits))
@@ -403,14 +407,14 @@ class PreferenceModel:
             )
 
         except Exception as e:
-            logger.error(f"Error in predict_preference: {str(e)}")
+            logger.error(f"Error in predict_preference: {str(e)}, available variables: {self.fit_result.stan_variables()}")
             return ModelPrediction(
                 probability=0.5,
                 uncertainty=1.0,
                 features_used=[],
                 computation_time=0.0
             )
-        
+                
     def predict_comfort_score(self, bigram: str) -> ModelPrediction:
         try:
             score, uncertainty = self.get_bigram_comfort_scores(bigram)
