@@ -211,7 +211,6 @@ def analyze_importance_distribution(df: pd.DataFrame, importance_threshold: floa
                 label=f'Median + 1MAD ({median + mad:.6f})')
     plt.axhline(y=median - mad, color='gray', linestyle=':',
                 label=f'Median - 1MAD ({median - mad:.6f})')
-    
     #plt.axhline(y=importance_threshold, color='r', linestyle='--',
     #            label=f'Current threshold ({importance_threshold:.6f})')
     
