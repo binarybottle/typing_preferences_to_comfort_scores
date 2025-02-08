@@ -230,37 +230,53 @@ def print_detailed_placement(score: float, positions: Tuple[str, ...],
     print_keyboard_layout(pos_map, f"Score: {score:.4f}")
     
     # Print bigram contributions with frequency and comfort components
-    print("\nBigram Details (sorted by impact):")
+    print("\nBigram Details (sorted by frequency):")
     print(f"{'Bigram':^6} {'Frequency':>10} {'Comfort':>10} {'Impact':>10}")
     print("-" * 38)
+    
+    # Get comfort scores once
+    comfort_scores = get_comfort_scores()
     
     # Get the component scores
     detailed_scores = []
     for bigram, impact in bigram_scores.items():
-        pos1 = position_to_letter[positions[letters.index(bigram[0])]]
-        pos2 = position_to_letter[positions[letters.index(bigram[1])]]
-        
-        # Map positions to left side if needed
-        if pos1 in RIGHT_POSITIONS:
-            pos1 = {
-                'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
-                'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
-                'm': 'v', ',': 'c', '.': 'x', '/': 'z'
-            }[pos1]
-        if pos2 in RIGHT_POSITIONS:
-            pos2 = {
-                'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
-                'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
-                'm': 'v', ',': 'c', '.': 'x', '/': 'z'
-            }[pos2]
-        
-        freq = bigram_frequencies.get(bigram, 0)
-        comfort = get_comfort_scores().get((pos1, pos2), float('-inf'))
-        detailed_scores.append((bigram, freq, comfort, impact))
+        # Get the positions these letters were assigned to
+        letter1, letter2 = bigram[0], bigram[1]
+        try:
+            pos1 = [pos for pos, let in position_to_letter.items() if let == letter1][0]
+            pos2 = [pos for pos, let in position_to_letter.items() if let == letter2][0]
+            
+            # Debug print
+            #print(f"Debug: {bigram}: {letter1} at {pos1}, {letter2} at {pos2}")
+            
+            # Map right-side positions to left-side if needed
+            if pos1 in RIGHT_POSITIONS:
+                pos1 = {
+                    'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
+                    'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
+                    'm': 'v', ',': 'c', '.': 'x', '/': 'z'
+                }[pos1]
+            if pos2 in RIGHT_POSITIONS:
+                pos2 = {
+                    'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
+                    'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
+                    'm': 'v', ',': 'c', '.': 'x', '/': 'z'
+                }[pos2]
+            
+            #print(f"Debug: mapped to {pos1}->{pos2}")
+            
+            freq = bigram_frequencies.get(bigram, 0)
+            comfort = comfort_scores.get((pos1, pos2), float('-inf'))
+            
+            #print(f"Debug: comfort score = {comfort}")
+            
+            detailed_scores.append((bigram, freq, comfort, impact))
+        except (KeyError, IndexError) as e:
+            print(f"Debug: Error processing bigram {bigram}: {e}")
     
-    # Sort by absolute impact and print
+    # Sort by frequency and print
     for bigram, freq, comfort, impact in sorted(detailed_scores, 
-                                              key=lambda x: abs(x[3]), 
+                                              key=lambda x: x[1], 
                                               reverse=True)[:10]:
         if impact != 0:
             print(f"{bigram:^6} {freq:>10.6f} {comfort:>10.4f} {impact:>10.6f}")
