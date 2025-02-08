@@ -229,12 +229,41 @@ def print_detailed_placement(score: float, positions: Tuple[str, ...],
     # Print visual keyboard layout
     print_keyboard_layout(pos_map, f"Score: {score:.4f}")
     
-    # Print bigram contributions
-    print("\nTop Bigram Contributions (sorted by impact):")
-    sorted_bigrams = sorted(bigram_scores.items(), key=lambda x: abs(x[1]), reverse=True)
-    for bigram, contribution in sorted_bigrams[:10]:  # Show top 10 contributions
-        if contribution != 0:
-            print(f"  {bigram}: {contribution:>10.6f}")
+    # Print bigram contributions with frequency and comfort components
+    print("\nBigram Details (sorted by impact):")
+    print(f"{'Bigram':^6} {'Frequency':>10} {'Comfort':>10} {'Impact':>10}")
+    print("-" * 38)
+    
+    # Get the component scores
+    detailed_scores = []
+    for bigram, impact in bigram_scores.items():
+        pos1 = position_to_letter[positions[letters.index(bigram[0])]]
+        pos2 = position_to_letter[positions[letters.index(bigram[1])]]
+        
+        # Map positions to left side if needed
+        if pos1 in RIGHT_POSITIONS:
+            pos1 = {
+                'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
+                'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
+                'm': 'v', ',': 'c', '.': 'x', '/': 'z'
+            }[pos1]
+        if pos2 in RIGHT_POSITIONS:
+            pos2 = {
+                'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',
+                'j': 'f', 'k': 'd', 'l': 's', ';': 'a',
+                'm': 'v', ',': 'c', '.': 'x', '/': 'z'
+            }[pos2]
+        
+        freq = bigram_frequencies.get(bigram, 0)
+        comfort = get_comfort_scores().get((pos1, pos2), float('-inf'))
+        detailed_scores.append((bigram, freq, comfort, impact))
+    
+    # Sort by absolute impact and print
+    for bigram, freq, comfort, impact in sorted(detailed_scores, 
+                                              key=lambda x: abs(x[3]), 
+                                              reverse=True)[:10]:
+        if impact != 0:
+            print(f"{bigram:^6} {freq:>10.6f} {comfort:>10.4f} {impact:>10.6f}")
 
 
 if __name__ == "__main__":
