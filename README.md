@@ -24,22 +24,22 @@ bigram_typing_preferences_to_comfort_scores/
 - config.yaml                   # Main configuration file
 - main.py                       # Pipeline implementation
 - memory-estimator.py           # Estimates memory requirements   
-  - bigram_typing_preferences_to_comfort_scores/                       
-     - features/                  
+- bigram_typing_preferences_to_comfort_scores/                       
+   - features/                  
        - analyze_features.py    # Analyze feature metrics to determine optimal importance - threshold
        - bigram_frequencies.py  # English language bigrams and bigram frequencies
        - feature_extraction.py  # Core feature computation
        - features.py            # Individual feature calculations
        - keymaps.py             # Keyboard layout definitions
-     - models/                  
+   - models/                  
        - preference_model.stan  # Stan MCMC model file
-     - utils/                     
+   - utils/                     
        - config.py              # Configuration validation
        - logging.py             # Logging system
        - visualization.py       # Visualization functions
-     - data.py                  # Dataset management
-     - model.py                 # Bayesian preference model
-     - recommendations.py       # Bigram pair recommendations
+   - data.py                  # Dataset management
+   - model.py                 # Bayesian preference model
+   - recommendations.py       # Bigram pair recommendations
 
 ## Core Components
 1. Data Processing (data.py)
