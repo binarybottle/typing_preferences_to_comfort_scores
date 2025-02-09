@@ -36,18 +36,18 @@ from typing import Dict, Any, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from engram3.utils.config import Config
-from engram3.data import PreferenceDataset
-from engram3.model import PreferenceModel
-from engram3.recommendations import BigramRecommender
-from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
-from engram3.features.features import angles
-from engram3.features.keymaps import (
+from bigram_typing_preferences_to_comfort_scores.utils.config import Config
+from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
+from bigram_typing_preferences_to_comfort_scores.model import PreferenceModel
+from bigram_typing_preferences_to_comfort_scores.recommendations import BigramRecommender
+from bigram_typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
+from bigram_typing_preferences_to_comfort_scores.features.features import angles
+from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
-from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
-from engram3.utils.logging import LoggingManager
+from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 def load_config(config_path: str) -> Dict[str, Any]:

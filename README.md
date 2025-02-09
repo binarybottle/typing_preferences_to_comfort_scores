@@ -1,9 +1,9 @@
 
-# Engram3: Keyboard Layout Optimization via Bayesian Preference Learning
+# bigram_typing_preferences_to_comfort_scores: Keyboard Layout Optimization via Bayesian Preference Learning
 ===================================================================
 A system for optimizing keyboard layouts using pairwise preference data and Bayesian modeling.
 
-https://github.com/yourname/engram3.git
+https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores.git
 
 Author: Arno Klein (binarybottle.com)
 
@@ -15,12 +15,13 @@ Author: Arno Klein (binarybottle.com)
 5. Use scores for keyboard layout optimization
 
 ## Project Structure
-engram3/                           
+bigram_typing_preferences_to_comfort_scores/                           
 ├── README                         # This file
 ├── config.yaml                    # Main configuration file
 ├── main.py                        # Pipeline implementation
 ├── memory-estimator.py            # Estimates memory requirements
-└── engram3/                       
+└──    
+    bigram_typing_preferences_to_comfort_scores/                       
     ├── features/                  
         ├── analyze_features.py    # Analyze feature metrics to determine optimal importance threshold
         ├── bigram_frequencies.py  # English language bigrams and bigram frequencies

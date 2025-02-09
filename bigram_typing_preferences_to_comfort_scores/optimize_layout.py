@@ -17,7 +17,7 @@ LEFT_POSITIONS = ['q', 'w', 'e', 'r', 'a', 's', 'd', 'f', 'z', 'x', 'c', 'v']
 #--------------------------------------------   
 def get_comfort_scores() -> Dict[Tuple[str, str], float]:
     """Load comfort scores from CSV file."""
-    df = pd.read_csv('estimated_bigram_scores.csv')
+    df = pd.read_csv('../output/data/estimated_bigram_scores.csv')
     comfort_scores = {}
     for _, row in df.iterrows():
         bigram = (row['first_char'], row['second_char'])
@@ -104,7 +104,7 @@ def find_best_placements(letters: str, positions: List[str],
             heapq.heappush(best_placements, (weighted_score, pos_perm, bigram_scores))
         
         count += 1
-        if count % 1000 == 0:
+        if count % 1000000 == 0:
             print(f"Evaluated {count} permutations...")
     
     print(f"Evaluated total of {count} permutations")
@@ -285,8 +285,8 @@ def print_detailed_placement(score: float, positions: Tuple[str, ...],
 if __name__ == "__main__":
 
     # Optimize consonant placement
-    num_consonants = 5  # Try with most frequent consonants
-    top_n = 1  # Return top placements
+    num_consonants = 8  # Try with most frequent consonants
+    top_n = 3  # Return top placements
 
     # Optimize consonant placement
     consonant_placements = optimize_consonant_layout(num_consonants, top_n)

@@ -1,4 +1,4 @@
-# engram3/config.py
+# bigram_typing_preferences_to_comfort_scores/config.py
 """
 Configuration and data structure definitions for keyboard layout optimization.
 

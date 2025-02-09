@@ -33,11 +33,11 @@ import logging
 import pandas as pd
 import numpy as np
 
-from engram3.utils.config import Preference
-from engram3.features.keymaps import *
-from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
-from engram3.features.bigram_frequencies import bigrams, bigram_frequencies_array
-from engram3.utils.logging import LoggingManager
+from bigram_typing_preferences_to_comfort_scores.utils.config import Preference
+from bigram_typing_preferences_to_comfort_scores.features.keymaps import *
+from bigram_typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
+from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = logging.getLogger(__name__)
     
 class PreferenceDataset:

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "engram3"
+name = "bigram_typing_preferences_to_comfort_scores"
 version = "0.1.0"
 description = ""
 authors = ["Arno Klein"]

@@ -62,10 +62,10 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 import gc
 from datetime import datetime, timedelta
 
-from engram3.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
-from engram3.data import PreferenceDataset
-from engram3.utils.visualization import PlottingUtils
-from engram3.utils.logging import LoggingManager
+from bigram_typing_preferences_to_comfort_scores.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
+from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
+from bigram_typing_preferences_to_comfort_scores.utils.visualization import PlottingUtils
+from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 def set_all_seeds(base_seed: int):
