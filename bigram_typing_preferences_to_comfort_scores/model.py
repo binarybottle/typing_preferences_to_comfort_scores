@@ -10,6 +10,7 @@ Core components:
 - Configurable feature interactions
 - Feature importance estimation
 - Control feature handling
+- Single-key score derivation
 
 2. Training Pipeline:
 - Feature preprocessing and standardization
@@ -20,6 +21,7 @@ Core components:
 
 3. Prediction Systems:
 - Bigram comfort score estimation
+- Single-key comfort score estimation
 - Uncertainty quantification
 - Feature interaction handling
 - Temporary model management
@@ -37,6 +39,7 @@ Core Features:
 - Bayesian uncertainty estimation
 - Resource-aware computation
 - Comprehensive error handling
+- Dual-level comfort score prediction (bigrams and single keys)
 """
 import random
 import cmdstanpy
@@ -58,14 +61,21 @@ import tempfile
 import os
 import shutil
 import psutil
-from tenacity import retry, stop_after_attempt, wait_fixed
 import gc
 from datetime import datetime, timedelta
+import matplotlib as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 from bigram_typing_preferences_to_comfort_scores.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
 from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
 from bigram_typing_preferences_to_comfort_scores.utils.visualization import PlottingUtils
 from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+    finger_map,
+    engram_position_values,
+    row_position_values
+)
 logger = LoggingManager.getLogger(__name__)
 
 def set_all_seeds(base_seed: int):
@@ -422,7 +432,237 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error predicting comfort score for {bigram}: {str(e)}")
             return ModelPrediction(probability=0.0, uncertainty=1.0)
-                                                
+
+    @staticmethod
+    def normalize_keymap_values(values_dict):
+        """
+        Normalize keymap values to [0,1] range where 1 = most discomfort
+        """
+        values = np.array(list(values_dict.values()))
+        min_val = values.min()
+        max_val = values.max()
+        return {k: (v - min_val)/(max_val - min_val) for k, v in values_dict.items()}
+
+    @staticmethod
+    def are_significantly_different(score_a, std_a, score_b, std_b, confidence_level=0.95):
+        """
+        Determine if two scores are significantly different using a simpler criterion
+        """
+        # Calculate the difference in terms of pooled standard deviations
+        diff = abs(score_a - score_b)
+        pooled_std = np.sqrt(std_a**2 + std_b**2)
+        
+        # Use 2 standard deviations as threshold (roughly 95% confidence)
+        return diff > 2 * pooled_std
+
+    def plot_key_scores(self, df, exclude_keys=None, title_suffix="", save_suffix=""):
+        """Create comfort score plot, optionally excluding certain keys."""
+        if exclude_keys:
+            df = df[~df['key'].isin(exclude_keys)].copy()
+        
+        fig = Figure(figsize=self.config.visualization.figure_size)
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+        
+        x = range(len(df))
+        ax.errorbar(x, 
+                    df['comfort_score'],
+                    yerr=df['uncertainty'],
+                    fmt='o',
+                    capsize=5,
+                    alpha=self.config.visualization.alpha)
+        
+        # Only compare adjacent keys
+        df = df.sort_values('comfort_score', ascending=False)
+        adjacent_differences = []
+
+        print("\nAnalyzing adjacent pairs:")
+        for i in range(len(df)-1):
+            key1, key2 = df.iloc[i]['key'], df.iloc[i+1]['key']
+            score1, std1 = df.iloc[i]['comfort_score'], df.iloc[i]['uncertainty']
+            score2, std2 = df.iloc[i+1]['comfort_score'], df.iloc[i+1]['uncertainty']
+            
+            diff = abs(score1 - score2)
+            pooled_std = np.sqrt(std1**2 + std2**2)
+            is_different = diff > 1 * pooled_std
+            
+            print(f"Pair {key1}-{key2}:")
+            print(f"  Scores: {score1:.3f} ± {std1:.3f} vs {score2:.3f} ± {std2:.3f}")
+            print(f"  Difference: {diff:.3f}, Pooled std: {pooled_std:.3f}")
+            print(f"  Significantly different: {is_different}")
+            
+            if is_different:
+                adjacent_differences.append((key1, key2))
+
+        print(f"\nNumber of adjacent differences found: {len(adjacent_differences)}")
+        print("Adjacent differences:", adjacent_differences)
+
+        # Add significance bars with distinct heights
+        y_min = df['comfort_score'].min()
+        y_max = df['comfort_score'].max()
+        plot_height = y_max - y_min
+
+        # Get the x positions for the keys (should be 0 through len(df)-1)
+        x_positions = {key: i for i, key in enumerate(df['key'])}
+
+        for i, (key1, key2) in enumerate(adjacent_differences):
+            # Use actual x positions instead of index lookups
+            x1 = x_positions[key1]
+            x2 = x_positions[key2]
+            bar_y = y_max + (0.1 + i * 0.05) * plot_height
+            ax.hlines(y=bar_y,
+                    xmin=x1, xmax=x2,
+                    color='red', alpha=0.7,
+                    linewidth=2)
+
+        # Adjust y-axis limits to show all lines
+        ax.set_ylim(y_min - 0.1 * plot_height, y_max + (0.1 + len(adjacent_differences) * 0.05) * plot_height)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(df['key'])
+        ax.set_ylabel('Comfort Score')
+        ax.set_xlabel('Key')
+        ax.set_title(f'Keyboard Key Comfort Scores with Uncertainty{title_suffix}')
+        ax.grid(True, alpha=0.3)
+        
+        plot_file = Path(self.config.paths.plots_dir) / f"key_comfort_scores{save_suffix}.png"
+        fig.savefig(plot_file, dpi=self.config.visualization.dpi, bbox_inches='tight')
+        logger.info(f"Plot saved to {plot_file}")
+        
+    def predict_key_scores(self):
+        """Predict comfort scores for individual keys using normalized values and model weights."""
+        try:
+            from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+                finger_map,
+                engram_position_values,
+                row_position_values
+            )
+            
+            # Get covariance matrix from fitted model
+            if hasattr(self.fit_result, 'stan_variables'):
+                # Get MCMC samples for all parameters
+                beta_samples = self.fit_result.stan_variable('beta')
+                # Calculate covariance matrix from MCMC samples
+                feature_covariance = np.cov(beta_samples.T)
+                logger.info("\nFeature covariance matrix shape: %s", feature_covariance.shape)
+            
+            # Normalize keymap values
+            norm_finger = self.normalize_keymap_values(finger_map)
+            norm_engram = self.normalize_keymap_values(engram_position_values)
+            norm_row = self.normalize_keymap_values(row_position_values)
+
+            logger.info("\nNormalized value ranges:")
+            logger.info(f"finger_map: {min(norm_finger.values()):.3f} to {max(norm_finger.values()):.3f}")
+            logger.info(f"engram_pos: {min(norm_engram.values()):.3f} to {max(norm_engram.values()):.3f}")
+            logger.info(f"row_pos: {min(norm_row.values()):.3f} to {max(norm_row.values()):.3f}")
+
+            # Get model weights
+            feature_weights = self.get_feature_weights()
+            single_key_features = [
+                'sum_finger_values',
+                'sum_engram_position_values', 
+                'sum_row_position_values',
+                'sum_finger_values_x_sum_row_position_values',
+                'sum_engram_position_values_x_sum_finger_values'
+            ]
+            
+            # Get feature indices for covariance lookup
+            feature_indices = {f: i for i, f in enumerate(self.feature_names)
+                            if f in single_key_features}
+            
+            relevant_weights = {
+                feature: feature_weights[feature] 
+                for feature in single_key_features
+                if feature in feature_weights
+            }
+            
+            logger.info("\nUse these single-key relevant weights from model:")
+            for feature, (weight, std) in relevant_weights.items():
+                logger.info(f"{feature}: {weight:.3f} ± {std:.3f}")
+            
+            layout_chars = self.config.data.layout['chars']
+            results = []
+
+            # Create new consecutive indices just for our single-key features
+            single_key_indices = {feature: idx for idx, feature in enumerate(single_key_features)}
+            
+            logger.info("\nSingle key feature indices:")
+            logger.info(single_key_indices)  # Should show indices 0-4 instead of 2,7,8,9,12
+
+            # Get the subset of the covariance matrix we need
+            full_indices = [feature_indices[f] for f in single_key_features]
+            reduced_covariance = feature_covariance[np.ix_(full_indices, full_indices)]
+            
+            # After creating reduced covariance:
+            logger.info("\nReduced covariance matrix:")
+            logger.info("Features: %s", single_key_features)
+            logger.info("\n".join([f"{row}" for row in reduced_covariance]))
+
+            for key in layout_chars:
+                key_values = {
+                    'sum_finger_values': norm_finger[key],
+                    'sum_engram_position_values': norm_engram[key],
+                    'sum_row_position_values': norm_row[key],
+                    'sum_finger_values_x_sum_row_position_values': 
+                        norm_finger[key] * norm_row[key],
+                    'sum_engram_position_values_x_sum_finger_values': 
+                        norm_engram[key] * norm_finger[key]
+                }
+                
+                score = 0.0
+                feature_values = np.zeros(len(single_key_features))  # Now size 5
+                
+                for feature, value in key_values.items():
+                    if feature in relevant_weights:
+                        weight, _ = relevant_weights[feature]
+                        score += value * weight
+                        if feature in single_key_indices:  # Use new indices
+                            feature_values[single_key_indices[feature]] = value
+
+                # Calculate variance with reduced covariance matrix
+                score_variance = feature_values.T @ reduced_covariance @ feature_values
+                score_std = np.sqrt(max(0, score_variance))
+
+                results.append({
+                    'key': key,
+                    'comfort_score': score,
+                    'uncertainty': score_std,
+                    'normalized_values': key_values
+                })
+            
+            # Create DataFrame and sort by comfort score
+            df = pd.DataFrame(results)
+            df = df.sort_values('comfort_score', ascending=False)
+            
+            # Log feature covariances
+            logger.info("\nFeature covariances:")
+            for i, feat1 in enumerate(single_key_features):
+                if feat1 not in feature_indices:
+                    continue
+                idx1 = feature_indices[feat1]
+                for j, feat2 in enumerate(single_key_features):
+                    if feat2 not in feature_indices:
+                        continue
+                    idx2 = feature_indices[feat2]
+                    cov = feature_covariance[idx1, idx2]
+                    if abs(cov) > 1e-6:  # Only show non-zero covariances
+                        logger.info(f"{feat1} - {feat2}: {cov:.6f}")
+
+            # Create full plot
+            self.plot_key_scores(df)
+            
+            # Create filtered plot
+            exclude_keys = ['t', 'g', 'b']
+            self.plot_key_scores(df, exclude_keys=exclude_keys,
+                                 title_suffix=" (Filtered)",
+                                 save_suffix="_filtered")
+
+            return df
+
+        except Exception as e:
+            logger.error(f"Error in predict_key_scores: {str(e)}")
+            raise
+                                                                
     #--------------------------------------------
     # Resource management methods
     #--------------------------------------------
@@ -1895,6 +2135,25 @@ class PreferenceModel:
             pickle.dump(save_dict, f)
         logger.info(f"Model saved to {path}")
 
+    @staticmethod
+    def _convert_legacy_config(config_obj):
+        """Temporary helper to convert old saved Config objects to dictionary format."""
+        try:
+            # Manual conversion of the nested structure
+            return {
+                'paths': dict(config_obj.paths),
+                'model': dict(config_obj.model),
+                'feature_selection': dict(config_obj.feature_selection),
+                'features': dict(config_obj.features),
+                'data': dict(config_obj.data),
+                'recommendations': dict(config_obj.recommendations),
+                'logging': dict(config_obj.logging),
+                'visualization': dict(config_obj.visualization)
+            }
+        except AttributeError:
+            # If already a dict, return as is
+            return config_obj
+
     @classmethod
     def load(cls, path: Path) -> 'PreferenceModel':
         """Load model state from file."""
@@ -1903,7 +2162,12 @@ class PreferenceModel:
             with open(path, 'rb') as f:
                 save_dict = pickle.load(f)
             
-            model = cls(config=save_dict['config'])
+            # Convert legacy config format
+            config_data = cls._convert_legacy_config(save_dict['config'])
+            config = Config(**config_data)
+            
+            model = cls(config=config)
+
             try:
                 # Core model attributes
                 model.feature_names = save_dict['feature_names']
@@ -1930,7 +2194,7 @@ class PreferenceModel:
         except Exception as e:
             logger.error(f"Error loading model from {path}: {e}")
             raise
-
+                        
     #--------------------------------------------
     # Properties
     #--------------------------------------------

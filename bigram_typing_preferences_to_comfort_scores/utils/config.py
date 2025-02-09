@@ -195,8 +195,9 @@ class ModelSettings(BaseModel):
     feature_scale: float = Field(gt=0)
     participant_scale: float = Field(gt=0)
     required_temp_mb: int = 2000  # Default value for required temp space
-    predictions_file: str
-    model_file: str
+    bigram_comfort_predictions_file: str = "output/data/estimated_bigram_scores.csv"
+    key_comfort_predictions_file: str = "output/data/key_comfort_scores.csv"
+    model_file: str="output/data/bigram_score_prediction_model.pkl"
     
 class DataConfig(BaseModel):
     """Data configuration."""
@@ -263,6 +264,9 @@ class PathsConfig(BaseModel):
 class VisualizationConfig(BaseModel):
     """Visualization settings."""
     dpi: int = 300
+    alpha: float = 0.6
+    figure_size: tuple = (12, 8)  # Add this line
+    color_map: str = "viridis"
 
 #--------------------------------------------
 # Main configuration

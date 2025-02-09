@@ -119,7 +119,8 @@ model:                                 # Bayesian model parameters (Stan)
   feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   required_temp_mb: 2000               # Required temporary space in MB
-  predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted comfort scores
+  bigram_comfort_predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted bigram comfort scores
+  key_comfort_predictions_file: "output/data/estimated_key_scores.csv"         # File to store predicted single-key comfort scores
   model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
 
 #-----------------------------------------------------------------------

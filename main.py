@@ -1,9 +1,12 @@
 # main.py
 """
-Command-line pipeline for estimating latent bigram typing comfort scores through preference learning.
+Command-line pipeline for estimating both bigram and single-key typing comfort scores through preference learning.
 
 The input is bigram typing preference data (which bigram is easier to type?),
-and the output is a set of latent bigram typing comfort scores.
+and the output includes:
+1. Latent bigram typing comfort scores
+2. Individual key comfort scores derived from the bigram model
+
 The goal is to use these scores to optimize keyboard layouts.
 Core features:
 
@@ -18,7 +21,8 @@ Core features:
 - select_features: Iterative feature selection with CV
 - recommend_bigram_pairs: Generate diverse pair recommendations
 - train_model: Train on selected features with splits
-- predict_bigram_scores: Generate comfort predictions
+- predict_bigram_scores: Generate bigram comfort predictions
+- predict_key_scores: Generate individual key comfort predictions
 
 3. Resource Handling:
 - Memory monitoring
@@ -49,6 +53,13 @@ from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
 from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
 from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
+
+# I renamed the repository/module, so need to symlink the module name in the pickle files
+# Create an alias from old to new package name
+import sys
+import importlib
+sys.modules['engram3'] = importlib.import_module('bigram_typing_preferences_to_comfort_scores')
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -166,9 +177,9 @@ def main():
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['analyze_features', 'select_features', 
                                            'recommend_bigram_pairs', 'train_model',
-                                           'predict_bigram_scores'], 
-                       required=True,
-                       help='Pipeline mode: feature selection, model training, or bigram recommendations')
+                                           'predict_bigram_scores', 'predict_key_scores'],  # Added new mode
+                        required=True,
+                        help='Pipeline mode: feature selection, model training, 1-/2-gram comfort predictions')
     args = parser.parse_args()
     
     print("\n=== Program Start ===")
@@ -557,7 +568,7 @@ def main():
                 })
 
             # Save results
-            bigram_scores_file = Path(config.model.predictions_file)
+            bigram_scores_file = Path(config.model.bigram_comfort_predictions_file)
             pd.DataFrame(results).to_csv(bigram_scores_file, index=False)
             logger.info(f"Saved comfort scores for {len(all_bigrams)} bigrams to {bigram_scores_file}")
 
@@ -567,6 +578,37 @@ def main():
             logger.info(f"Mean comfort score: {df['comfort_score'].mean():.3f}")
             logger.info(f"Score range: {df['comfort_score'].min():.3f} to {df['comfort_score'].max():.3f}")
             logger.info(f"Mean uncertainty: {df['uncertainty'].mean():.3f}")
+
+        #---------------------------------
+        # Predict single-key scores
+        #---------------------------------
+        elif args.mode == 'predict_key_scores':
+            logger.info("\n=== PREDICT KEY SCORES MODE ===")
+            # Load selected features
+            feature_metrics_file = Path(config.feature_selection.metrics_file)
+            if not feature_metrics_file.exists():
+                raise FileNotFoundError("Feature metrics file not found. Run feature selection first.")      
+            feature_metrics_df = pd.read_csv(feature_metrics_file)
+            
+            # Load trained model
+            logger.info("Loading trained model...")
+            model_save_path = Path(config.model.model_file)
+            trained_model = PreferenceModel.load(model_save_path)
+            
+            # Calculate comfort scores for all keys
+            logger.info("Calculating key comfort scores...")
+            results = trained_model.predict_key_scores()
+            
+            # Save results
+            key_scores_file = Path(config.model.key_comfort_predictions_file)
+            results.to_csv(key_scores_file, index=False)
+            logger.info(f"Saved comfort scores for {len(results)} keys to {key_scores_file}")
+            
+            # Generate summary statistics
+            logger.info("\nComfort Score Summary:")
+            logger.info(f"Mean comfort score: {results['comfort_score'].mean():.3f}")
+            logger.info(f"Score range: {results['comfort_score'].min():.3f} to {results['comfort_score'].max():.3f}")
+            logger.info(f"Mean uncertainty: {results['uncertainty'].mean():.3f}")
 
         logger.info("Pipeline completed successfully")
         
