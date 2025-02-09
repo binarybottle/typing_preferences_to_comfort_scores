@@ -1,7 +1,8 @@
 
-# bigram_typing_preferences_to_comfort_scores: Keyboard Layout Optimization via Bayesian Preference Learning
+# bigram_typing_preferences_to_comfort_scores: 
+Converting preferences of typing one bigram over another 
+to individual bigram comfort scores via Bayesian Preference Learning
 ===================================================================
-A system for optimizing keyboard layouts using pairwise preference data and Bayesian modeling.
 
 https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores.git
 
