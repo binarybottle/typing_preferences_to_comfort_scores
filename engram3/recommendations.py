@@ -44,17 +44,23 @@ class BigramRecommender:
     def __init__(self, 
                 dataset: PreferenceDataset, 
                 model: PreferenceModel, 
-                config: Union[Dict, Config]):
+                config: Union[Dict, Config],
+                excluded_chars: Optional[List[str]] = None):  # New parameter
         """
         Initialize recommender with dataset, model and configuration.
         
-        Validates inputs and sets up state tracking for recommendations.
+        Args:
+            dataset: PreferenceDataset containing existing preference data
+            model: Trained PreferenceModel
+            config: Configuration dictionary or Config object
+            excluded_chars: List of characters to exclude from recommendations
         """
         # Core components
         self.dataset = dataset
         self.model = model
         self.config = config if isinstance(config, Config) else Config(**config)
         self.feature_extractor = model.feature_extractor
+        self.excluded_chars = set(excluded_chars or [])  # Convert to set for O(1) lookup
         
         # Validate core requirements
         if not dataset.preferences:
@@ -84,7 +90,14 @@ class BigramRecommender:
         self._feature_cache: Dict = {}
         
         # Layout information
-        self.layout_chars = self.config.data.layout["chars"]
+        self.layout_chars = [c for c in self.config.data.layout["chars"] 
+                             if c not in self.excluded_chars]
+        
+        if not self.layout_chars:
+            raise ValueError("No valid characters remaining after exclusion")
+        
+        logger.info(f"Initialized with {len(self.excluded_chars)} excluded characters: {sorted(self.excluded_chars)}")
+        logger.info(f"Using {len(self.layout_chars)} characters for recommendations: {sorted(self.layout_chars)}")
 
     #--------------------------------------------
     # Core class structure and basic functions
@@ -224,7 +237,8 @@ class BigramRecommender:
     # Scoring system
     #--------------------------------------------
     def _generate_candidates(self) -> List[Tuple[str, str]]:
-        # Generate possible bigrams
+        """Generate candidate bigram pairs, excluding specified characters."""
+        # Generate possible bigrams using only allowed characters
         bigrams = []
         for c1, c2 in combinations(self.layout_chars, 2):
             if c1 != c2:  # Exclude same-character bigrams
@@ -235,6 +249,9 @@ class BigramRecommender:
             (b1, b2) for b1, b2 in combinations(bigrams, 2)
             if (b1, b2) not in self._existing_pairs 
             and (b2, b1) not in self._existing_pairs
+            # Additional check to ensure no excluded characters
+            and not any(c in self.excluded_chars 
+                       for c in b1 + b2)
         ]
         
         # Sample if too many
@@ -246,7 +263,7 @@ class BigramRecommender:
             )
             candidates = [candidates[i] for i in indices]
         
-        logger.info(f"Generated {len(candidates)} candidate pairs")
+        logger.info(f"Generated {len(candidates)} candidate pairs after filtering")
         return candidates
            
     def _score_candidates(self, candidates: List[Tuple[str, str]], 
@@ -426,16 +443,110 @@ class BigramRecommender:
     #--------------------------------------------
     # Visualization method
     #--------------------------------------------
-    def visualize_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
-        """Visualize feature differences with separate figures."""
+    def visualize_feature_space(self):
+        """Create a feature space coverage plot showing only existing data and possible pairs."""
+        try:
+            # Get feature differences for existing pairs
+            existing_differences = []
+            for pref in self.dataset.preferences:
+                if not any(c in self.excluded_chars for c in pref.bigram1 + pref.bigram2):
+                    diff = self._get_pair_features(pref.bigram1, pref.bigram2)
+                    existing_differences.append(diff)
+            existing_differences = np.array(existing_differences)
+            logger.info(f"Existing differences shape (after filtering): {existing_differences.shape}")
+
+            # Generate filtered possible pair differences
+            all_bigrams = [c1 + c2 for c1 in self.layout_chars 
+                        for c2 in self.layout_chars if c1 != c2]
+            
+            possible_differences = []
+            possible_pairs = list(combinations(all_bigrams, 2))
+            
+            logger.info(f"Generating features for {len(possible_pairs)} possible pairs (after filtering)...")
+            for b1, b2 in possible_pairs:
+                diff = self._get_pair_features(b1, b2)
+                possible_differences.append(diff)
+            possible_differences = np.array(possible_differences)
+            logger.info(f"Possible differences shape: {possible_differences.shape}")
+
+            # Create PCA Space Plot
+            plt.figure(figsize=(12, 8))
+            
+            # Fit PCA on everything
+            pca = PCA(n_components=2)
+            all_features = np.vstack([existing_differences, possible_differences])
+            all_projected = pca.fit_transform(all_features)
+
+            # Split back into groups
+            n_existing = len(existing_differences)
+            existing_projected = all_projected[:n_existing]
+            possible_projected = all_projected[n_existing:]
+
+            # Plot with just existing data and possible pairs
+            plt.scatter(possible_projected[:, 0], possible_projected[:, 1],
+                    alpha=0.05, label=f'Possible Pairs ({len(possible_pairs)})', color='gray')
+            plt.scatter(existing_projected[:, 0], existing_projected[:, 1],
+                    alpha=0.5, label='Existing Data', color='blue')
+            
+            plt.title('Feature Difference Space Coverage')
+            plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+            plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+            plt.legend(bbox_to_anchor=(0.5, -0.15), loc='upper center', ncol=2)
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            output_path = Path(self.config.paths.plots_dir) / 'feature_space_coverage_no_recommendations.png'
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            logger.info(f"Saved visualization to {output_path}")
+
+        except Exception as e:
+            logger.error(f"Error creating feature space visualization: {str(e)}")
+            raise
+        
+    def visualize_feature_space_with_recommendations(self, recommended_pairs: List[Tuple[str, str]]):
+        """Visualize feature differences with separate figures.
+        
+        feature distribution plot:
+        
+        Each group of three bars represents a different feature from your model. 
+        These features include:
+        - Base features like typing_time, same_finger, sum_finger_values, etc.
+        - Interaction features like combinations of the base features
+
+        For each feature, there are three bars side by side:
+        - Blue bar: Distribution of the feature in your existing dataset
+        - Red bar: Distribution of the feature in the recommended pairs
+        - Gray bar: Distribution of the feature across all possible pairs
+
+        For each bar:
+        - The height of the bar represents the median value of that feature
+        - The vertical line through each bar shows the 25th to 75th percentile range
+          - Bottom of line: 25th percentile
+          - Top of line: 75th percentile
+
+        This gives you a sense of both the central tendency (median) and spread (interquartile range) of each feature
+        The plot helps you understand:
+        - How the recommended pairs compare to existing data in terms of feature coverage
+        - Whether certain features are over/under-represented in your recommendations
+        - The full range of possible values for each feature
+        - Whether your existing data is representative of the full feature space
+        - Whether your recommendations are helping to fill gaps in feature coverage
+
+        For example, if a red bar (recommendations) is much higher than the blue bar (existing data) for a particular feature, it means the recommender is suggesting pairs that explore more extreme values of that feature than what exists in your current dataset.
+        
+        """
         try:
             # Get feature differences for existing and recommended pairs
             existing_differences = []
             for pref in self.dataset.preferences:
-                diff = self._get_pair_features(pref.bigram1, pref.bigram2)
-                existing_differences.append(diff)
+                # Only include existing pairs that don't contain excluded characters
+                if not any(c in self.excluded_chars for c in pref.bigram1 + pref.bigram2):
+                    diff = self._get_pair_features(pref.bigram1, pref.bigram2)
+                    existing_differences.append(diff)
             existing_differences = np.array(existing_differences)
-            logger.info(f"Existing differences shape: {existing_differences.shape}")
+            logger.info(f"Existing differences shape (after filtering): {existing_differences.shape}")
 
             recommended_differences = []
             for b1, b2 in recommended_pairs:
@@ -444,14 +555,14 @@ class BigramRecommender:
             recommended_differences = np.array(recommended_differences)
             logger.info(f"Recommended differences shape: {recommended_differences.shape}")
 
-            # Generate all possible pair differences
-            chars = self.config.data.layout['chars']
-            all_bigrams = [c1 + c2 for c1 in chars for c2 in chars if c1 != c2]
+            # Generate filtered possible pair differences
+            all_bigrams = [c1 + c2 for c1 in self.layout_chars 
+                         for c2 in self.layout_chars if c1 != c2]
             
             possible_differences = []
             possible_pairs = list(combinations(all_bigrams, 2))
             
-            logger.info(f"Generating features for all {len(possible_pairs)} possible pairs...")
+            logger.info(f"Generating features for {len(possible_pairs)} possible pairs (after filtering)...")
             for b1, b2 in possible_pairs:
                 diff = self._get_pair_features(b1, b2)
                 possible_differences.append(diff)
@@ -538,3 +649,67 @@ class BigramRecommender:
             logger.error(f"Error visualizing recommendations: {str(e)}")
             raise
     
+    def visualize_feature_distributions(self):
+        """Create a feature distributions plot showing only existing data and possible ranges."""
+        try:
+            # Get feature differences for existing pairs (filtered)
+            existing_differences = []
+            for pref in self.dataset.preferences:
+                if not any(c in self.excluded_chars for c in pref.bigram1 + pref.bigram2):
+                    diff = self._get_pair_features(pref.bigram1, pref.bigram2)
+                    existing_differences.append(diff)
+            existing_differences = np.array(existing_differences)
+
+            # Generate filtered possible pair differences
+            all_bigrams = [c1 + c2 for c1 in self.layout_chars 
+                        for c2 in self.layout_chars if c1 != c2]
+            
+            possible_differences = []
+            possible_pairs = list(combinations(all_bigrams, 2))
+            
+            for b1, b2 in possible_pairs:
+                diff = self._get_pair_features(b1, b2)
+                possible_differences.append(diff)
+            possible_differences = np.array(possible_differences)
+
+            # Create distributions plot
+            plt.figure(figsize=(12, 8))
+            
+            feature_names = list(self.model.get_feature_weights(include_control=True).keys())
+            x = np.arange(len(feature_names))
+            width = 0.35  # Wider bars since we only have two categories
+            
+            # Calculate percentiles for both groups
+            def get_percentiles(features):
+                return np.percentile(features, [25, 50, 75], axis=0)
+            
+            existing_stats = get_percentiles(existing_differences)
+            possible_stats = get_percentiles(possible_differences)
+            
+            # Plot distributions
+            plt.bar(x - width/2, existing_stats[1], width, 
+                label='Existing Data', color='blue', alpha=0.5)
+            plt.vlines(x - width/2, existing_stats[0], existing_stats[2],
+                    color='blue', alpha=0.3)
+            
+            plt.bar(x + width/2, possible_stats[1], width,
+                label='Possible Range', color='gray', alpha=0.3)
+            plt.vlines(x + width/2, possible_stats[0], possible_stats[2],
+                    color='gray', alpha=0.2)
+            
+            plt.title('Feature Difference Distributions')
+            plt.xticks(x, feature_names, rotation=45, ha='right')
+            plt.legend(loc='upper left')
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            output_path = Path(self.config.paths.plots_dir) / 'feature_distributions_no_recommendations.png'
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+
+            logger.info(f"Saved feature distributions visualization to {output_path}")
+
+        except Exception as e:
+            logger.error(f"Error creating feature distributions visualization: {str(e)}")
+            raise
+        

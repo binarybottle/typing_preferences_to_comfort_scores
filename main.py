@@ -34,15 +34,12 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple
 from pathlib import Path
-import matplotlib.pyplot as plt
-from itertools import combinations
 from datetime import datetime
 
 from engram3.utils.config import Config
 from engram3.data import PreferenceDataset
 from engram3.model import PreferenceModel
 from engram3.recommendations import BigramRecommender
-from engram3.utils.visualization import plot_feature_space
 from engram3.features.feature_extraction import FeatureExtractor, FeatureConfig
 from engram3.features.features import angles
 from engram3.features.keymaps import (
@@ -442,15 +439,27 @@ def main():
             selection_model_save_path = Path(config.feature_selection.model_file)
             feature_selection_model = PreferenceModel.load(selection_model_save_path)
             
-            # Initialize recommender with include_control=True
+            # Specify characters to exclude (example)
+            excluded_chars = [] #['t', 'g', 'b']  # Add excluded characters here
+            
+            # Initialize recommender with excluded characters
             logger.info("Generating bigram pair recommendations...")
-            recommender = BigramRecommender(dataset, feature_selection_model, config)
+            recommender = BigramRecommender(
+                dataset, 
+                feature_selection_model, 
+                config,
+                excluded_chars=excluded_chars
+            )
+    
+            recommender.visualize_feature_space()
+            recommender.visualize_feature_distributions()
+
             logger.debug(f"Using features (including control): {feature_selection_model.get_feature_weights(include_control=True).keys()}")
             recommended_pairs = recommender.recommend_pairs()
             
             # Visualize recommendations
             logger.info("Visualizing recommendations...")
-            recommender.visualize_recommendations(recommended_pairs)
+            recommender.visualize_feature_space_with_recommendations(recommended_pairs)
             
             # Save recommendations
             recommendations_file = Path(config.recommendations.recommendations_file)
