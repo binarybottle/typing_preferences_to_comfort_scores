@@ -114,8 +114,8 @@ __model_slow: &model_train
 
 model:                                 # Bayesian model parameters (Stan)
   #<<: *feature_analysis               # Model feature analysis settings
-  <<: *feature_selection               # Model feature selection settings
-  #<<: *model_train                    # Model training settings
+  #<<: *feature_selection               # Model feature selection settings
+  <<: *model_train                    # Model training settings
   feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   required_temp_mb: 2000               # Required temporary space in MB
@@ -149,30 +149,59 @@ paths:                                # Directory structure for outputs
 # Excluded features: below threshold determined in analyze_features mode
 #-----------------------------------------------------------------------
 ### |
-  excluded interactions: # (25)
-    - ['sum_finger_values', 'adj_finger_diff_row']
-    - ['outward_roll', 'rows_apart']
-    - ['outward_roll', 'angle_apart']
-    - ['outward_roll', 'adj_finger_diff_row']
-    - ['outward_roll', 'sum_engram_position_values']
-    - ['rows_apart', 'adj_finger_diff_row']
-    - ['rows_apart', 'sum_row_position_values']
-    - ['angle_apart', 'adj_finger_diff_row']
-    - ['adj_finger_diff_row', 'sum_row_position_values']
-    - ['sum_finger_values', 'outward_roll', 'rows_apart']
-    - ['sum_finger_values', 'outward_roll', 'angle_apart']
-    - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
-    - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
-    - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
-    - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
-    - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
-    - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
-    - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
-    - ['outward_roll', 'rows_apart', 'sum_row_position_values']
-    - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
-    - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
-    - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
-    - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
-    - ['rows_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
-    - ['angle_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
-###
+excluded interactions: # (25)
+  - ['sum_finger_values', 'adj_finger_diff_row']
+  - ['outward_roll', 'rows_apart']
+  - ['outward_roll', 'angle_apart']
+  - ['outward_roll', 'adj_finger_diff_row']
+  - ['outward_roll', 'sum_engram_position_values']
+  - ['rows_apart', 'adj_finger_diff_row']
+  - ['rows_apart', 'sum_row_position_values']
+  - ['angle_apart', 'adj_finger_diff_row']
+  - ['adj_finger_diff_row', 'sum_row_position_values']
+  - ['sum_finger_values', 'outward_roll', 'rows_apart']
+  - ['sum_finger_values', 'outward_roll', 'angle_apart']
+  - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
+  - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
+  - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
+  - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
+  - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
+  - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
+  - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
+  - ['outward_roll', 'rows_apart', 'sum_row_position_values']
+  - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
+  - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
+  - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
+  - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
+  - ['rows_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
+  - ['angle_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
+
+Selected 26 features:
+  - rows_apart
+  - sum_row_position_values
+  - angle_apart
+  - sum_engram_position_values
+  - sum_finger_values
+  - same_finger
+  - typing_time
+  - sum_finger_values_x_sum_row_position_values
+  - angle_apart_x_sum_engram_position_values_x_sum_finger_values
+  - sum_engram_position_values_x_sum_finger_values
+  - rows_apart_x_sum_finger_values
+  - rows_apart_x_sum_finger_values_x_sum_row_position_values
+  - rows_apart_x_sum_engram_position_values_x_sum_finger_values
+  - same_finger_x_sum_row_position_values
+  - adj_finger_diff_row
+  - adj_finger_diff_row_x_sum_engram_position_values_x_sum_finger_values
+  - rows_apart_x_same_finger
+  - rows_apart_x_sum_engram_position_values
+  - outward_roll_x_sum_row_position_values
+  - angle_apart_x_sum_engram_position_values
+  - adj_finger_diff_row_x_sum_engram_position_values
+  - angle_apart_x_sum_finger_values
+  - outward_roll_x_sum_finger_values_x_sum_row_position_values
+  - adj_finger_diff_row_x_rows_apart_x_sum_row_position_values
+  - outward_roll_x_sum_finger_values
+  - outward_roll
+
+  ###
