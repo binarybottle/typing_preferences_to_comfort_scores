@@ -12,7 +12,7 @@
 # Input data and key layout
 #-----------------------------------------------------------------------
 data:                                   # Path to processed preference data
-  input_file: "data/input/processed_bigram_data_201of452participants.csv"
+  input_file: "data/input/processed_bigram_data_study6_17participants.csv"
   input_file2:                          # Additional training data
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
