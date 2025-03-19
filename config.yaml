@@ -12,8 +12,8 @@
 # Input data and key layout
 #-----------------------------------------------------------------------
 data:                                   # Path to processed preference data
-  input_file: "data/nonprolific_processed_bigram_data.csv"
-  #input_file: "data/nonprolific_prolific_processed_bigram_data.csv"
+  #input_file: "data/nonprolific_processed_bigram_data.csv"
+  input_file: "data/nonprolific_prolific_processed_bigram_data.csv"
   input_file2:                          # Additional training data
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
@@ -31,7 +31,7 @@ data:                                   # Path to processed preference data
 # Select from among features not excluded in the analyze_features mode 
 # (see "Excluded features" below; base features required for included interactions are retained).
 feature_selection:
-  importance_threshold: 0.0004          # Threshold for aligned effect importance (median importance from analyze_features mode)
+  importance_threshold: 0.001965        # Threshold for aligned effect importance (elbow importance from analyze_features mode)
   cross_validation:
     n_splits: 5                         # Number of CV folds for evaluating importance
     min_fold_size: 100                  # Minimum number of preferences per fold
@@ -50,7 +50,7 @@ features:                               # features to analyze and select from
     - sum_engram_position_values        # Combined Engram position values
     - sum_row_position_values           # Combined row position values
     
-  interactions: # (17)
+  interactions: # (16/17 original, 16 new, 10 excluded)
     - ['sum_finger_values', 'sum_row_position_values']
     - ['sum_finger_values', 'rows_apart']
     - ['sum_finger_values', 'angle_apart', 'sum_engram_position_values']
@@ -67,28 +67,18 @@ features:                               # features to analyze and select from
     - ['outward_roll', 'sum_row_position_values']
     - ['rows_apart', 'adj_finger_diff_row', 'sum_row_position_values']
     - ['sum_finger_values', 'outward_roll', 'sum_row_position_values']
-    - ['sum_finger_values', 'outward_roll']
 
-    - ['sum_finger_values', 'adj_finger_diff_row']
     - ['outward_roll', 'rows_apart']
-    - ['outward_roll', 'angle_apart']
-    - ['outward_roll', 'adj_finger_diff_row']
-    - ['outward_roll', 'sum_engram_position_values']
     - ['rows_apart', 'adj_finger_diff_row']
     - ['rows_apart', 'sum_row_position_values']
-    - ['angle_apart', 'adj_finger_diff_row']
     - ['adj_finger_diff_row', 'sum_row_position_values']
     - ['sum_finger_values', 'outward_roll', 'rows_apart']
     - ['sum_finger_values', 'outward_roll', 'angle_apart']
-    - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
     - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
     - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
-    - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
     - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
-    - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
     - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
     - ['outward_roll', 'rows_apart', 'sum_row_position_values']
-    - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
     - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
     - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
     - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
@@ -131,8 +121,8 @@ __model_slow: &model_train
   adapt_delta: 0.95                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 model:                                 # Bayesian model parameters (Stan)
-  <<: *feature_analysis               # Model feature analysis settings
-  #<<: *feature_selection               # Model feature selection settings
+  #<<: *feature_analysis               # Model feature analysis settings
+  <<: *feature_selection               # Model feature selection settings
   #<<: *model_train                    # Model training settings
   feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
@@ -179,59 +169,15 @@ paths:                                # Directory structure for outputs
 # Excluded features: below threshold determined in analyze_features mode
 #-----------------------------------------------------------------------
 ### |
-excluded interactions: # (25)
-  - ['sum_finger_values', 'adj_finger_diff_row']
-  - ['outward_roll', 'rows_apart']
-  - ['outward_roll', 'angle_apart']
-  - ['outward_roll', 'adj_finger_diff_row']
-  - ['outward_roll', 'sum_engram_position_values']
-  - ['rows_apart', 'adj_finger_diff_row']
-  - ['rows_apart', 'sum_row_position_values']
-  - ['angle_apart', 'adj_finger_diff_row']
-  - ['adj_finger_diff_row', 'sum_row_position_values']
-  - ['sum_finger_values', 'outward_roll', 'rows_apart']
-  - ['sum_finger_values', 'outward_roll', 'angle_apart']
-  - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
-  - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
-  - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
-  - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
-  - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
-  - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
-  - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
-  - ['outward_roll', 'rows_apart', 'sum_row_position_values']
-  - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
-  - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
-  - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
-  - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
-  - ['rows_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
-  - ['angle_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
-
-Selected all 26 features:
-  - rows_apart
-  - sum_row_position_values
-  - angle_apart
-  - sum_engram_position_values
-  - sum_finger_values
-  - same_finger
-  - typing_time
-  - sum_finger_values_x_sum_row_position_values
-  - angle_apart_x_sum_engram_position_values_x_sum_finger_values
-  - sum_engram_position_values_x_sum_finger_values
-  - rows_apart_x_sum_finger_values
-  - rows_apart_x_sum_finger_values_x_sum_row_position_values
-  - rows_apart_x_sum_engram_position_values_x_sum_finger_values
-  - same_finger_x_sum_row_position_values
-  - adj_finger_diff_row
-  - adj_finger_diff_row_x_sum_engram_position_values_x_sum_finger_values
-  - rows_apart_x_same_finger
-  - rows_apart_x_sum_engram_position_values
-  - outward_roll_x_sum_row_position_values
-  - angle_apart_x_sum_engram_position_values
-  - adj_finger_diff_row_x_sum_engram_position_values
-  - angle_apart_x_sum_finger_values
-  - outward_roll_x_sum_finger_values_x_sum_row_position_values
-  - adj_finger_diff_row_x_rows_apart_x_sum_row_position_values
-  - outward_roll_x_sum_finger_values
-  - outward_roll
-
-  ###
+excluded interactions: # (10)
+    - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
+    - ['outward_roll', 'angle_apart']
+    - ['sum_finger_values', 'outward_roll']
+    - ['outward_roll', 'sum_engram_position_values']
+    - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'adj_finger_diff_row']
+    - ['outward_roll', 'adj_finger_diff_row']
+    - ['angle_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
+###

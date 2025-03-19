@@ -66,7 +66,8 @@ bigram_typing_preferences_to_comfort_scores/
 ## Operation Modes
 1. Feature Analysis
    ```bash
-   python main.py --config config.yaml --mode analyze_features```
+   python main.py --config config.yaml --mode analyze_features
+   python features/analyze_features.py --metrics ../output/data/feature_metrics.csv```
 
   - Determines feature importance thresholds
   - Evaluates feature interactions
