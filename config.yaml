@@ -12,7 +12,8 @@
 # Input data and key layout
 #-----------------------------------------------------------------------
 data:                                   # Path to processed preference data
-  input_file: "data/input/processed_bigram_data_study6_17participants.csv"
+  input_file: "data/nonprolific_processed_bigram_data.csv"
+  #input_file: "data/nonprolific_prolific_processed_bigram_data.csv"
   input_file2:                          # Additional training data
   splits:
     test_ratio: 0.2                     # Proportion of data used for testing (0.2 = 20%)
@@ -48,6 +49,7 @@ features:                               # features to analyze and select from
     - adj_finger_diff_row               # Adjacent fingers in different rows
     - sum_engram_position_values        # Combined Engram position values
     - sum_row_position_values           # Combined row position values
+    
   interactions: # (17)
     - ['sum_finger_values', 'sum_row_position_values']
     - ['sum_finger_values', 'rows_apart']
@@ -66,19 +68,35 @@ features:                               # features to analyze and select from
     - ['rows_apart', 'adj_finger_diff_row', 'sum_row_position_values']
     - ['sum_finger_values', 'outward_roll', 'sum_row_position_values']
     - ['sum_finger_values', 'outward_roll']
+
+    - ['sum_finger_values', 'adj_finger_diff_row']
+    - ['outward_roll', 'rows_apart']
+    - ['outward_roll', 'angle_apart']
+    - ['outward_roll', 'adj_finger_diff_row']
+    - ['outward_roll', 'sum_engram_position_values']
+    - ['rows_apart', 'adj_finger_diff_row']
+    - ['rows_apart', 'sum_row_position_values']
+    - ['angle_apart', 'adj_finger_diff_row']
+    - ['adj_finger_diff_row', 'sum_row_position_values']
+    - ['sum_finger_values', 'outward_roll', 'rows_apart']
+    - ['sum_finger_values', 'outward_roll', 'angle_apart']
+    - ['sum_finger_values', 'outward_roll', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'outward_roll', 'sum_engram_position_values']
+    - ['sum_finger_values', 'rows_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'angle_apart', 'adj_finger_diff_row']
+    - ['sum_finger_values', 'adj_finger_diff_row', 'sum_row_position_values']
+    - ['outward_roll', 'rows_apart', 'adj_finger_diff_row']
+    - ['outward_roll', 'rows_apart', 'sum_engram_position_values']
+    - ['outward_roll', 'rows_apart', 'sum_row_position_values']
+    - ['outward_roll', 'angle_apart', 'adj_finger_diff_row']
+    - ['outward_roll', 'angle_apart', 'sum_engram_position_values']
+    - ['outward_roll', 'adj_finger_diff_row', 'sum_engram_position_values']
+    - ['outward_roll', 'adj_finger_diff_row', 'sum_row_position_values']
+    - ['rows_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
+    - ['angle_apart', 'adj_finger_diff_row', 'sum_engram_position_values']
+
   control_features:                       # Features to control for but not analyze
     - bigram_frequency                    # Bigram frequency in the English language
-
-#-----------------------------------------------------------------------
-# Bigram pair recommendations
-#-----------------------------------------------------------------------
-recommendations:
-    n_recommendations: 50                # Number of bigram pairs to recommend (limited by the proposed data collection population size)
-    max_candidates: 5000                 # Maximum number of candidate pairs to evaluate
-    weights:                             # Scoring weights (must sum to 1.0)
-        information_gain: 0.618          # φ ≈ 0.618: Weight for model uncertainty reduction potential (the golden ratio provides a natural balance between two competing objectives)
-        coverage_value: 0.382            # 1 - φ: Weight for feature space coverage improvement
-    recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 #-----------------------------------------------------------------------
 # Model training
@@ -113,15 +131,26 @@ __model_slow: &model_train
   adapt_delta: 0.95                    # Target acceptance rate (higher = more careful sampling, fewer divergent transitions)
 
 model:                                 # Bayesian model parameters (Stan)
-  #<<: *feature_analysis               # Model feature analysis settings
+  <<: *feature_analysis               # Model feature analysis settings
   #<<: *feature_selection               # Model feature selection settings
-  <<: *model_train                    # Model training settings
+  #<<: *model_train                    # Model training settings
   feature_scale: 1.5                   # Scale parameter for feature weight priors (lower for more regularization)
   participant_scale: 0.5               # Scale parameter for participant effect priors (lower to reduce overfitting to individual participants)
   required_temp_mb: 2000               # Required temporary space in MB
   bigram_comfort_predictions_file: "output/data/estimated_bigram_scores.csv"   # File to store predicted bigram comfort scores
   key_comfort_predictions_file: "output/data/estimated_key_scores.csv"         # File to store predicted single-key comfort scores
   model_file: "output/data/bigram_score_prediction_model.pkl"   # File to store trained model
+
+#-----------------------------------------------------------------------
+# Bigram pair recommendations
+#-----------------------------------------------------------------------
+recommendations:
+    n_recommendations: 50                # Number of bigram pairs to recommend (limited by the proposed data collection population size)
+    max_candidates: 5000                 # Maximum number of candidate pairs to evaluate
+    weights:                             # Scoring weights (must sum to 1.0)
+        information_gain: 0.618          # φ ≈ 0.618: Weight for model uncertainty reduction potential (the golden ratio provides a natural balance between two competing objectives)
+        coverage_value: 0.382            # 1 - φ: Weight for feature space coverage improvement
+    recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 #-----------------------------------------------------------------------
 # Visualization, logging, and paths
