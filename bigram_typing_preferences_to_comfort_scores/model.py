@@ -365,6 +365,9 @@ class PreferenceModel:
                     if feature in self.feature_stats:
                         mean = self.feature_stats[feature]['mean']
                         std = self.feature_stats[feature]['std']
+                        if abs(std) < 1e-8:
+                            logger.warning(f"Feature '{feature}' has near-zero standard deviation ({std}).")
+                            std = 1e-8
                         feat1 = (feat1 - mean) / std
                         feat2 = (feat2 - mean) / std
                         
@@ -379,6 +382,9 @@ class PreferenceModel:
                 if feature in self.feature_stats:
                     mean = self.feature_stats[feature]['mean']
                     std = self.feature_stats[feature]['std']
+                    if abs(std) < 1e-8:
+                        logger.warning(f"Feature '{feature}' has near-zero standard deviation ({std}).")
+                        std = 1e-8
                     feat1 = (feat1 - mean) / std
                     feat2 = (feat2 - mean) / std
                     
@@ -1262,6 +1268,9 @@ class PreferenceModel:
                     feat2 = pref.features2.get(feature, 0.0)
                     mean = self.feature_stats[feature]['mean']
                     std = self.feature_stats[feature]['std']
+                    if abs(std) < 1e-8:
+                        logger.warning(f"Feature '{feature}' has near-zero standard deviation ({std}).")
+                        std = 1e-8
                     X1[i, j] = (feat1 - mean) / std
                     X2[i, j] = (feat2 - mean) / std
 
@@ -1271,6 +1280,9 @@ class PreferenceModel:
                     feat2 = pref.features2.get(feature, 0.0)
                     mean = self.feature_stats[feature]['mean']
                     std = self.feature_stats[feature]['std']
+                    if abs(std) < 1e-8:
+                        logger.warning(f"Feature '{feature}' has near-zero standard deviation ({std}).")
+                        std = 1e-8
                     C1[i, j] = (feat1 - mean) / std
                     C2[i, j] = (feat2 - mean) / std
 

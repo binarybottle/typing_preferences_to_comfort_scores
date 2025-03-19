@@ -409,7 +409,28 @@ def main():
                 logger.info("Calling model.select_features()...")
                 selected_features = model.select_features(processed_train, all_features)
                 logger.info(f"Feature selection completed. Selected features: {selected_features}")
-                
+
+                # Add check to ensure all base components of interactions are included
+                selected_interactions = [f for f in selected_features if '_x_' in f]
+                required_base_features = set()
+
+                # Collect all base features required by interactions
+                for interaction in selected_interactions:
+                    components = interaction.split('_x_')
+                    required_base_features.update(components)
+
+                # Add any missing base features
+                missing_base_features = []
+                for base_feature in required_base_features:
+                    if base_feature not in selected_features:
+                        logger.warning(f"Adding base feature '{base_feature}' required by selected interactions")
+                        missing_base_features.append(base_feature)
+
+                # Update selected features list with missing base features
+                if missing_base_features:
+                    logger.info(f"Added {len(missing_base_features)} base features required by interactions: {missing_base_features}")
+                    selected_features.extend(missing_base_features)
+
                 # Train model on training set and validate on held-out validation set
                 model.fit(feature_select_train, selected_features)
                 val_metrics = model.evaluate(feature_select_val)
