@@ -67,10 +67,21 @@ def load_config(config_path: str) -> Dict[str, Any]:
         config = yaml.safe_load(f)
     return config
 
-def load_or_create_split(dataset: PreferenceDataset, config: Dict) -> Tuple[PreferenceDataset, PreferenceDataset]:
+def load_or_create_split(dataset: PreferenceDataset, config: Dict, no_split: bool = False) -> Tuple[PreferenceDataset, PreferenceDataset]:
     """
     Load/create splits for both original and additional data if it exists.
+    If no_split is True, returns the full dataset for both train and test.
     """
+    # Handle the no-split case first
+    if no_split:
+        logger.info("No-split mode: Using full dataset for both training and testing")
+        all_indices = np.arange(len(dataset.preferences))
+        train_data = dataset._create_subset_dataset(all_indices)
+        test_data = dataset._create_subset_dataset(all_indices)
+        logger.info(f"Full dataset: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")
+        return train_data, test_data
+        
+    # Original splitting code follows below
     split_file = Path(config.data.splits['split_data_file'])
     
     try:
@@ -177,11 +188,12 @@ def main():
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['analyze_features', 'select_features', 
                                            'recommend_bigram_pairs', 'train_model',
-                                           'predict_bigram_scores', 'predict_key_scores'],  # Added new mode
+                                           'predict_bigram_scores', 'predict_key_scores'],
                         required=True,
                         help='Pipeline mode: feature selection, model training, 1-/2-gram comfort predictions')
+    parser.add_argument('--no-split', action='store_true', help='Use all data for training (no test split)')
     args = parser.parse_args()
-    
+
     print("\n=== Program Start ===")
     print(f"Mode argument: {args.mode}")
 
@@ -253,7 +265,7 @@ def main():
                 logger.info(f"Config control features: {config.features.control_features}")
 
                 # Load/create dataset split
-                train_data, test_data = load_or_create_split(dataset, config)
+                train_data, test_data = load_or_create_split(dataset, config, args.no_split)
                 logger.info(f"Split dataset:\n  Train: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")
 
                 # Initialize model
@@ -359,7 +371,7 @@ def main():
             all_features = base_features + interaction_features + control_features
             
             # Split data for feature selection
-            train_data, holdout_data = load_or_create_split(dataset, config)
+            train_data, holdout_data = load_or_create_split(dataset, config, args.no_split)
             feature_select_train, feature_select_val = train_data.split_by_participants(test_fraction=0.2)
 
             # Preprocess feature selection training data
@@ -511,7 +523,7 @@ def main():
             logger.info("\n=== TRAIN MODEL MODE ===")
 
             # Load train/test split
-            train_data, test_data = load_or_create_split(dataset, config)
+            train_data, test_data = load_or_create_split(dataset, config, args.no_split)
             
             # Load selected features including control features
             feature_metrics_file = Path(config.feature_selection.metrics_file)
