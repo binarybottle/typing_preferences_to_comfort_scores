@@ -534,7 +534,7 @@ class PreferenceModel:
         plot_file = Path(self.config.paths.plots_dir) / f"key_comfort_scores{save_suffix}.png"
         fig.savefig(plot_file, dpi=self.config.visualization.dpi, bbox_inches='tight')
         logger.info(f"Plot saved to {plot_file}")
-        
+
     def predict_key_scores(self):
         """Predict comfort scores for individual keys using normalized values and model weights."""
         try:
@@ -564,13 +564,29 @@ class PreferenceModel:
 
             # Get model weights
             feature_weights = self.get_feature_weights()
-            single_key_features = [
+            
+            # MODIFIED CODE: Only include single-key features that exist in the model
+            base_single_key_features = [
                 'sum_finger_values',
                 'sum_engram_position_values', 
-                'sum_row_position_values',
+                'sum_row_position_values'
+            ]
+            
+            # Only add interaction features if they exist in the model weights
+            single_key_features = []
+            for feature in base_single_key_features:
+                if feature in feature_weights:
+                    single_key_features.append(feature)
+                    
+            # Add interaction features only if they exist
+            potential_interactions = [
                 'sum_finger_values_x_sum_row_position_values',
                 'sum_engram_position_values_x_sum_finger_values'
             ]
+            
+            for feature in potential_interactions:
+                if feature in feature_weights:
+                    single_key_features.append(feature)
             
             # Get feature indices for covariance lookup
             feature_indices = {f: i for i, f in enumerate(self.feature_names)
@@ -593,12 +609,12 @@ class PreferenceModel:
             single_key_indices = {feature: idx for idx, feature in enumerate(single_key_features)}
             
             logger.info("\nSingle key feature indices:")
-            logger.info(single_key_indices)  # Should show indices 0-4 instead of 2,7,8,9,12
+            logger.info(single_key_indices)
 
             # Get the subset of the covariance matrix we need
             full_indices = [feature_indices[f] for f in single_key_features]
             reduced_covariance = feature_covariance[np.ix_(full_indices, full_indices)]
-            
+
             # After creating reduced covariance:
             logger.info("\nReduced covariance matrix:")
             logger.info("Features: %s", single_key_features)

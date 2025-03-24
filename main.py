@@ -102,47 +102,9 @@ def load_or_create_split(dataset: PreferenceDataset, config: Dict, no_split: boo
             split_file.parent.mkdir(parents=True, exist_ok=True)
             np.savez(split_file, train_indices=train_indices1, test_indices=test_indices1)
 
-        # Handle additional data if it exists
-        if hasattr(config.data, 'input_file2') and config.data.input_file2:
-            file2 = Path(config.data.input_file2)
-            split_file2 = Path(config.data.splits['split_data_file2'])
-            
-            logger.info("Processing additional dataset...")
-            # Pass all necessary precomputed features from original dataset
-            dataset2 = PreferenceDataset(
-                file2, 
-                feature_extractor=dataset.feature_extractor, 
-                config=config,
-                precomputed_features={
-                    'all_bigrams': dataset.all_bigrams,
-                    'all_bigram_features': dataset.all_bigram_features,
-                    'feature_names': dataset.feature_names
-                }
-            )
-            
-            if split_file2.exists():
-                logger.info("Loading existing split for additional dataset...")
-                split_data2 = np.load(split_file2)
-                train_indices2 = split_data2['train_indices']
-                test_indices2 = split_data2['test_indices']
-            else:
-                logger.info("Creating new split for additional dataset...")
-                train_indices2, test_indices2 = create_participant_split(
-                    dataset2, 
-                    test_ratio=config.data.splits['test_ratio'],
-                    random_seed=config.data.splits['random_seed']
-                )
-                # Save split
-                split_file2.parent.mkdir(parents=True, exist_ok=True)
-                np.savez(split_file2, train_indices=train_indices2, test_indices=test_indices2)
-
-            # Combine the splits
-            train_data = dataset._create_subset_dataset(np.concatenate([train_indices1, train_indices2]))
-            test_data = dataset._create_subset_dataset(np.concatenate([test_indices1, test_indices2]))
-        else:
-            # Just use original dataset split
-            train_data = dataset._create_subset_dataset(train_indices1)
-            test_data = dataset._create_subset_dataset(test_indices1)
+        # Use original dataset split
+        train_data = dataset._create_subset_dataset(train_indices1)
+        test_data = dataset._create_subset_dataset(test_indices1)
         
         logger.info(f"Final splits:")
         logger.info(f"Training set: {len(train_data.preferences)} preferences, {len(train_data.participants)} participants")

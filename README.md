@@ -8,6 +8,8 @@ https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores.git
 
 Author: Arno Klein (arnoklein.info)
 
+MIT License. See LICENSE file for details.
+
 ## Description
 This code converts data like data from the Bigram Typing Preference Study 
 (https://github.com/binarybottle/bigram_typing_preference_study) into:
@@ -51,29 +53,32 @@ bigram_typing_preferences_to_comfort_scores/
 ## Operation Modes
 1. Analyze Features
    ```bash
-   python main.py --config config.yaml --mode analyze_features [--no-split]
-   python features/analyze_features.py --metrics ../output/data/feature_metrics.csv```
+   python main.py --config config.yaml --mode analyze_features [--no-split]```
 
-  - Generates feature importance metrics and thresholds
+  - Generates feature importance metrics
   - Evaluates feature interactions
   - Setting the --no-split option uses all participants' data
+  - If selecting among features, analyze_features.py can help generate thresholds:
+
+```bash
+   python features/analyze_features.py --metrics ../output/data/feature_metrics.csv```
 
 2. Select Features
    ```bash
    python main.py --config config.yaml --mode select_features [--no-split]```
 
-  - Selection of optimal feature combinations
+  - Selects optimal feature combinations
   - Participant-aware cross-validation
-  - Metrics reporting
+  - Reports metrics
 
 3. Train Model
    ```bash
    python main.py --config config.yaml --mode train_model```
 
-  - Trains model on selected features
+  - Trains model on selected features (can set selected features in feature_metrics.csv from step 1)
   - Participant-aware validation
 
-4. Recommend Bigram Pairs
+4. Recommend Bigram Pairs (if collecting more data)
    ```bash
    python main.py --config config.yaml --mode recommend_bigram_pairs```
 
@@ -95,9 +100,6 @@ config.yaml controls:
   - Stan MCMC parameters
   - Recommendation criteria
   - Logging configuration
-
-## License
-MIT License. See LICENSE file for details.
 
 ## Requirements
   - Python packages: pyyaml, numpy, pandas, scikit-learn, matplotlib, cmdstanpy, adjustText, pydantic, tenacity
