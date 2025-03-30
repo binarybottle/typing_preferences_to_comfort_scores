@@ -174,6 +174,10 @@ def columns_apart(char1, char2, column_map):
 
 def angle_apart(char1, char2, column_map, angles):
     """Measure angle between the two QWERTY characters' keys (typed by the same hand)."""
+    # If same character, angle is 0
+    if char1 == char2:
+        return 0.0
+        
     if same_hand(char1, char2, column_map) == 1: # and middle_columns(char1, char2, column_map) == 0:
         return angles[(char1, char2)] / 90.0
     else:

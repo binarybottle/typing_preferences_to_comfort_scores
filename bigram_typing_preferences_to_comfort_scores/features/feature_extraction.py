@@ -66,8 +66,8 @@ class FeatureExtractor:
         for char1 in layout_chars:
             for char2 in layout_chars:
                 # Skip same-letter bigrams
-                if char1 == char2:
-                    continue
+                #if char1 == char2:
+                #    continue
                     
                 bigram = (char1, char2)
                 all_bigrams.append(bigram)

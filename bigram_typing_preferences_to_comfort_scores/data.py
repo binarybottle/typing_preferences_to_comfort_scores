@@ -172,11 +172,11 @@ class PreferenceDataset:
             logger.info(f"\nLoaded CSV with {len(data)} rows")
 
             # Filter out same-letter bigrams
-            data = data[
-                (data['bigram1'].str[0] != data['bigram1'].str[1]) & 
-                (data['bigram2'].str[0] != data['bigram2'].str[1])
-            ]
-            logger.info(f"Filtered to {len(data)} rows after removing same-letter bigrams")
+            #data = data[
+            #    (data['bigram1'].str[0] != data['bigram1'].str[1]) & 
+            #    (data['bigram2'].str[0] != data['bigram2'].str[1])
+            #]
+            #logger.info(f"Filtered to {len(data)} rows after removing same-letter bigrams")
 
             # Validate required columns
             missing = set(self.REQUIRED_COLUMNS) - set(data.columns)

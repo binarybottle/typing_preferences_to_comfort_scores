@@ -14,21 +14,8 @@ from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
 from bigram_typing_preferences_to_comfort_scores.features.features import angles
 from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
 
-input_file = "/Users/arno/Downloads/Prolific_studies/Study1_286participants_2x11pairs_2024-09-26/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study2A_30participants_2x35pairs_2024-10-09/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study2B_30participants_2x35pairs_2024-10-09/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study3_30participants_2x35pairs_2024-10-11/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study4_29participants_2x35pairs_2024-10-13/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study5_46participants_2x50pairs_2025-02-06/processed_data/tables/processed_bigram_data.csv" 
-#input_file = "/Users/arno/Downloads/Prolific_studies/Study7_25participants_2x50pairs_2025-03-17/processed_data/tables/processed_bigram_data.csv" 
-
-output_file = "participant_metrics_Study1_286participants_2x11pairs_2024-09-26.csv" 
-#output_file = "participant_metrics_Study2A_30participants_2x35pairs_2024-10-09.csv" 
-#output_file = "participant_metrics_Study2B_30participants_2x35pairs_2024-10-09.csv" 
-#output_file = "participant_metrics_Study3_30participants_2x35pairs_2024-10-11.csv" 
-#output_file = "participant_metrics_Study4_29participants_2x35pairs_2024-10-13.csv" 
-#output_file = "participant_metrics_Study5_46participants_2x50pairs_2025-02-06.csv" 
-#output_file = "participant_metrics_Study7_25participants_2x50pairs_2025-03-17.csv" 
+input_file = "/Users/arno/Downloads/output/tables/processed_bigram_data.csv" 
+output_file = "participant_metrics.csv" 
 
 # Load configuration
 with open('config.yaml', 'r') as f:
@@ -71,11 +58,11 @@ new_dataset = PreferenceDataset(
     }
 )
 
-# Evaluate model on noisy dataset
-print("Evaluating model on noisy prolific dataset...")
+# Evaluate model on data
+print("Evaluating model on data...")
 metrics = model.evaluate(new_dataset)
 
-print("\nTest metrics on noisy data:")
+print("\nTest metrics on data:")
 for metric, value in metrics.items():
     print(f"{metric}: {value:.3f}")
 
