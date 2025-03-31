@@ -26,6 +26,7 @@ config = Config(**config_dict)  # Convert dict to Config object
 
 # Load trained model
 model = PreferenceModel.load(Path("output/data/bigram_score_prediction_model.pkl"))
+#model = PreferenceModel.load(Path("output/data/nonprolific6-8_prolific5_bigram_score_prediction_model.pkl"))
 
 # Initialize feature extraction (similar to main.py)
 feature_config = FeatureConfig(
