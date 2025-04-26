@@ -73,7 +73,7 @@ bigram_typing_preferences_to_comfort_scores/
 
 3. Train Model
    ```bash
-   python main.py --config config.yaml --mode train_model```
+   python main.py --config config.yaml --mode train_model [--no-split]```
 
   - Trains model on selected features (can set selected features in feature_metrics.csv from step 1)
   - Participant-aware validation

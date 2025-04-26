@@ -8,6 +8,7 @@
 #   4. train_model: Train on selected features with original/additional data
 #   5. predict_bigram_scores: Generate bigram typing comfort predictions
 #   6. predict_key_scores: Generate individual key typing comfort predictions
+#   --no-split: Do not split data into train/test sets
 
 #-----------------------------------------------------------------------
 # Input data and key layout
