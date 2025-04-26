@@ -105,6 +105,15 @@ recommendations:
     recommendations_file: "output/data/recommended_bigram_pairs.csv"    # File to store recommendations
 
 #-----------------------------------------------------------------------
+# Compute key scores from same-key analysis
+#-----------------------------------------------------------------------
+key_scoring:
+  same_key_output_file: "output/data/key_scores_from_same_key.csv"
+  min_comparisons: 5  # Minimum number of comparisons required for a key to have a valid score
+  combine_with_model_scores: true  # Whether to combine these scores with model-based scores
+  combination_weight: 0.5  # Weight given to same-key analysis when combining (0-1)
+
+#-----------------------------------------------------------------------
 # Visualization, logging, and paths
 #-----------------------------------------------------------------------
 visualization:

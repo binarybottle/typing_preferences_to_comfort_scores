@@ -90,9 +90,25 @@ bigram_typing_preferences_to_comfort_scores/
    ```bash
    python main.py --config config.yaml --mode predict_bigram_scores```
 
-  - Predicts comfort scores and uncertainty estimates for bigrams, individual keys
-  - Exports detailed results
+  - Predicts comfort scores and uncertainty estimates for bigrams
+  - Exports detailed results for optimization
 
+6. Predict Key Scores
+   ```bash
+   python main.py --config config.yaml --mode predict_key_scores```
+
+  - Predicts individual key comfort scores based on the trained model
+  - Derives comfort metrics from bigram model predictions
+
+7. Compute Key Scores from Same-Key Bigrams
+   ```bash
+   python main.py --config config.yaml --mode compute_key_scores```
+
+  - Analyzes same-key bigram preferences (e.g., "aa" vs "bb")
+  - Uses Bradley-Terry model to derive direct key comfort metrics
+  - Provides separate rankings from empirical data and model predictions
+  - Generates integrated rankings prioritizing empirical same-key data
+  
 ## Configuration
 config.yaml controls:
   - Dataset parameters and splits

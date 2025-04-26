@@ -6,6 +6,7 @@ The input is bigram typing preference data (which bigram is easier to type?),
 and the output includes:
 1. Latent bigram typing comfort scores
 2. Individual key comfort scores derived from the bigram model
+3. Direct key comfort scores derived from same-key bigram preferences
 
 The goal is to use these scores to optimize keyboard layouts.
 Core features:
@@ -22,7 +23,8 @@ Core features:
 - recommend_bigram_pairs: Generate diverse pair recommendations
 - train_model: Train on selected features with splits
 - predict_bigram_scores: Generate bigram comfort predictions
-- predict_key_scores: Generate individual key comfort predictions
+- predict_key_scores: Generate individual key comfort predictions from bigram data
+- compute_key_scores: Generate key comfort scores from same-key bigram preferences
 
 3. Resource Handling:
 - Memory monitoring
@@ -150,7 +152,8 @@ def main():
     parser.add_argument('--config', default='config.yaml', help='Path to configuration file')
     parser.add_argument('--mode', choices=['analyze_features', 'select_features', 
                                            'recommend_bigram_pairs', 'train_model',
-                                           'predict_bigram_scores', 'predict_key_scores'],
+                                           'predict_bigram_scores', 'predict_key_scores',
+                                           'compute_key_scores'],
                         required=True,
                         help='Pipeline mode: feature selection, model training, 1-/2-gram comfort predictions')
     parser.add_argument('--no-split', action='store_true', help='Use all data for training (no test split)')
@@ -605,6 +608,210 @@ def main():
             logger.info(f"Score range: {results['comfort_score'].min():.3f} to {results['comfort_score'].max():.3f}")
             logger.info(f"Mean uncertainty: {results['uncertainty'].mean():.3f}")
 
+        #-----------------------------------------
+        # Compute key scores from same-key bigrams
+        #-----------------------------------------
+        elif args.mode == 'compute_key_scores':
+            """
+            - Identify and analyze all same-key bigram comparisons in your dataset
+            - Compute both win ratio and Bradley-Terry model scores for keys with same-key data
+            - Load your existing model-based scores for other keys
+            - Create  a hybrid scoring approach that prioritizes direct comparison data where available
+            - Produce  detailed rankings and statistics
+            - Save  everything to a CSV file for further analysis or use in keyboard layout optimization
+            """
+            logger.info("\n=== COMPUTE KEY SCORES MODE ===")
+            
+            # Load the dataset
+            logger.info("Loading dataset...")
+            
+            # Extract same-key bigram preferences
+            logger.info("Extracting same-key bigram preferences...")
+            same_key_prefs = []
+            for pref in dataset.preferences:
+                # Check if both bigrams are same-key bigrams
+                if (len(pref.bigram1) >= 2 and pref.bigram1[0] == pref.bigram1[1] and 
+                    len(pref.bigram2) >= 2 and pref.bigram2[0] == pref.bigram2[1]):
+                    same_key_prefs.append(pref)
+            
+            logger.info(f"Found {len(same_key_prefs)} same-key bigram comparisons")
+            
+            # Organize preferences by key pairs
+            key_pair_prefs = {}
+            for pref in same_key_prefs:
+                key1 = pref.bigram1[0]  # First char of first bigram
+                key2 = pref.bigram2[0]  # First char of second bigram
+                key_pair = tuple(sorted([key1, key2]))  # Sort for consistent lookups
+                
+                if key_pair not in key_pair_prefs:
+                    key_pair_prefs[key_pair] = {'total': 0, f'{key1}_wins': 0, f'{key2}_wins': 0}
+                
+                key_pair_prefs[key_pair]['total'] += 1
+                
+                # Use the 'preferred' attribute to determine which bigram was chosen
+                if pref.preferred:  # If bigram1 was preferred
+                    key_pair_prefs[key_pair][f'{key1}_wins'] += 1
+                else:  # If bigram2 was preferred
+                    key_pair_prefs[key_pair][f'{key2}_wins'] += 1
+            
+            # Print detailed comparison data for each key pair
+            logger.info("\nDetailed key pair comparisons:")
+            for pair, stats in key_pair_prefs.items():
+                key1, key2 = pair
+                key1_wins = stats[f'{key1}_wins']
+                key2_wins = stats[f'{key2}_wins']
+                total = stats['total']
+                
+                logger.info(f"Key pair {key1}-{key2}: {key1} wins {key1_wins}/{total} ({key1_wins/total:.2f}), {key2} wins {key2_wins}/{total} ({key2_wins/total:.2f})")
+            
+            # Get set of keys that have same-key bigram data
+            keys_with_data = set()
+            for pair in key_pair_prefs:
+                keys_with_data.update(pair)
+            
+            logger.info(f"\nKeys with same-key bigram comparison data: {len(keys_with_data)}")
+            logger.info(f"Keys: {', '.join(sorted(keys_with_data))}")
+            
+            # Define Bradley-Terry function
+            def compute_bradley_terry_scores(key_pair_prefs, all_keys):
+                """
+                Compute key scores using Bradley-Terry model.
+                This is a statistical model for pairwise comparison data.
+                """
+                import numpy as np
+                from scipy.optimize import minimize
+                
+                # Get keys with data (those that appear in any comparison)
+                keys_with_data = set()
+                for pair in key_pair_prefs:
+                    keys_with_data.update(pair)
+                
+                # Only include keys with data in the model
+                model_keys = list(keys_with_data)
+                
+                # Create wins matrix
+                n = len(model_keys)
+                key_to_idx = {k: i for i, k in enumerate(model_keys)}
+                
+                # Initialize wins matrix
+                wins = np.zeros((n, n))
+                
+                # Fill with win counts
+                for pair, stats in key_pair_prefs.items():
+                    key1, key2 = pair
+                    idx1, idx2 = key_to_idx[key1], key_to_idx[key2]
+                    wins[idx1, idx2] = stats[f'{key1}_wins']
+                    wins[idx2, idx1] = stats[f'{key2}_wins']
+                
+                # Define negative log-likelihood function
+                def neg_log_likelihood(params):
+                    strengths = np.exp(params)
+                    nll = 0
+                    for i in range(n):
+                        for j in range(i+1, n):
+                            if wins[i, j] + wins[j, i] > 0:  # If these keys were compared
+                                w_ij = wins[i, j]
+                                w_ji = wins[j, i]
+                                p_ij = strengths[i] / (strengths[i] + strengths[j])
+                                
+                                # Add small epsilon to avoid log(0)
+                                epsilon = 1e-10
+                                nll -= w_ij * np.log(p_ij + epsilon) + w_ji * np.log(1 - p_ij + epsilon)
+                    
+                    return nll
+                
+                # Initial parameters (all keys equal strength)
+                initial_params = np.zeros(n)
+                
+                # Minimize negative log-likelihood
+                result = minimize(neg_log_likelihood, initial_params, method='BFGS')
+                
+                # Convert optimized parameters to scores
+                strengths = np.exp(result.x)
+                
+                # Normalize to sum to 1
+                strengths = strengths / np.sum(strengths)
+                
+                # Create scores dict with all keys
+                scores = {}
+                for k in all_keys:
+                    if k in key_to_idx:
+                        scores[k] = strengths[key_to_idx[k]]
+                    else:
+                        scores[k] = None
+                
+                return scores
+            
+            # Compute Bradley-Terry scores
+            bt_scores = compute_bradley_terry_scores(key_pair_prefs, config.data.layout['chars'])
+            
+            # Load existing model-based scores for keys without comparison data
+            model_predictions_file = Path(config.model.key_comfort_predictions_file)
+            model_scores = {}
+            
+            if model_predictions_file.exists():
+                try:
+                    model_df = pd.read_csv(model_predictions_file)
+                    for _, row in model_df.iterrows():
+                        # Check if key is in the layout before adding
+                        if row['key'] in config.data.layout['chars']:
+                            model_scores[row['key']] = row['comfort_score']
+                    logger.info(f"Loaded model-based scores for {len(model_scores)} keys")
+                except Exception as e:
+                    logger.error(f"Error loading model scores: {e}")
+            else:
+                logger.warning(f"Model predictions file not found: {model_predictions_file}")
+            
+            # Compile results
+            key_scores = []
+            for key in config.data.layout['chars']:
+                entry = {
+                    'key': key,
+                    'has_same_key_data': key in keys_with_data,
+                }
+                
+                # Add Bradley-Terry score if available
+                if key in keys_with_data:
+                    entry['same_key_score'] = bt_scores[key]
+                    
+                    # Also store the rank for keys with same-key data
+                    entry['same_key_rank'] = sum(1 for k in keys_with_data if bt_scores[k] > bt_scores[key]) + 1
+                
+                # Add model score if available
+                if key in model_scores:
+                    entry['model_score'] = model_scores[key]
+                
+                key_scores.append(entry)
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(key_scores)
+            
+            # Calculate model ranks for all keys with model scores
+            if 'model_score' in df.columns:
+                # This works by counting how many keys have a higher score and adding 1
+                df['model_rank'] = df['model_score'].apply(
+                    lambda x: sum(1 for s in df['model_score'].dropna() if s > x) + 1 if pd.notnull(x) else None
+                )
+                        
+            # Save results
+            key_scores_file = Path(config.model.key_comfort_predictions_file.replace('.csv', '_integrated.csv'))
+            df.to_csv(key_scores_file, index=False)
+            logger.info(f"Save key comfort scores to {key_scores_file}")
+            
+            # Print summary statistics and rankings
+            logger.info("\nKey comfort rankings based on same-key bigram data (Bradley-Terry model):")
+            bt_ranking_df = df[df['has_same_key_data']].sort_values('same_key_score', ascending=False)
+            for i, (_, row) in enumerate(bt_ranking_df.iterrows(), 1):
+                logger.info(f"{i}. {row['key']} - Score: {row['same_key_score']:.4f}")
+            
+            # Print model-based rankings for all keys
+            if 'model_score' in df.columns:
+                logger.info("\nModel-based rankings for all keys:")
+                model_df = df[df['model_score'].notnull()].sort_values('model_score', ascending=False)
+                for i, (_, row) in enumerate(model_df.iterrows(), 1):
+                    has_data = "✓" if row['has_same_key_data'] else " "
+                    logger.info(f"{i}. {row['key']} - Score: {row['model_score']:.4f} {has_data}")
+            
         logger.info("Pipeline completed successfully")
         
     except Exception as e:
