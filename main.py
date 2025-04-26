@@ -744,11 +744,99 @@ def main():
             
             # Compute Bradley-Terry scores
             bt_scores = compute_bradley_terry_scores(key_pair_prefs, config.data.layout['chars'])
-            
+
+            # Define bootstrap function
+            def bootstrap_bt_scores(key_pair_prefs, all_keys, n_bootstrap=1000):
+                """
+                Compute bootstrap confidence intervals for Bradley-Terry scores.
+
+                This code adds bootstrap confidence intervals to your analysis by:
+                - Resampling your pairwise comparison data with replacement
+                - Recalculating Bradley-Terry scores for each bootstrap sample
+                - Providing mean scores, standard deviations, and 95% confidence intervals for each key
+
+                When looking at the results, if the confidence intervals of two keys overlap substantially, 
+                you shouldn't consider them statistically significantly different. 
+                The standard deviation values will also give you a sense of the uncertainty in each score.                
+                """
+                import numpy as np
+                import random
+                
+                # Get all preferences as a list for resampling
+                all_prefs = []
+                for pair, stats in key_pair_prefs.items():
+                    key1, key2 = pair
+                    # Add wins for key1
+                    all_prefs.extend([pair + (True,)] * stats[f'{key1}_wins'])
+                    # Add wins for key2
+                    all_prefs.extend([pair + (False,)] * stats[f'{key2}_wins'])
+                
+                # Store bootstrap results
+                bootstrap_results = []
+                
+                for _ in range(n_bootstrap):
+                    # Resample preferences with replacement
+                    resampled_prefs = random.choices(all_prefs, k=len(all_prefs))
+                    
+                    # Reconstruct key_pair_prefs
+                    resampled_key_pair_prefs = {}
+                    for key1, key2, key1_won in resampled_prefs:
+                        pair = (key1, key2)
+                        if pair not in resampled_key_pair_prefs:
+                            resampled_key_pair_prefs[pair] = {'total': 0, f'{key1}_wins': 0, f'{key2}_wins': 0}
+                        
+                        resampled_key_pair_prefs[pair]['total'] += 1
+                        if key1_won:
+                            resampled_key_pair_prefs[pair][f'{key1}_wins'] += 1
+                        else:
+                            resampled_key_pair_prefs[pair][f'{key2}_wins'] += 1
+                    
+                    # Compute BT scores for this bootstrap sample
+                    bootstrap_bt_scores = compute_bradley_terry_scores(resampled_key_pair_prefs, all_keys)
+                    bootstrap_results.append(bootstrap_bt_scores)
+                
+                # Calculate mean and confidence intervals
+                means = {}
+                lower_cis = {}
+                upper_cis = {}
+                std_devs = {}
+                
+                for key in all_keys:
+                    if key in bootstrap_results[0]:
+                        scores = [res[key] for res in bootstrap_results if res[key] is not None]
+                        if scores:
+                            means[key] = np.mean(scores)
+                            std_devs[key] = np.std(scores)
+                            lower_cis[key] = np.percentile(scores, 2.5)  # 95% CI lower bound
+                            upper_cis[key] = np.percentile(scores, 97.5)  # 95% CI upper bound
+                
+                return {
+                    'means': means,
+                    'std_devs': std_devs,
+                    'lower_cis': lower_cis,
+                    'upper_cis': upper_cis
+                }
+
+            # Run bootstrap analysis
+            logger.info("Running bootstrap analysis to calculate confidence intervals...")
+            bootstrap_results = bootstrap_bt_scores(key_pair_prefs, config.data.layout['chars'])
+
+            # Print rankings with confidence intervals
+            logger.info("\nKey comfort rankings with 95% confidence intervals:")
+            keys_with_bt_scores = [k for k in config.data.layout['chars'] if k in bootstrap_results['means']]
+            sorted_keys = sorted(keys_with_bt_scores, key=lambda k: bootstrap_results['means'][k], reverse=True)
+
+            for i, key in enumerate(sorted_keys, 1):
+                mean = bootstrap_results['means'][key]
+                lower = bootstrap_results['lower_cis'][key]
+                upper = bootstrap_results['upper_cis'][key]
+                std = bootstrap_results['std_devs'][key]
+                logger.info(f"{i}. {key} - Score: {mean:.4f} (95% CI: {lower:.4f}-{upper:.4f}, SD: {std:.4f})")
+
             # Load existing model-based scores for keys without comparison data
             model_predictions_file = Path(config.model.key_comfort_predictions_file)
             model_scores = {}
-            
+
             if model_predictions_file.exists():
                 try:
                     model_df = pd.read_csv(model_predictions_file)
@@ -761,7 +849,7 @@ def main():
                     logger.error(f"Error loading model scores: {e}")
             else:
                 logger.warning(f"Model predictions file not found: {model_predictions_file}")
-            
+
             # Compile results
             key_scores = []
             for key in config.data.layout['chars']:
@@ -776,16 +864,34 @@ def main():
                     
                     # Also store the rank for keys with same-key data
                     entry['same_key_rank'] = sum(1 for k in keys_with_data if bt_scores[k] > bt_scores[key]) + 1
+                    
+                    # Add bootstrap statistics if available
+                    if key in bootstrap_results['means']:
+                        entry['same_key_score_mean'] = bootstrap_results['means'][key]
+                        entry['same_key_score_std'] = bootstrap_results['std_devs'][key]
+                        entry['same_key_score_ci_low'] = bootstrap_results['lower_cis'][key]
+                        entry['same_key_score_ci_high'] = bootstrap_results['upper_cis'][key]
                 
                 # Add model score if available
                 if key in model_scores:
                     entry['model_score'] = model_scores[key]
                 
                 key_scores.append(entry)
-            
+
+            logger.info(f"Bootstrap results keys: {sorted(bootstrap_results['means'].keys())}")
+            logger.info(f"Keys with data: {sorted(keys_with_data)}")
+
+            # During key_scores creation
+            if key in bootstrap_results['means']:
+                logger.info(f"Adding bootstrap data for key {key}")
+                entry['same_key_score_mean'] = bootstrap_results['means'][key]
+                # ... rest of the code
+            else:
+                logger.info(f"Key {key} not found in bootstrap results")
+
             # Convert to DataFrame
             df = pd.DataFrame(key_scores)
-            
+
             # Calculate model ranks for all keys with model scores
             if 'model_score' in df.columns:
                 # This works by counting how many keys have a higher score and adding 1
