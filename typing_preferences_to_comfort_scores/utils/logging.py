@@ -1,4 +1,4 @@
-# bigram_typing_preferences_to_comfort_scores/utils/logging.py
+# typing_preferences_to_comfort_scores/utils/logging.py
 """
 Logging configuration manager for keyboard layout optimization system.
 Implements a configurable logging system with:
@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Dict, Union, Optional
 import traceback
 
-from bigram_typing_preferences_to_comfort_scores.utils.config import Config
+from typing_preferences_to_comfort_scores.utils.config import Config
 
 class LoggingManager:
     def __init__(self, config: Union[Dict, Config]):

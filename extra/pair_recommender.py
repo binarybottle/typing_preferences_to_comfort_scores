@@ -8,23 +8,23 @@ import numpy as np
 from pathlib import Path
 from sklearn.decomposition import PCA
 
-from bigram_typing_preferences_to_comfort_scores.utils.config import Config
-from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
-from bigram_typing_preferences_to_comfort_scores.model import PreferenceModel
-from bigram_typing_preferences_to_comfort_scores.recommendations import BigramRecommender
-from bigram_typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
-from bigram_typing_preferences_to_comfort_scores.features.features import angles
-from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+from typing_preferences_to_comfort_scores.utils.config import Config
+from typing_preferences_to_comfort_scores.data import PreferenceDataset
+from typing_preferences_to_comfort_scores.model import PreferenceModel
+from typing_preferences_to_comfort_scores.recommendations import BigramRecommender
+from typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
+from typing_preferences_to_comfort_scores.features.features import angles
+from typing_preferences_to_comfort_scores.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
-from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
 
 # I renamed the repository/module, so need to symlink the module name in the pickle files
 # Create an alias from old to new package name
 import sys
 import importlib
-sys.modules['engram3'] = importlib.import_module('bigram_typing_preferences_to_comfort_scores')
+sys.modules['engram3'] = importlib.import_module('typing_preferences_to_comfort_scores')
 
 def load_config(config_path):
     with open(config_path, 'r') as f:

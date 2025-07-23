@@ -67,11 +67,11 @@ import matplotlib as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-from bigram_typing_preferences_to_comfort_scores.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
-from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
-from bigram_typing_preferences_to_comfort_scores.utils.visualization import PlottingUtils
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
-from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+from typing_preferences_to_comfort_scores.utils.config import Config, NotFittedError, FeatureError, ModelPrediction
+from typing_preferences_to_comfort_scores.data import PreferenceDataset
+from typing_preferences_to_comfort_scores.utils.visualization import PlottingUtils
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from typing_preferences_to_comfort_scores.features.keymaps import (
     finger_map,
     engram_position_values,
     row_position_values
@@ -538,7 +538,7 @@ class PreferenceModel:
     def predict_key_scores(self):
         """Predict comfort scores for individual keys using normalized values and model weights."""
         try:
-            from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+            from typing_preferences_to_comfort_scores.features.keymaps import (
                 finger_map,
                 engram_position_values,
                 row_position_values

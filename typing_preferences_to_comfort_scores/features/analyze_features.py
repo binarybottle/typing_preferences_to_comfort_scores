@@ -6,7 +6,7 @@ and visualize feature relationships.
 The elbow point (knee) calculation in the code uses the KneeLocator from the kneed library
 and locates a steep drop in the log-scaled values.
 
-Usage (from within the bigram_typing_preferences_to_comfort_scores/bigram_typing_preferences_to_comfort_scores directory):
+Usage (from within the typing_preferences_to_comfort_scores/typing_preferences_to_comfort_scores directory):
     python features/analyze_features.py --metrics ../output/data/feature_metrics.csv [--model ../output/data/feature_selection_model.pkl]
 
 """

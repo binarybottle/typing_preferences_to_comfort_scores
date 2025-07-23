@@ -9,9 +9,9 @@ Used by feature extraction system.
 """
 from math import atan2, degrees
 
-from bigram_typing_preferences_to_comfort_scores.features.keymaps import *
-from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from typing_preferences_to_comfort_scores.features.keymaps import *
+from typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 #---------------------#

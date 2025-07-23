@@ -1,4 +1,4 @@
-# bigram_typing_preferences_to_comfort_scores/utils/visualization.py
+# typing_preferences_to_comfort_scores/utils/visualization.py
 """
 Plotting utilities module for data visualization.
 
@@ -19,9 +19,9 @@ from sklearn.decomposition import PCA
 
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 if TYPE_CHECKING:
-    from bigram_typing_preferences_to_comfort_scores.model import PreferenceModel
-    from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+    from typing_preferences_to_comfort_scores.model import PreferenceModel
+    from typing_preferences_to_comfort_scores.data import PreferenceDataset
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 class PlottingUtils:

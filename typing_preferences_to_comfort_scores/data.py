@@ -33,11 +33,11 @@ import logging
 import pandas as pd
 import numpy as np
 
-from bigram_typing_preferences_to_comfort_scores.utils.config import Preference
-from bigram_typing_preferences_to_comfort_scores.features.keymaps import *
-from bigram_typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
-from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from typing_preferences_to_comfort_scores.utils.config import Preference
+from typing_preferences_to_comfort_scores.features.keymaps import *
+from typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
+from typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = logging.getLogger(__name__)
     
 class PreferenceDataset:

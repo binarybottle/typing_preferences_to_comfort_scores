@@ -3,16 +3,16 @@ import yaml
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from bigram_typing_preferences_to_comfort_scores.model import PreferenceModel
-from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
-from bigram_typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
-from bigram_typing_preferences_to_comfort_scores.utils.config import Config
-from bigram_typing_preferences_to_comfort_scores.features.keymaps import (
+from typing_preferences_to_comfort_scores.model import PreferenceModel
+from typing_preferences_to_comfort_scores.data import PreferenceDataset
+from typing_preferences_to_comfort_scores.features.feature_extraction import FeatureExtractor, FeatureConfig
+from typing_preferences_to_comfort_scores.utils.config import Config
+from typing_preferences_to_comfort_scores.features.keymaps import (
     column_map, row_map, finger_map,
     engram_position_values, row_position_values
 )
-from bigram_typing_preferences_to_comfort_scores.features.features import angles
-from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from typing_preferences_to_comfort_scores.features.features import angles
+from typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
 
 input_file = "/Users/arno/Downloads/output/tables/processed_bigram_data.csv" 
 output_file = "participant_metrics.csv" 

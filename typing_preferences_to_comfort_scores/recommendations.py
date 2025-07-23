@@ -33,10 +33,10 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import logging
 
-from bigram_typing_preferences_to_comfort_scores.utils.config import Config
-from bigram_typing_preferences_to_comfort_scores.data import PreferenceDataset
-from bigram_typing_preferences_to_comfort_scores.model import PreferenceModel
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from typing_preferences_to_comfort_scores.utils.config import Config
+from typing_preferences_to_comfort_scores.data import PreferenceDataset
+from typing_preferences_to_comfort_scores.model import PreferenceModel
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 
 logger = LoggingManager.getLogger(__name__)
 

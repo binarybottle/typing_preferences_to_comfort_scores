@@ -1,4 +1,4 @@
-# bigram_typing_preferences_to_comfort_scores/features/feature_extraction.py
+# typing_preferences_to_comfort_scores/features/feature_extraction.py
 """
 Feature extraction module for keyboard layout analysis and preference modeling.
 
@@ -24,7 +24,7 @@ from typing import Dict, List, Tuple
 from pathlib import Path
 import yaml
 
-from bigram_typing_preferences_to_comfort_scores.features.features import (
+from typing_preferences_to_comfort_scores.features.features import (
     qwerty_bigram_frequency,
     same_finger,
     sum_finger_values,
@@ -37,10 +37,10 @@ from bigram_typing_preferences_to_comfort_scores.features.features import (
     sum_row_position_values,
     same_key
 )
-from bigram_typing_preferences_to_comfort_scores.features.features import qwerty_bigram_frequency
-from bigram_typing_preferences_to_comfort_scores.utils.config import FeatureConfig
-from bigram_typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
-from bigram_typing_preferences_to_comfort_scores.utils.logging import LoggingManager
+from typing_preferences_to_comfort_scores.features.features import qwerty_bigram_frequency
+from typing_preferences_to_comfort_scores.utils.config import FeatureConfig
+from typing_preferences_to_comfort_scores.features.bigram_frequencies import bigrams, bigram_frequencies_array
+from typing_preferences_to_comfort_scores.utils.logging import LoggingManager
 logger = LoggingManager.getLogger(__name__)
 
 class FeatureExtractor:

@@ -1,10 +1,10 @@
 
-# bigram_typing_preferences_to_comfort_scores: 
+# Typing Preferences to Comfort Scores 
 Convert typing preferences into comfort scores for bigrams 
 and individual keys via Bayesian Preference Learning
 ================================================================================
 
-https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores.git
+https://github.com/binarybottle/typing_preferences_to_comfort_scores.git
 
 Author: Arno Klein (arnoklein.info)
 
@@ -12,7 +12,7 @@ MIT License. See LICENSE file for details.
 
 ## Description
 This code converts data like data from the Bigram Typing Preference Study 
-(https://github.com/binarybottle/bigram_typing_preference_study) into:
+(https://github.com/binarybottle/typing_preferences_study) into:
 - Comfort scores for bigrams (pairs of keys)
 - Comfort scores for individual keys
 These scores are used elsewhere to optimize keyboard layouts 
@@ -24,11 +24,11 @@ These scores are used elsewhere to optimize keyboard layouts
 3. Generate comfort scores for bigrams and individual keys
 
 ## Project Structure
-bigram_typing_preferences_to_comfort_scores/                           
+typing_preferences_to_comfort_scores/                           
 - README                    # This file
 - config.yaml               # Main configuration file
 - main.py                   # Pipeline implementation
-- bigram_typing_preferences_to_comfort_scores/                       
+- typing_preferences_to_comfort_scores/                       
    - features/                  
        - analyze_features.py    # Analyze feature metrics to determine importance threshold
        - bigram_frequencies.py  # English language bigrams and bigram frequencies
