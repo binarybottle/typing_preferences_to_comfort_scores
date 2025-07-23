@@ -616,9 +616,9 @@ def main():
             - Identify and analyze all same-key bigram comparisons in your dataset
             - Compute both win ratio and Bradley-Terry model scores for keys with same-key data
             - Load your existing model-based scores for other keys
-            - Create  a hybrid scoring approach that prioritizes direct comparison data where available
-            - Produce  detailed rankings and statistics
-            - Save  everything to a CSV file for further analysis or use in keyboard layout optimization
+            - Create a hybrid scoring approach that prioritizes direct comparison data where available
+            - Produce detailed rankings and statistics
+            - Save everything to a CSV file for further analysis or use in keyboard layout optimization
             """
             logger.info("\n=== COMPUTE KEY SCORES MODE ===")
             
