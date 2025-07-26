@@ -1,6 +1,3 @@
-train_test_indices.npz
-data/*
-models/*
 output*
 __pycache__
 package-lock.json
