@@ -14,9 +14,11 @@ MIT License. See LICENSE file for details.
 This code converts data like data from the Bigram Typing Preference Study 
 (https://github.com/binarybottle/typing_preferences_study) into:
 - Comfort scores for bigrams (pairs of keys)
+- Extended comfort scores covering all 30 standard typing keys
 - Comfort scores for individual keys
 These scores are used elsewhere to optimize keyboard layouts 
-(https://github.com/binarybottle/optimize_layouts).
+(https://github.com/binarybottle/optimize_layouts) and evaluate 
+layouts using Dvorak-9 criteria.
 
 ## Workflow
 1. Select important features
@@ -28,6 +30,7 @@ typing_preferences_to_comfort_scores/
 - README                    # This file
 - config.yaml               # Main configuration file
 - main.py                   # Pipeline implementation
+- extend_comfort_scores.py  # Extend comfort scores to 30-key coverage
 - typing_preferences_to_comfort_scores/                       
    - features/                  
        - analyze_features.py    # Analyze feature metrics to determine importance threshold
@@ -108,7 +111,16 @@ typing_preferences_to_comfort_scores/
   - Uses Bradley-Terry model to derive direct key comfort metrics
   - Provides separate rankings from empirical data and model predictions
   - Generates integrated rankings prioritizing empirical same-key data
-  
+
+8. Extend Comfort Scores
+   ```bash
+   python extend_comfort_scores.py [--input-file input.csv] [--output-file output.csv]```
+
+  - Extends comfort dataset from 24 keys to complete 30-key coverage
+  - Uses median comfort from "same finger, adjacent row" bigrams for missing keys  
+  - Covers middle columns (t,g,y,h,b,n) missing from original dataset
+  - Generates complete bigram coverage for standard QWERTY layout
+
 ## Configuration
 config.yaml controls:
   - Dataset parameters and splits
@@ -116,6 +128,11 @@ config.yaml controls:
   - Stan MCMC parameters
   - Recommendation criteria
   - Logging configuration
+
+## Key Output Files
+   - `output/data/estimated_bigram_scores.csv` - Comfort scores for 24-key dataset
+   - `output/data/estimated_bigram_scores_extended.csv` - Extended to 30-key coverage  
+   - `output/data/feature_metrics.csv` - Feature importance analysis results
 
 ## Requirements
   - Python packages: pyyaml, numpy, pandas, scikit-learn, matplotlib, cmdstanpy, adjustText, pydantic, tenacity
