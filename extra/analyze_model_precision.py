@@ -5,7 +5,7 @@ and provides a detailed report on the number of decimal places, types, and distr
 
 Precision was determined to be at least 16 decimal places.
 
->> python analyze_precision.py /Users/arno/Software/typing_preferences_to_comfort_scores/output/bigram_score_prediction_model.pkl
+>> python analyze_precision.py /Users/arno/Software/typing_preferences_to_comfort_scores/output/data/bigram_score_prediction_model.pkl
 
 """
 import pickle

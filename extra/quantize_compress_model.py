@@ -5,7 +5,7 @@ It also handles dynamic class creation for compatibility with older module names
 
 Model precision was determined to be at least 16 decimal places by analyze_model_precision.py.
 
->> poetry run python3 quantize_compress_model.py --decimals 9 /Users/arno/Software/typing_preferences_to_comfort_scores/output/final_results/bigram_score_prediction_model.pkl
+>> poetry run python3 quantize_compress_model.py --decimals 9 /Users/arno/Software/typing_preferences_to_comfort_scores/output/data/bigram_score_prediction_model.pkl
 """
 import pickle
 import gzip
